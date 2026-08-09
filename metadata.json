@@ -1,0 +1,6 @@
+{
+  "name": "mercurypro",
+  "description": "Smart email management system featuring mail account administration, quick registration, workspace navigation, and multiple visual themes.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
