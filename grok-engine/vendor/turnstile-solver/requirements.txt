@@ -1,0 +1,10 @@
+# Local Turnstile Solver (subproject of grokcli-2api)
+quart>=0.19
+# Keep the shared user cache compatible with the main application.  A broad
+# range here upgrades the solver to 0.5+, which replaces the 0.4 cache layout
+# and removes the version.json required by the main registration browser.
+camoufox==0.4.11
+patchright>=1.50
+rich>=13
+requests>=2.31
+python-dotenv>=1.0

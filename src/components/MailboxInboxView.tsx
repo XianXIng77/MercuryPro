@@ -1,424 +1,207 @@
-import React, { useState } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
-import { MailAccount, Email, StylePreset } from '../types';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { AnimatePresence, motion } from 'motion/react';
 import {
+  AlertCircle,
   ArrowLeft,
+  CheckCircle2,
+  Eye,
+  Inbox,
+  LoaderCircle,
+  Mail,
+  Paperclip,
   RefreshCw,
   Search,
   Star,
-  Paperclip,
-  CheckCircle2,
-  Inbox,
-  Mail,
-  ChevronLeft,
-  Sparkles,
-  FileText,
 } from 'lucide-react';
+import { getMicrosoftMessage, listMicrosoftMessages, mapMicrosoftMessage } from '../api/microsoftMail';
+import { Email, MailAccount, StylePreset } from '../types';
 
 interface MailboxInboxViewProps {
   account: MailAccount;
   onBackToAccountList: () => void;
-  onSyncSingleAccount: (id: string) => void;
   currentPreset: StylePreset;
 }
 
 export const MailboxInboxView: React.FC<MailboxInboxViewProps> = ({
   account,
   onBackToAccountList,
-  onSyncSingleAccount,
   currentPreset,
 }) => {
   const theme = currentPreset.themeClasses;
-  const isDark = currentPreset.id.includes('dark');
+  const isDark = currentPreset.mode === 'dark';
+  const accountId = account.accountId || account.id;
 
-  const [messages, setMessages] = useState<Email[]>(account.messages || []);
-  const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
-  const [inboxSearch, setInboxSearch] = useState<string>('');
+  const [messages, setMessages] = useState<Email[]>([]);
+  const [selectedMessage, setSelectedMessage] = useState<Email | null>(null);
+  const [inboxSearch, setInboxSearch] = useState('');
   const [filterType, setFilterType] = useState<'all' | 'unread'>('all');
-  const [isSyncingThisAccount, setIsSyncingThisAccount] = useState<boolean>(false);
+  const [top, setTop] = useState(20);
+  const [loading, setLoading] = useState(true);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
 
-  // Sync this specific account messages
-  const handleSyncThisAccount = () => {
-    setIsSyncingThisAccount(true);
-    onSyncSingleAccount(account.id);
-    setTimeout(() => {
-      setIsSyncingThisAccount(false);
-    }, 1000);
-  };
-
-  // Toggle starred status
-  const handleToggleStar = (msgId: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setMessages((prev) =>
-      prev.map((m) => (m.id === msgId ? { ...m, isStarred: !m.isStarred } : m))
-    );
-  };
-
-  // Filter messages
-  const visibleMessages = messages.filter((msg) => {
-    if (filterType === 'unread' && msg.isRead) return false;
-    if (inboxSearch.trim()) {
-      const q = inboxSearch.toLowerCase();
-      const matchSubject = msg.subject.toLowerCase().includes(q);
-      const matchSender = msg.senderName.toLowerCase().includes(q);
-      const matchEmail = msg.senderEmail.toLowerCase().includes(q);
-      const matchSnippet = msg.snippet.toLowerCase().includes(q);
-      if (!matchSubject && !matchSender && !matchEmail && !matchSnippet) return false;
+  const loadMessages = useCallback(async () => {
+    setLoading(true);
+    setErrorMessage('');
+    try {
+      const rawMessages = await listMicrosoftMessages(accountId, top);
+      setMessages(rawMessages.map((item) => mapMicrosoftMessage(item, account.emailAddress)));
+    } catch (error: any) {
+      setMessages([]);
+      setErrorMessage(error.message || '邮件列表加载失败');
+    } finally {
+      setLoading(false);
     }
-    return true;
-  });
+  }, [account.emailAddress, accountId, top]);
 
-  const selectedMessage = messages.find((m) => m.id === selectedMessageId);
+  useEffect(() => {
+    void loadMessages();
+  }, [loadMessages]);
 
-  const handleSelectMessage = (msg: Email) => {
-    setSelectedMessageId(msg.id);
-    setMessages((prev) =>
-      prev.map((m) => (m.id === msg.id ? { ...m, isRead: true } : m))
-    );
+  const visibleMessages = useMemo(() => messages.filter((message) => {
+    if (filterType === 'unread' && message.isRead) return false;
+    const query = inboxSearch.trim().toLowerCase();
+    if (!query) return true;
+    return [message.subject, message.senderName, message.senderEmail, message.snippet]
+      .some((value) => value.toLowerCase().includes(query));
+  }), [filterType, inboxSearch, messages]);
+
+  const handleViewMessage = async (message: Email) => {
+    setSelectedMessage(message);
+    setDetailLoading(true);
+    setErrorMessage('');
+    try {
+      const raw = await getMicrosoftMessage(accountId, message.id);
+      setSelectedMessage(mapMicrosoftMessage(raw, account.emailAddress));
+      setMessages((previous) => previous.map((item) => item.id === message.id ? { ...item, isRead: true } : item));
+    } catch (error: any) {
+      setErrorMessage(error.message || '邮件正文加载失败');
+    } finally {
+      setDetailLoading(false);
+    }
   };
 
   return (
     <div className={`flex-1 flex flex-col h-full overflow-hidden ${theme.appBg}`}>
-      {/* Mailbox Header Bar */}
       <div className={`p-3 border-b flex flex-wrap items-center justify-between gap-3 shrink-0 ${theme.navBg} ${theme.border}`}>
-        {/* Return Button + Account Info Header */}
-        <div className="flex items-center gap-3">
-          {/* Prominent Back Button */}
-          <button
-            onClick={onBackToAccountList}
-            className={`px-3 py-1.5 rounded-lg border text-xs font-bold flex items-center gap-2 transition-all shadow-xs ${
-              isDark 
-                ? 'bg-slate-800 text-slate-200 hover:bg-slate-700 border-slate-700' 
-                : 'bg-white text-slate-700 hover:bg-slate-100 border-slate-300'
-            }`}
-            title="返回 100 个邮箱账号数据列表"
-          >
-            <ArrowLeft className="w-4 h-4 text-blue-600" />
-            <span>返回邮箱账号列表</span>
+        <div className="flex items-center gap-3 min-w-0">
+          <button onClick={onBackToAccountList} className={`px-3 py-2 rounded-xl border text-xs font-bold flex items-center gap-2 shadow-xs ${theme.cardBg} ${theme.border} ${theme.textPrimary}`}>
+            <ArrowLeft className="w-4 h-4 text-blue-600" />返回邮箱账号列表
           </button>
-
-          <div className={`h-5 w-px hidden sm:block ${isDark ? 'bg-slate-700' : 'bg-slate-300'}`} />
-
-          {/* Mailbox Details Header */}
-          <div className="flex items-center gap-2 overflow-hidden">
-            <div className="w-8 h-8 rounded-lg bg-blue-600 text-white flex items-center justify-center font-bold text-xs shrink-0 shadow-xs">
-              <Inbox className="w-4 h-4" />
-            </div>
-            <div>
+          <div className={`h-6 w-px hidden sm:block ${isDark ? 'bg-slate-700' : 'bg-slate-300'}`} />
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="w-9 h-9 rounded-xl bg-blue-600 text-white flex items-center justify-center shadow-sm"><Inbox className="w-4 h-4" /></div>
+            <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <h2 className={`font-bold text-sm truncate ${isDark ? 'text-slate-100' : 'text-slate-900'}`}>
-                  {account.accountName}
-                </h2>
-                <span className={`px-1.5 py-0.2 rounded border font-mono text-[10px] font-bold ${
-                  isDark ? 'bg-indigo-950/80 text-indigo-300 border-indigo-700/60' : 'bg-indigo-50 text-indigo-700 border-indigo-200'
-                }`}>
-                  {account.protocol}
-                </span>
-                <span className="inline-flex items-center gap-1 text-[10px] text-emerald-600 font-bold">
-                  <CheckCircle2 className="w-3 h-3" />
-                  正常接入
-                </span>
+                <h2 className={`font-bold text-sm truncate ${theme.textPrimary}`}>{account.emailAddress}</h2>
+                <span className="px-1.5 py-0.5 rounded border border-indigo-200 bg-indigo-50 text-indigo-700 text-[10px] font-bold">Microsoft Graph</span>
+                <span className="hidden lg:inline-flex items-center gap-1 text-[10px] text-emerald-600 font-bold"><CheckCircle2 className="w-3 h-3" />真实接口</span>
               </div>
-              <p className={`text-xs font-mono truncate ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                {account.emailAddress} ({account.serverHost})
-              </p>
+              <p className={`text-xs truncate ${theme.textSecondary}`}>账号 ID：{String(accountId)}</p>
             </div>
           </div>
         </div>
-
-        {/* Right Actions: Receive Mail Button for this Mailbox Account */}
         <div className="flex items-center gap-2">
-          <button
-            onClick={handleSyncThisAccount}
-            disabled={isSyncingThisAccount}
-            className="px-3.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs flex items-center gap-1.5 shadow-2xs transition-all"
-            title="向该邮箱所属的POP3/IMAP服务器收取最新信件"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${isSyncingThisAccount ? 'animate-spin' : ''}`} />
-            <span>{isSyncingThisAccount ? '正在收取该邮箱信件...' : '收取该邮箱新信'}</span>
+          <label className={`flex items-center gap-2 text-xs ${theme.textSecondary}`}>
+            显示
+            <select value={top} onChange={(event) => setTop(Number(event.target.value))} className={`px-2.5 py-1.5 rounded-lg border ${theme.cardBg} ${theme.border} ${theme.textPrimary}`}>
+              {[10, 20, 50].map((value) => <option key={value} value={value}>{value} 封</option>)}
+            </select>
+          </label>
+          <button onClick={() => void loadMessages()} disabled={loading} className="px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs flex items-center gap-1.5 disabled:opacity-60">
+            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />刷新邮件
           </button>
         </div>
       </div>
 
-      {/* Main Mailbox Body */}
-      <div className="flex-1 flex overflow-hidden relative">
+      <div className="flex-1 min-h-0 flex overflow-hidden relative p-3 sm:p-4">
         <AnimatePresence mode="wait">
           {!selectedMessage ? (
-            /* Main Column: Received Mail List (Full Width) */
             <motion.div
               key="mail-list"
-              initial={{ opacity: 0, y: 10, scale: 0.995 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: -10, scale: 0.995 }}
-              transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
-              className="flex-1 flex flex-col w-full h-full overflow-hidden"
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.18 }}
+              className={`flex-1 flex flex-col w-full h-full overflow-hidden rounded-2xl ${theme.cardBg} ${theme.shadow}`}
             >
-            {/* Sub Toolbar */}
-            <div className={`p-2.5 border-b flex items-center justify-between gap-2 ${
-              isDark ? 'bg-slate-900/60 border-slate-800' : 'bg-slate-100/90 border-slate-300/80'
-            }`}>
-              {/* Search */}
-              <div className="relative flex-1">
-                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
-                <input
-                  type="text"
-                  value={inboxSearch}
-                  onChange={(e) => setInboxSearch(e.target.value)}
-                  placeholder={`在 ${account.accountName} 收到信件中搜索...`}
-                  className={`w-full pl-8 pr-3 py-1 text-xs rounded border focus:outline-none focus:ring-1 focus:ring-blue-500 ${
-                    isDark 
-                      ? 'border-slate-700 bg-slate-800 text-slate-100 placeholder-slate-400' 
-                      : 'border-slate-300 bg-white text-slate-800 placeholder-slate-400'
-                  }`}
-                />
-              </div>
-
-              {/* Filter Pills */}
-              <div className="flex items-center gap-1 text-xs shrink-0">
-                <button
-                  onClick={() => setFilterType('all')}
-                  className={`px-2.5 py-1 rounded text-xs font-semibold cursor-pointer transition-colors ${
-                    filterType === 'all'
-                      ? 'bg-blue-600 text-white'
-                      : isDark ? 'bg-slate-800 text-slate-300 hover:bg-slate-700' : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-300'
-                  }`}
-                >
-                  全部 ({messages.length})
-                </button>
-                <button
-                  onClick={() => setFilterType('unread')}
-                  className={`px-2.5 py-1 rounded text-xs font-semibold cursor-pointer transition-colors ${
-                    filterType === 'unread'
-                      ? 'bg-blue-600 text-white'
-                      : isDark ? 'bg-slate-800 text-slate-300 hover:bg-slate-700' : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-300'
-                  }`}
-                >
-                  未读 ({messages.filter((m) => !m.isRead).length})
-                </button>
-              </div>
-            </div>
-
-            {/* Email Messages Items List */}
-            <div className={`flex-1 overflow-y-auto divide-y ${isDark ? 'divide-slate-800/80' : 'divide-slate-200'}`}>
-              {visibleMessages.length === 0 ? (
-                <div className="p-12 text-center text-slate-400 flex flex-col items-center justify-center gap-2">
-                  <Mail className="w-8 h-8 text-slate-400" />
-                  <p>该邮箱当前收件箱为空或无符合条件的信件</p>
+              <div className={`p-3 border-b flex flex-wrap items-center justify-between gap-3 ${theme.border} ${isDark ? 'bg-white/[0.025]' : 'bg-white/30'}`}>
+                <div className="relative flex-1 max-w-2xl">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                  <input value={inboxSearch} onChange={(event) => setInboxSearch(event.target.value)} placeholder="搜索发件人、主题或邮件摘要" className={`w-full pl-9 pr-3 py-2 rounded-xl border outline-none focus:ring-2 focus:ring-blue-500/30 ${theme.cardBg} ${theme.border} ${theme.textPrimary}`} />
                 </div>
-              ) : (
-                visibleMessages.map((msg) => {
-                  const isSelected = selectedMessageId === msg.id;
-                  return (
-                    <div
-                      key={msg.id}
-                      onClick={() => handleSelectMessage(msg)}
-                      className={`p-3.5 cursor-pointer transition-all ${
-                        isSelected
-                          ? isDark 
-                            ? 'bg-blue-950/80 text-blue-100 font-medium border-l-4 border-l-blue-500' 
-                            : 'bg-blue-50/90 text-blue-950 font-medium border-l-4 border-l-blue-600 shadow-2xs'
-                          : msg.isRead
-                          ? isDark 
-                            ? 'bg-slate-900 text-slate-300 hover:bg-slate-800/60' 
-                            : 'bg-white text-slate-700 hover:bg-blue-50/50'
-                          : isDark 
-                            ? 'bg-slate-900 font-medium text-slate-100 hover:bg-slate-800/60' 
-                            : 'bg-white font-bold text-slate-900 hover:bg-blue-50/50'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between gap-2 mb-1.5">
-                        <div className="flex items-center gap-2 min-w-0">
-                          <span className={`font-bold text-xs truncate ${isDark ? 'text-slate-100' : 'text-slate-900'}`}>
-                            {msg.senderName}
-                          </span>
-                          <span className={`text-[11px] font-mono truncate ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                            &lt;{msg.senderEmail}&gt;
-                          </span>
+                <div className={`inline-flex p-1 rounded-xl border ${theme.border}`}>
+                  <button onClick={() => setFilterType('all')} className={`px-3 py-1.5 rounded-lg font-semibold ${filterType === 'all' ? 'bg-blue-600 text-white' : theme.textSecondary}`}>全部 ({messages.length})</button>
+                  <button onClick={() => setFilterType('unread')} className={`px-3 py-1.5 rounded-lg font-semibold ${filterType === 'unread' ? 'bg-blue-600 text-white' : theme.textSecondary}`}>未读 ({messages.filter((item) => !item.isRead).length})</button>
+                </div>
+              </div>
+
+              {errorMessage && (
+                <div className="m-4 p-4 rounded-xl border border-rose-200 bg-rose-50 text-rose-700 flex items-center justify-between gap-4">
+                  <div className="flex items-center gap-2"><AlertCircle className="w-5 h-5 shrink-0" /><span>{errorMessage}</span></div>
+                  <button onClick={() => void loadMessages()} className="px-3 py-1.5 rounded-lg bg-rose-600 text-white font-semibold">重试</button>
+                </div>
+              )}
+
+              <div className={`flex-1 overflow-y-auto divide-y ${isDark ? 'divide-slate-800' : 'divide-slate-200'}`}>
+                {loading ? (
+                  <div className="h-full min-h-64 flex flex-col items-center justify-center gap-2"><LoaderCircle className="w-8 h-8 animate-spin text-blue-600" /><span className={theme.textSecondary}>正在从 Microsoft Graph 获取邮件...</span></div>
+                ) : visibleMessages.length === 0 && !errorMessage ? (
+                  <div className="h-full min-h-64 flex flex-col items-center justify-center gap-2"><Mail className="w-9 h-9 text-slate-400" /><p className={`font-semibold ${theme.textPrimary}`}>暂无邮件</p><span className={theme.textSecondary}>当前账号没有符合条件的邮件</span></div>
+                ) : visibleMessages.map((message) => (
+                  <button key={message.id} onClick={() => void handleViewMessage(message)} className={`w-full p-4 text-left transition-colors ${message.isRead ? isDark ? 'bg-white/[0.01] hover:bg-white/[0.04]' : 'bg-white/20 hover:bg-white/45' : isDark ? 'bg-blue-400/[0.06] hover:bg-white/[0.05]' : 'bg-blue-400/[0.07] hover:bg-white/50'}`}>
+                    <div className="flex items-start gap-3">
+                      <span className={`mt-1.5 w-2 h-2 rounded-full shrink-0 ${message.isRead ? 'bg-slate-300' : 'bg-blue-600'}`} />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="min-w-0 flex items-center gap-2"><span className={`font-bold text-sm truncate ${theme.textPrimary}`}>{message.senderName}</span><span className={`hidden sm:inline text-xs font-mono truncate ${theme.textSecondary}`}>&lt;{message.senderEmail}&gt;</span></div>
+                          <div className={`flex items-center gap-2 shrink-0 text-xs ${theme.textSecondary}`}>{message.isStarred && <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />}<span>{message.date}</span></div>
                         </div>
-
-                        <div className="flex items-center gap-2 shrink-0">
-                          <button
-                            onClick={(e) => handleToggleStar(msg.id, e)}
-                            className="text-slate-400 hover:text-amber-500 transition-colors"
-                          >
-                            <Star
-                              className={`w-3.5 h-3.5 ${
-                                msg.isStarred ? 'text-amber-500 fill-amber-500' : ''
-                              }`}
-                            />
-                          </button>
-                          <span className={`text-xs font-mono ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                            {msg.date}
-                          </span>
-                        </div>
-                      </div>
-
-                      <h3 className={`text-sm mb-1 line-clamp-1 ${
-                        msg.isRead 
-                          ? isDark ? 'text-slate-300' : 'text-slate-700'
-                          : isDark ? 'text-slate-100 font-bold' : 'text-slate-900 font-bold'
-                      }`}>
-                        {msg.subject}
-                      </h3>
-
-                      <p className={`text-xs line-clamp-2 mb-2 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
-                        {msg.snippet}
-                      </p>
-
-                      <div className="flex items-center justify-between gap-2 text-[11px]">
-                        <div className="flex flex-wrap gap-1">
-                          {msg.tags.map((tag, idx) => (
-                            <span
-                              key={idx}
-                              className={`px-2 py-0.5 rounded font-medium border ${
-                                isDark 
-                                  ? 'bg-blue-950 text-blue-300 border-blue-800/80' 
-                                  : 'bg-blue-50 text-blue-700 border-blue-200'
-                              }`}
-                            >
-                              {tag}
-                            </span>
-                          ))}
-                        </div>
-
-                        {msg.attachments && msg.attachments.length > 0 && (
-                          <span className={`inline-flex items-center gap-1 font-mono ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                            <Paperclip className="w-3.5 h-3.5" />
-                            {msg.attachments.length} 个附件
-                          </span>
-                        )}
+                        <div className="mt-1.5 flex items-center gap-2"><h3 className={`text-sm truncate ${!message.isRead ? 'font-bold' : 'font-medium'} ${theme.textPrimary}`}>{message.subject}</h3>{message.attachments && message.attachments.length > 0 && <Paperclip className="w-3.5 h-3.5 text-slate-400" />}</div>
+                        <p className={`mt-1 text-xs line-clamp-2 ${theme.textSecondary}`}>{message.snippet || '暂无摘要'}</p>
+                        <div className="mt-2 flex items-center justify-between"><div className="flex gap-1">{message.tags.map((tag) => <span key={tag} className="px-2 py-0.5 rounded-full bg-blue-50 border border-blue-200 text-blue-700 text-[10px]">{tag}</span>)}</div><span className="text-blue-600 text-xs font-semibold inline-flex items-center gap-1"><Eye className="w-3.5 h-3.5" />查看正文</span></div>
                       </div>
                     </div>
-                  );
-                })
-              )}
-            </div>
+                  </button>
+                ))}
+              </div>
             </motion.div>
           ) : (
-            /* Selected Email Message Content Detail View (Full Width) */
             <motion.div
               key={`mail-detail-${selectedMessage.id}`}
-              initial={{ opacity: 0, y: 10, scale: 0.995 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: -10, scale: 0.995 }}
-              transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
-              className={`flex-1 flex flex-col w-full h-full overflow-hidden ${isDark ? 'bg-slate-900/50' : 'bg-slate-50/50'}`}
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.18 }}
+              className={`flex-1 flex flex-col w-full h-full overflow-hidden rounded-2xl ${theme.cardBg} ${theme.shadow}`}
             >
-            {/* Header / Actions for Message Detail */}
-            <div className={`p-3 border-b flex items-center justify-between gap-2 shrink-0 ${
-              isDark ? 'bg-slate-900 border-slate-800' : 'bg-slate-100 border-slate-300'
-            }`}>
-              <button
-                onClick={() => setSelectedMessageId(null)}
-                className={`px-3 py-1.5 rounded-lg border text-xs font-bold flex items-center gap-1.5 transition-all shadow-xs cursor-pointer ${
-                  isDark 
-                    ? 'bg-slate-800 text-slate-200 hover:bg-slate-700 border-slate-700' 
-                    : 'bg-white text-slate-700 hover:bg-slate-100 border-slate-300'
-                }`}
-              >
-                <ArrowLeft className="w-4 h-4 text-blue-600" />
-                <span>返回邮件列表</span>
-              </button>
-
-              <div className={`flex items-center gap-2 text-xs font-semibold ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
-                <span>邮件正文详情</span>
+              <div className={`p-3 border-b flex items-center justify-between gap-3 ${theme.border} ${isDark ? 'bg-white/[0.025]' : 'bg-white/30'}`}>
+                <button onClick={() => { setSelectedMessage(null); setErrorMessage(''); }} className={`px-3 py-2 rounded-xl border text-xs font-bold flex items-center gap-1.5 ${theme.cardBg} ${theme.border} ${theme.textPrimary}`}><ArrowLeft className="w-4 h-4 text-blue-600" />返回邮件列表</button>
+                <span className={`font-semibold ${theme.textPrimary}`}>邮件正文详情</span>
+                <button onClick={() => selectedMessage && void handleViewMessage(selectedMessage)} className={`p-2 rounded-lg border ${theme.cardBg} ${theme.border}`} title="重新加载正文"><RefreshCw className={`w-4 h-4 ${detailLoading ? 'animate-spin' : ''}`} /></button>
               </div>
-
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={(e) => handleToggleStar(selectedMessage.id, e)}
-                  className={`p-1.5 rounded border transition-colors cursor-pointer ${
-                    isDark ? 'border-slate-700 text-slate-300 hover:bg-slate-800' : 'border-slate-300 text-slate-700 hover:bg-slate-100'
-                  }`}
-                  title="标记星标"
-                >
-                  <Star className={`w-4 h-4 ${selectedMessage.isStarred ? 'text-amber-500 fill-amber-500' : ''}`} />
-                </button>
-              </div>
-            </div>
-
-            {/* Email Message Detail Content */}
-            <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">
-              {/* Subject */}
-              <h1 className={`text-base sm:text-lg font-bold ${isDark ? 'text-slate-100' : 'text-slate-900'}`}>
-                {selectedMessage.subject}
-              </h1>
-
-              {/* Sender & Recipient Bar */}
-              <div className={`p-3 rounded-lg border space-y-1 text-xs ${
-                isDark ? 'border-slate-800 bg-slate-800/60' : 'border-slate-300 bg-white'
-              }`}>
-                <div className="flex justify-between items-start">
-                  <div>
-                    <span className={`font-bold ${isDark ? 'text-slate-100' : 'text-slate-900'}`}>
-                      {selectedMessage.senderName}
-                    </span>{' '}
-                    <span className={`font-mono ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>&lt;{selectedMessage.senderEmail}&gt;</span>
+              <div className={`flex-1 min-h-0 overflow-hidden p-3 sm:p-4 ${isDark ? 'bg-black/10' : 'bg-white/15'}`}>
+                <div className={`w-full h-full min-h-0 rounded-2xl border shadow-sm overflow-hidden flex flex-col ${theme.cardBg} ${theme.border}`}>
+                  <div className={`p-5 sm:p-6 border-b shrink-0 ${theme.border}`}>
+                    <div className="flex items-start justify-between gap-3"><h1 className={`text-lg sm:text-xl font-bold leading-snug ${theme.textPrimary}`}>{selectedMessage.subject}</h1><span className={`text-xs shrink-0 ${theme.textSecondary}`}>{selectedMessage.date}</span></div>
+                    <div className="mt-4 flex items-center gap-3"><div className="w-10 h-10 rounded-full bg-blue-600 text-white font-bold flex items-center justify-center">{selectedMessage.senderName.slice(0, 1).toUpperCase()}</div><div><p className={`font-bold text-sm ${theme.textPrimary}`}>{selectedMessage.senderName}</p><p className={`text-xs ${theme.textSecondary}`}>&lt;{selectedMessage.senderEmail}&gt; 发给 {selectedMessage.recipient}</p></div></div>
                   </div>
-                  <span className={`font-mono ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>{selectedMessage.date}</span>
-                </div>
-                <div className={isDark ? 'text-slate-300' : 'text-slate-700'}>
-                  收件账号:{' '}
-                  <span className="font-mono text-blue-600 font-semibold">
-                    {account.accountName} ({account.emailAddress})
-                  </span>
-                </div>
-              </div>
-
-              {/* AI Summary Box if exists */}
-              {selectedMessage.aiSummary && (
-                <div className={`p-3 rounded-lg border text-xs space-y-1 ${
-                  isDark ? 'border-blue-900/80 bg-blue-950/60' : 'border-blue-200 bg-blue-50/90'
-                }`}>
-                  <div className="flex items-center gap-1.5 font-bold text-blue-600">
-                    <Sparkles className="w-3.5 h-3.5" />
-                    <span>AI 智能概要</span>
-                  </div>
-                  <p className={`leading-relaxed ${isDark ? 'text-slate-200' : 'text-slate-800'}`}>
-                    {selectedMessage.aiSummary}
-                  </p>
-                </div>
-              )}
-
-              {/* Attachments list if any */}
-              {selectedMessage.attachments && selectedMessage.attachments.length > 0 && (
-                <div className="space-y-2">
-                  <span className={`text-xs font-bold flex items-center gap-1 ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
-                    <Paperclip className="w-3.5 h-3.5 text-blue-600" />
-                    附件凭证 ({selectedMessage.attachments.length})
-                  </span>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    {selectedMessage.attachments.map((att) => (
-                      <div
-                        key={att.id}
-                        className={`p-2.5 rounded border flex items-center justify-between text-xs ${
-                          isDark ? 'border-slate-800 bg-slate-800/60' : 'border-slate-300 bg-white'
-                        }`}
-                      >
-                        <div className="flex items-center gap-2 overflow-hidden">
-                          <FileText className="w-4 h-4 text-blue-600 shrink-0" />
-                          <div className="truncate">
-                            <p className={`font-bold truncate ${isDark ? 'text-slate-200' : 'text-slate-800'}`}>{att.name}</p>
-                            <p className="text-[10px] text-slate-500 font-mono">{att.size}</p>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
+                  {errorMessage && <div className="m-5 p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 flex items-center gap-2"><AlertCircle className="w-4 h-4" />{errorMessage}</div>}
+                  <div className={`flex-1 min-h-0 ${selectedMessage.bodyContentType === 'html' && !detailLoading ? 'bg-white' : 'overflow-y-auto p-5 sm:p-6'}`}>
+                    {detailLoading ? (
+                      <div className="h-full min-h-72 flex flex-col items-center justify-center gap-2"><LoaderCircle className="w-8 h-8 animate-spin text-blue-600" /><span className={theme.textSecondary}>正在加载邮件正文...</span></div>
+                    ) : selectedMessage.bodyContentType === 'html' ? (
+                      <iframe title="邮件正文" sandbox="" srcDoc={selectedMessage.body} className="block w-full h-full min-h-[420px] border-0 bg-white" />
+                    ) : (
+                      <div className={`whitespace-pre-wrap text-sm leading-7 ${theme.textPrimary}`}>{selectedMessage.body || '暂无正文'}</div>
+                    )}
                   </div>
                 </div>
-              )}
-
-              {/* Body */}
-              <div className={`p-4 rounded-lg border text-xs sm:text-sm leading-relaxed whitespace-pre-wrap font-sans ${
-                isDark ? 'border-slate-800 bg-slate-800/40 text-slate-200' : 'border-slate-300 bg-white text-slate-800'
-              }`}>
-                {selectedMessage.body}
               </div>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
     </div>
   );
 };

@@ -1,1 +1,30 @@
 @import "tailwindcss";
+
+[data-theme="developer-midnight"] ::selection {
+  background: #1f6feb;
+  color: #ffffff;
+}
+
+[data-theme="developer-midnight"] * {
+  scrollbar-color: #30363d #0d1117;
+  scrollbar-width: thin;
+}
+
+[data-theme="developer-midnight"] *::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+
+[data-theme="developer-midnight"] *::-webkit-scrollbar-track {
+  background: #0d1117;
+}
+
+[data-theme="developer-midnight"] *::-webkit-scrollbar-thumb {
+  background: #30363d;
+  border: 2px solid #0d1117;
+  border-radius: 999px;
+}
+
+[data-theme="developer-midnight"] *::-webkit-scrollbar-thumb:hover {
+  background: #484f58;
+}

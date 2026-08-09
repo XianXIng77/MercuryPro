@@ -43,6 +43,7 @@ export interface Email {
   subject: string;
   snippet: string;
   body: string;
+  bodyContentType?: 'text' | 'html';
   date: string;
   timestamp: number;
   isRead: boolean;
@@ -72,6 +73,8 @@ export interface StylePreset {
   id: StylePresetId;
   name: string;
   description: string;
+  mode: 'light' | 'dark';
+  preview: [string, string, string];
   themeClasses: {
     appBg: string;
     navBg: string;
@@ -92,6 +95,7 @@ export type NavTab = 'email' | 'register' | 'calendar' | 'contacts' | 'analytics
 
 export interface MailAccount {
   id: string;
+  accountId?: number | string;
   accountName: string;
   emailAddress: string;
   protocol: 'IMAP' | 'POP3' | 'Exchange';
@@ -104,9 +108,12 @@ export interface MailAccount {
   department?: string;
   clientId?: string;
   refreshToken?: string;
+  accessToken?: string;
+  scope?: string;
+  grantType?: string;
+  backendStatus?: string;
   usageStatus: '未用' | '已用';
   createdTime: string;
   refreshResult: '未刷新' | '刷新成功' | '刷新失败';
   messages: Email[];
 }
-

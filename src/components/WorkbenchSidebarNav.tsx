@@ -26,7 +26,7 @@ export const WorkbenchSidebarNav: React.FC<WorkbenchSidebarNavProps> = ({
 }) => {
   const [hoveredTab, setHoveredTab] = useState<NavTab | null>(null);
   const theme = currentPreset.themeClasses;
-  const isDark = currentPreset.id.includes('dark');
+  const isDark = currentPreset.mode === 'dark';
 
   const mainNavItems: {
     id: NavTab;
@@ -36,7 +36,7 @@ export const WorkbenchSidebarNav: React.FC<WorkbenchSidebarNavProps> = ({
   }[] = [
     {
       id: 'email',
-      label: '邮件管理',
+      label: '邮箱管理',
       icon: <Mail className="w-5 h-5" />,
       badge: totalUnreadCount,
     },
@@ -161,4 +161,3 @@ export const WorkbenchSidebarNav: React.FC<WorkbenchSidebarNavProps> = ({
     </aside>
   );
 };
-

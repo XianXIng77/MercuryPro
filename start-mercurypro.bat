@@ -37,7 +37,7 @@ if not exist ".env" (
 )
 
 if not exist "node_modules\" (
-    echo [1/2] Installing dependencies for the first run...
+    echo [1/3] Installing dependencies for the first run...
     call npm.cmd install
     if errorlevel 1 (
         echo.
@@ -47,10 +47,24 @@ if not exist "node_modules\" (
         exit /b 1
     )
 ) else (
-    echo [1/2] Dependencies found. Skipping installation.
+    echo [1/3] Dependencies found. Skipping installation.
 )
 
-echo [2/2] Starting MercuryPro...
+if not exist "grok-engine\runtime\.venv\Scripts\python.exe" (
+    echo [2/3] Installing the built-in Grok fingerprint browser engine...
+    call npm.cmd run setup:grok
+    if errorlevel 1 (
+        echo.
+        echo [ERROR] Grok engine installation failed.
+        echo You can retry later with: npm.cmd run setup:grok
+        pause
+        exit /b 1
+    )
+) else (
+    echo [2/3] Built-in Grok engine found. Skipping installation.
+)
+
+echo [3/3] Starting MercuryPro FastAPI and Vite...
 echo URL: http://localhost:3000
 echo Press Ctrl+C to stop the server.
 echo.

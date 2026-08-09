@@ -78,7 +78,7 @@ export const EmailList: React.FC<EmailListProps> = ({
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   const theme = currentPreset.themeClasses;
-  const isDark = currentPreset.id.includes('dark');
+  const isDark = currentPreset.mode === 'dark';
 
   // Show floating toast
   const triggerToast = (msg: string) => {

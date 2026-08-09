@@ -2,6 +2,10 @@ node_modules
 dist
 build
 coverage
+data
+grok-engine/runtime
+grok-engine/config/config.json
+grok-engine/vendor/turnstile-solver/proxies.txt
 .git
 .gitignore
 .env

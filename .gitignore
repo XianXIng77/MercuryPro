@@ -2,7 +2,13 @@ node_modules/
 build/
 dist/
 coverage/
+__pycache__/
+*.py[cod]
 .DS_Store
 *.log
+data/*.json
+grok-engine/runtime/
+grok-engine/config/config.json
+grok-engine/vendor/turnstile-solver/proxies.txt
 .env*
 !.env.example

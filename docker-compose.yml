@@ -10,10 +10,14 @@ services:
     ports:
       - "127.0.0.1:9100:9100"
     environment:
-      NODE_ENV: production
       PORT: "9100"
       GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
       APP_URL: "${APP_URL:-http://127.0.0.1:9100}"
+      DATA_DIR: "/app/data"
+      MICROSOFT_TOKEN_URL: "${MICROSOFT_TOKEN_URL:-https://login.microsoftonline.com/consumers/oauth2/v2.0/token}"
+      MICROSOFT_MAIL_API_BASE_URL: "${MICROSOFT_MAIL_API_BASE_URL:-https://outlook.office.com/api/v2.0}"
+    volumes:
+      - ./data:/app/data
     security_opt:
       - no-new-privileges:true
     cap_drop:
