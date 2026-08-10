@@ -292,6 +292,7 @@ function translateStructuredXaiMessage(text: string): string {
   };
   const states: Record<string, string> = {
     starting: '开始执行', launched_camoufox: '已启动 Camoufox 浏览器', launched_chromium: '已启动 Chromium 浏览器',
+    regional_profile_detected: '已识别代理出口，Camoufox 使用原生地区指纹',
     regional_profile_applied: '已按代理出口匹配语言、地区与时区', regional_profile_fallback: '地区解析失败，已使用默认语言与时区',
     reused_browser: '正在复用当前并发窗口', private_context_created: '已创建全新隐私上下文', loading: '正在加载', ready: '页面已就绪',
     selecting_email: '正在选择邮箱注册', selected: '已选择邮箱注册', generated: '已随机生成', filling: '正在填写', filled: '填写完成',
