@@ -18,6 +18,8 @@ services:
       MICROSOFT_MAIL_API_BASE_URL: "${MICROSOFT_MAIL_API_BASE_URL:-https://outlook.office.com/api/v2.0}"
     volumes:
       - ./data:/app/data
+      - ./grok-engine/runtime/data:/app/grok-engine/runtime/data
+      - ./grok-engine/config:/app/grok-engine/config
     security_opt:
       - no-new-privileges:true
     cap_drop:

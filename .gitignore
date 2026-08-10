@@ -5,6 +5,7 @@ coverage/
 __pycache__/
 *.py[cod]
 .DS_Store
+.update-backups/
 *.log
 data/*.json
 grok-engine/runtime/
