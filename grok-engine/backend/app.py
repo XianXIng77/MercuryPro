@@ -98,7 +98,7 @@ CHATGPT_SUB2API_MODELS = [
 DEFAULT_CONFIG: dict[str, Any] = {
     "registration_target": "grok",
     "registration_mode": "browser",
-    "mail_provider": "custom",
+    "mail_provider": "hotmail_local",
     "mail_api_key": "",
     "mail_base_url": "",
     "mail_domain": "",
@@ -129,6 +129,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "hotmail_local_base_url": os.environ.get(
         "PROGROK_HOTMAIL_HELPER_URL", "http://127.0.0.1:17373"
     ).rstrip("/"),
+    "hotmail_account_source": "mail_management",
     "captcha_provider": "local",
     "local_solver_url": os.environ.get(
         "PROGROK_SOLVER_URL", "http://127.0.0.1:5072"
@@ -219,7 +220,7 @@ class Settings(BaseModel):
         "cloudflare_grokfree",
         "stalwart",
         "hotmail_local",
-    ] = "custom"
+    ] = "hotmail_local"
     mail_api_key: str = ""
     mail_base_url: str = ""
     mail_domain: str = ""
@@ -227,6 +228,7 @@ class Settings(BaseModel):
     mail_expiry_ms: int = Field(86400000, ge=60000, le=604800000)
     mail_provider_configs: dict[str, dict[str, str]] = Field(default_factory=dict)
     hotmail_local_base_url: str = "http://127.0.0.1:17373"
+    hotmail_account_source: Literal["mail_management", "manual"] = "mail_management"
     captcha_provider: Literal["local", "yescaptcha"] = "local"
     local_solver_url: str = "http://127.0.0.1:5072"
     yescaptcha_key: str = ""
@@ -287,6 +289,7 @@ class HotmailImportRequest(BaseModel):
 
 class HotmailProbeRequest(BaseModel):
     base_url: str = ""
+    source: Literal["mail_management", "manual"] | None = None
 
 
 class ProxyCheckRequest(BaseModel):
@@ -296,6 +299,14 @@ class ProxyCheckRequest(BaseModel):
 class HotmailStatusRequest(BaseModel):
     used: bool | None = None
     preferred_for_next_use: bool | None = None
+
+
+class HotmailRestoreUsesRequest(BaseModel):
+    count: int = Field(..., ge=1, le=3)
+
+
+class HotmailDeleteRequest(BaseModel):
+    ids: list[str] = Field(default_factory=list)
 
 
 class AccountRotationProbeRequest(BaseModel):
@@ -535,8 +546,10 @@ def mail_provider_presets(response: Response) -> dict[str, Any]:
 
 
 @app.get("/api/mail/hotmail/accounts")
-def hotmail_accounts() -> dict[str, Any]:
-    return _app_routes.hotmail_accounts(_app_context())
+def hotmail_accounts(
+    source: Literal["mail_management", "manual"] = Query("mail_management"),
+) -> dict[str, Any]:
+    return _app_routes.hotmail_accounts(_app_context(), source)
 
 
 @app.post("/api/mail/hotmail/accounts/import")
@@ -564,6 +577,18 @@ def hotmail_set_status(
     account_id: str, request: HotmailStatusRequest
 ) -> dict[str, Any]:
     return _app_routes.hotmail_set_status(_app_context(), account_id, request)
+
+
+@app.post("/api/mail/hotmail/accounts/{account_id}/restore-uses")
+def hotmail_restore_uses(
+    account_id: str, request: HotmailRestoreUsesRequest
+) -> dict[str, Any]:
+    return _app_routes.hotmail_restore_uses(_app_context(), account_id, request)
+
+
+@app.delete("/api/mail/hotmail/accounts")
+def hotmail_delete_selected(request: HotmailDeleteRequest) -> dict[str, Any]:
+    return _app_routes.hotmail_delete_selected(_app_context(), request)
 
 
 @app.delete("/api/mail/hotmail/accounts/used")

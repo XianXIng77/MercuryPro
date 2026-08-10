@@ -20,6 +20,8 @@ DEFAULT_HELPER_URL = "http://127.0.0.1:17373"
 # Each imported base account can register ALIAS_USES times:
 #   base@domain, base+1@domain, ..., base+(ALIAS_USES-1)@domain
 ALIAS_USES = 3
+ACCOUNT_SOURCE_MANAGEMENT = "mail_management"
+ACCOUNT_SOURCE_MANUAL = "manual"
 try:
     MAIL_HEALTH_TTL_SECONDS = max(
         60, int(os.environ.get("HOTMAIL_HEALTH_TTL_SECONDS", "1800") or 1800)
@@ -51,6 +53,36 @@ def _normalize_index_set(raw: Any) -> set[int]:
         if 0 <= index < ALIAS_USES:
             values.add(index)
     return values
+
+
+def _normalize_account_source(value: Any) -> str:
+    return (
+        ACCOUNT_SOURCE_MANUAL
+        if str(value or "").strip().lower() == ACCOUNT_SOURCE_MANUAL
+        else ACCOUNT_SOURCE_MANAGEMENT
+    )
+
+
+def _account_sources(item: dict[str, Any]) -> set[str]:
+    raw = item.get("sources")
+    if isinstance(raw, list):
+        sources = {
+            str(value).strip().lower()
+            for value in raw
+            if str(value).strip().lower() in {ACCOUNT_SOURCE_MANAGEMENT, ACCOUNT_SOURCE_MANUAL}
+        }
+        if sources:
+            return sources
+    source = str(item.get("source") or "").strip().lower()
+    if source in {ACCOUNT_SOURCE_MANAGEMENT, ACCOUNT_SOURCE_MANUAL}:
+        return {source}
+    return {ACCOUNT_SOURCE_MANUAL}
+
+
+def _matches_account_source(item: dict[str, Any], account_source: str | None) -> bool:
+    if account_source is None:
+        return True
+    return _normalize_account_source(account_source) in _account_sources(item)
 
 
 def _normalize_used_aliases(item: dict[str, Any]) -> set[int]:
@@ -312,6 +344,10 @@ def _merge_duplicate_base_accounts(
         for key in ("password", "client_id", "refresh_token"):
             if row.get(key):
                 existing[key] = row[key]
+        sources = _account_sources(existing) | _account_sources(row)
+        existing["sources"] = sorted(sources)
+        if row.get("source_account_id") is not None:
+            existing["source_account_id"] = row.get("source_account_id")
         existing["email"] = base_email
         _apply_alias_sets(existing, merged_used, merged_failed)
         if _row_account_failed(existing) or _row_account_failed(row):
@@ -458,6 +494,146 @@ def _save(accounts: list[dict[str, Any]]) -> None:
     os.replace(tmp, ACCOUNTS_FILE)
 
 
+def _mirror_mail_management_usage(item: dict[str, Any]) -> None:
+    source_account_id = item.get("source_account_id")
+    if source_account_id is None or ACCOUNT_SOURCE_MANAGEMENT not in _account_sources(item):
+        return
+    try:
+        from mercury_mail import update_registration_usage_sync
+
+        update_registration_usage_sync(
+            source_account_id,
+            used_aliases=sorted(_normalize_used_aliases(item)),
+            failed_aliases=sorted(_normalize_failed_aliases(item)),
+            refresh_token=str(item.get("refresh_token") or "") or None,
+        )
+    except Exception:
+        # Registration remains usable even if the management view is temporarily unavailable.
+        pass
+
+
+def sync_mail_management_accounts() -> int:
+    """Import/update mailbox-management credentials without duplicating usage state."""
+    try:
+        from mercury_mail import registration_accounts_snapshot
+
+        managed_accounts = registration_accounts_snapshot()
+    except Exception:
+        return 0
+    changed = False
+    synced: list[dict[str, Any]] = []
+    with _lock:
+        accounts = _load()
+        managed_ids = {str(item.get("accountId")) for item in managed_accounts}
+        by_email = {
+            base_mailbox_email(str(item.get("email") or "")): item for item in accounts
+        }
+        for source in managed_accounts:
+            email = base_mailbox_email(str(source.get("email") or ""))
+            if not email or "@" not in email:
+                continue
+            item = by_email.get(email)
+            if item is None:
+                used = _normalize_index_set(source.get("registrationUsedAliases"))
+                failed = _normalize_index_set(source.get("registrationFailedAliases")) - used
+                if not used and not failed and str(source.get("status") or "0") == "1":
+                    used = set(range(ALIAS_USES))
+                item = {
+                    "id": f"hm_{uuid.uuid4().hex[:16]}",
+                    "email": email,
+                    "password": "x",
+                    "client_id": str(source.get("clientId") or ""),
+                    "refresh_token": str(source.get("refreshToken") or ""),
+                    "sources": [ACCOUNT_SOURCE_MANAGEMENT],
+                    "source_account_id": source.get("accountId"),
+                    "failed": False,
+                    "account_failed": False,
+                    "failure_reason": "",
+                    "failed_at": None,
+                    "created_at": time.time(),
+                    "last_used_at": None,
+                    "mail_healthy": None,
+                    "mail_health_error": "",
+                    "mail_checked_at": None,
+                    "preferred_for_next_use": False,
+                }
+                _apply_alias_sets(item, used, failed)
+                accounts.append(item)
+                by_email[email] = item
+                changed = True
+            else:
+                sources = _account_sources(item)
+                before = (
+                    set(sources),
+                    item.get("source_account_id"),
+                    item.get("client_id"),
+                    item.get("refresh_token"),
+                )
+                sources.add(ACCOUNT_SOURCE_MANAGEMENT)
+                item["sources"] = sorted(sources)
+                item["source_account_id"] = source.get("accountId")
+                item["client_id"] = str(source.get("clientId") or item.get("client_id") or "")
+                item["refresh_token"] = str(source.get("refreshToken") or item.get("refresh_token") or "")
+                item.setdefault("password", "x")
+                after = (
+                    set(sources),
+                    item.get("source_account_id"),
+                    item.get("client_id"),
+                    item.get("refresh_token"),
+                )
+                changed = changed or before != after
+            synced.append(item)
+        reconciled: list[dict[str, Any]] = []
+        for item in accounts:
+            sources = _account_sources(item)
+            source_id = str(item.get("source_account_id"))
+            if ACCOUNT_SOURCE_MANAGEMENT in sources and source_id not in managed_ids:
+                account_id = str(item.get("id") or "")
+                if sources == {ACCOUNT_SOURCE_MANAGEMENT}:
+                    if account_id not in _reservations:
+                        changed = True
+                        continue
+                else:
+                    sources.discard(ACCOUNT_SOURCE_MANAGEMENT)
+                    item["sources"] = sorted(sources)
+                    item.pop("source_account_id", None)
+                    changed = True
+            reconciled.append(item)
+        accounts = reconciled
+        if changed:
+            _save(accounts)
+    for item in synced:
+        _mirror_mail_management_usage(item)
+    return len(synced)
+
+
+def set_mail_management_status(account_id: str | int, used: bool) -> bool:
+    """Apply a manual mailbox-management status change to its registration row."""
+    sync_mail_management_accounts()
+    with _lock:
+        accounts = _load()
+        item = next(
+            (
+                row
+                for row in accounts
+                if str(row.get("source_account_id")) == str(account_id)
+                and ACCOUNT_SOURCE_MANAGEMENT in _account_sources(row)
+            ),
+            None,
+        )
+        if item is None:
+            return False
+        _apply_alias_sets(item, set(range(ALIAS_USES)) if used else set(), set())
+        item["failed"] = False
+        item["account_failed"] = False
+        item["failure_reason"] = ""
+        item["failed_at"] = None
+        item["preferred_for_next_use"] = False
+        _save(accounts)
+    _mirror_mail_management_usage(item)
+    return True
+
+
 def parse_import_text(text: str) -> tuple[list[dict[str, str]], list[dict[str, Any]]]:
     valid: list[dict[str, str]] = []
     errors: list[dict[str, Any]] = []
@@ -507,6 +683,9 @@ def import_accounts(text: str) -> dict[str, Any]:
             if existing:
                 existing.update(row)
                 existing["email"] = base_email
+                sources = _account_sources(existing)
+                sources.add(ACCOUNT_SOURCE_MANUAL)
+                existing["sources"] = sorted(sources)
                 # Fresh credentials should un-quarantine a previously failed mailbox.
                 existing["account_failed"] = False
                 existing["failed"] = False
@@ -522,6 +701,7 @@ def import_accounts(text: str) -> dict[str, Any]:
                     "id": f"hm_{uuid.uuid4().hex[:16]}",
                     **row,
                     "email": base_email,
+                    "sources": [ACCOUNT_SOURCE_MANUAL],
                     "used": False,
                     "use_count": 0,
                     "used_aliases": [],
@@ -562,16 +742,18 @@ def _masked(value: str, *, keep: int = 4) -> str:
     return f"{value[:keep]}…{value[-keep:]}"
 
 
-def list_accounts() -> dict[str, Any]:
+def list_accounts(account_source: str | None = None) -> dict[str, Any]:
+    if account_source is not None and _normalize_account_source(account_source) == ACCOUNT_SOURCE_MANAGEMENT:
+        sync_mail_management_accounts()
     with _lock:
-        accounts = _load()
+        accounts = [item for item in _load() if _matches_account_source(item, account_source)]
         rows = []
         available_slots = 0
         exhausted = 0
         account_failed = 0
         for item in accounts:
             account_id = str(item.get("id") or "")
-            use_count = _normalize_use_count(item)
+            use_count = len(_normalize_used_aliases(item) | _normalize_failed_aliases(item))
             remaining = _remaining_uses(item)
             reserved_set = _reserved_indices(account_id)
             reserved = bool(reserved_set)
@@ -618,6 +800,8 @@ def list_accounts() -> dict[str, Any]:
                 "mail_health_error": str(item.get("mail_health_error") or ""),
                 "mail_checked_at": item.get("mail_checked_at"),
                 "preferred_for_next_use": item.get("preferred_for_next_use") is True,
+                "sources": sorted(_account_sources(item)),
+                "source_account_id": item.get("source_account_id"),
                 "verification_entries": _verification_entries(account_id),
             })
     return {
@@ -641,12 +825,19 @@ def list_accounts() -> dict[str, Any]:
         "unhealthy": sum(1 for item in rows if item["mail_healthy"] is False),
         "unchecked": sum(1 for item in rows if item["mail_healthy"] is None),
         "alias_uses": ALIAS_USES,
+        "account_source": _normalize_account_source(account_source) if account_source is not None else "all",
     }
 
 
-def reserve_account(*, exclude_account_ids: set[str] | None = None) -> dict[str, Any]:
+def reserve_account(
+    *,
+    exclude_account_ids: set[str] | None = None,
+    account_source: str | None = None,
+) -> dict[str, Any]:
     """Reserve one plus-alias slot from an idle physical mailbox."""
     global _reserve_cursor
+    if account_source is not None and _normalize_account_source(account_source) == ACCOUNT_SOURCE_MANAGEMENT:
+        sync_mail_management_accounts()
     with _lock:
         accounts = _load()
         if not accounts:
@@ -661,6 +852,8 @@ def reserve_account(*, exclude_account_ids: set[str] | None = None) -> dict[str,
                 item = accounts[(_reserve_cursor + offset) % total]
                 account_id = str(item.get("id") or "")
                 if not account_id:
+                    continue
+                if not _matches_account_source(item, account_source):
                     continue
                 if account_id in excluded:
                     continue
@@ -780,6 +973,7 @@ def mark_used(account_id: str, alias_index: int | None = None) -> bool:
     with _lock:
         accounts = _load()
         found = False
+        changed_item: dict[str, Any] | None = None
         for item in accounts:
             if str(item.get("id") or "") == account_id:
                 used_aliases = _normalize_used_aliases(item)
@@ -809,6 +1003,7 @@ def mark_used(account_id: str, alias_index: int | None = None) -> bool:
                     item["failure_reason"] = ""
                     item["failed_at"] = None
                 item["last_used_at"] = time.time()
+                changed_item = dict(item)
                 found = True
                 break
         held = _reservations.get(account_id)
@@ -824,7 +1019,9 @@ def mark_used(account_id: str, alias_index: int | None = None) -> bool:
                 _reservations.pop(account_id, None)
         if found:
             _save(accounts)
-        return found
+    if changed_item is not None:
+        _mirror_mail_management_usage(changed_item)
+    return found
 
 
 def mark_failed(account_id: str, reason: str = "", alias_index: int | None = None) -> bool:
@@ -838,6 +1035,7 @@ def mark_failed(account_id: str, reason: str = "", alias_index: int | None = Non
     with _lock:
         accounts = _load()
         found = False
+        changed_item: dict[str, Any] | None = None
         for item in accounts:
             if str(item.get("id") or "") == account_id:
                 used_aliases = _normalize_used_aliases(item)
@@ -865,6 +1063,7 @@ def mark_failed(account_id: str, reason: str = "", alias_index: int | None = Non
                     item["last_alias_failure_reason"] = reason_text
                     item["last_alias_failed_at"] = time.time()
                 _sync_used_flag(item)
+                changed_item = dict(item)
                 found = True
                 break
         held = _reservations.get(account_id)
@@ -880,7 +1079,9 @@ def mark_failed(account_id: str, reason: str = "", alias_index: int | None = Non
                 _reservations.pop(account_id, None)
         if found:
             _save(accounts)
-        return found
+    if changed_item is not None:
+        _mirror_mail_management_usage(changed_item)
+    return found
 
 
 def get_refresh_token(account_id: str) -> str:
@@ -903,14 +1104,18 @@ def update_refresh_token(account_id: str, refresh_token: str) -> bool:
     with _lock:
         accounts = _load()
         found = False
+        changed_item: dict[str, Any] | None = None
         for item in accounts:
             if str(item.get("id") or "") == account_id:
                 item["refresh_token"] = refresh_token
+                changed_item = dict(item)
                 found = True
                 break
         if found:
             _save(accounts)
-        return found
+    if changed_item is not None:
+        _mirror_mail_management_usage(changed_item)
+    return found
 
 
 def rotate_refresh_token(account_id: str, refresh_token: str) -> str:
@@ -930,6 +1135,7 @@ def set_used(account_id: str, used: bool) -> bool:
     with _lock:
         accounts = _load()
         found = False
+        changed_item: dict[str, Any] | None = None
         for item in accounts:
             if str(item.get("id") or "") == account_id:
                 if used:
@@ -957,13 +1163,65 @@ def set_used(account_id: str, used: bool) -> bool:
                         item["used_aliases"] = sorted(used_aliases)
                         item["use_count"] = len(used_aliases)
                     item["used"] = False
+                changed_item = dict(item)
                 found = True
                 break
         if not used:
             _reservations.pop(account_id, None)
         if found:
             _save(accounts)
-        return found
+    if changed_item is not None:
+        _mirror_mail_management_usage(changed_item)
+    return found
+
+
+def restore_uses(account_id: str, count: int) -> int | None:
+    """Restore a specific number of consumed alias slots.
+
+    Failed registration slots are restored before successful slots so test
+    attempts can be retried without discarding genuine registration history.
+    Returns None when the account does not exist.
+    """
+    account_id = str(account_id or "")
+    restore_count = max(1, min(ALIAS_USES, int(count)))
+    with _lock:
+        accounts = _load()
+        for item in accounts:
+            if str(item.get("id") or "") != account_id:
+                continue
+            if account_id in _reservations:
+                raise RuntimeError("邮箱正在注册任务中使用，无法恢复使用次数")
+
+            used_aliases = _normalize_used_aliases(item)
+            failed_aliases = _normalize_failed_aliases(item)
+            restored = 0
+            for alias_index in sorted(failed_aliases, reverse=True):
+                if restored >= restore_count:
+                    break
+                failed_aliases.discard(alias_index)
+                restored += 1
+            for alias_index in sorted(used_aliases, reverse=True):
+                if restored >= restore_count:
+                    break
+                used_aliases.discard(alias_index)
+                restored += 1
+
+            _apply_alias_sets(item, used_aliases, failed_aliases)
+            if not used_aliases:
+                item["last_used_at"] = None
+            if restored:
+                item["failed"] = False
+                item["account_failed"] = False
+                item["failure_reason"] = ""
+                item["failed_at"] = None
+                item["preferred_for_next_use"] = False
+                _save(accounts)
+            changed_item = dict(item)
+            break
+        else:
+            return None
+    _mirror_mail_management_usage(changed_item)
+    return restored
 
 
 def delete_account(account_id: str) -> bool:
@@ -984,6 +1242,28 @@ def delete_account(account_id: str) -> bool:
         _verification_states.pop(account_id, None)
         _save(kept)
         return True
+
+
+def delete_accounts(account_ids: list[str]) -> dict[str, int]:
+    """Delete selected mailboxes in one locked update, skipping active reservations."""
+    requested = {str(account_id or "") for account_id in account_ids}
+    requested.discard("")
+    with _lock:
+        accounts = _load()
+        existing_ids = {str(item.get("id") or "") for item in accounts}
+        reserved_ids = requested & set(_reservations)
+        deleted_ids = (requested & existing_ids) - reserved_ids
+        kept = [item for item in accounts if str(item.get("id") or "") not in deleted_ids]
+        if deleted_ids:
+            for account_id in deleted_ids:
+                _drop_token_lock(account_id)
+                _verification_states.pop(account_id, None)
+            _save(kept)
+        return {
+            "deleted": len(deleted_ids),
+            "skipped_reserved": len(reserved_ids),
+            "missing": len(requested - existing_ids),
+        }
 
 
 def delete_used_accounts() -> dict[str, int]:
@@ -1127,11 +1407,18 @@ def probe_accounts(
     base_url: str | None = None,
     account_ids: list[str] | None = None,
     *,
+    account_source: str | None = None,
     should_cancel: Any | None = None,
 ) -> dict[str, Any]:
     if account_ids is None:
+        if account_source is not None and _normalize_account_source(account_source) == ACCOUNT_SOURCE_MANAGEMENT:
+            sync_mail_management_accounts()
         with _lock:
-            account_ids = [str(item.get("id") or "") for item in _load() if item.get("id")]
+            account_ids = [
+                str(item.get("id") or "")
+                for item in _load()
+                if item.get("id") and _matches_account_source(item, account_source)
+            ]
     else:
         account_ids = [str(account_id or "") for account_id in account_ids if str(account_id or "")]
     results: list[dict[str, Any]] = []
@@ -1165,6 +1452,7 @@ def ensure_healthy_accounts(
     required: int,
     base_url: str | None = None,
     *,
+    account_source: str | None = None,
     should_cancel: Any | None = None,
 ) -> dict[str, Any]:
     """Preflight enough distinct physical mailboxes for one concurrency wave."""
@@ -1174,7 +1462,7 @@ def ensure_healthy_accounts(
     while True:
         if callable(should_cancel) and should_cancel():
             return {"ok": False, "cancelled": True, "healthy": 0, "results": results}
-        pool = list_accounts()
+        pool = list_accounts(account_source)
         healthy = [
             item
             for item in pool.get("accounts", [])
@@ -1417,6 +1705,7 @@ def create_receiver(
     base_url: str | None = None,
     *,
     verification_target: str = "chatgpt",
+    account_source: str | None = None,
     should_cancel: Any | None = None,
 ) -> tuple[str, HotmailLocalReceiver]:
     attempted: set[str] = set()
@@ -1425,7 +1714,10 @@ def create_receiver(
         if callable(should_cancel):
             should_cancel()
         try:
-            account = reserve_account(exclude_account_ids=attempted)
+            account = reserve_account(
+                exclude_account_ids=attempted,
+                account_source=account_source,
+            )
         except RuntimeError as exc:
             if probe_errors:
                 raise RuntimeError(

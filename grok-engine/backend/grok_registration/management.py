@@ -7,6 +7,13 @@ from typing import Any
 from .flow import RegistrationContext
 
 
+def _is_cancelled_stopping(item: dict[str, Any]) -> bool:
+    """Return true for work that was stopped before a previous process exited."""
+    return bool(item.get("cancel_requested")) and str(
+        item.get("status") or ""
+    ).lower() == "stopping"
+
+
 def reclaim_orphaned_registration_batches(
     ctx: RegistrationContext,
     *,
@@ -263,12 +270,14 @@ def reset_registration_monitor(ctx: RegistrationContext) -> dict[str, Any]:
             sid
             for sid, session in ctx._sessions.items()
             if str(session.get("status") or "").lower() not in ctx._TERMINAL_STATUSES
+            and not _is_cancelled_stopping(session)
         ]
         active_batches = [
             bid
             for bid, batch in ctx._batches.items()
             if str(batch.get("status") or "").lower()
             not in {"paused", "done", "partial", "error", "cancelled", "stopped"}
+            and not _is_cancelled_stopping(batch)
         ]
         active_runners = [
             bid for bid, running in ctx._active_batch_runners.items() if running

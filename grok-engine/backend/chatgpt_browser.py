@@ -19,6 +19,14 @@ from datetime import datetime
 from typing import Any, Callable
 from urllib.parse import urlparse
 
+from browser_registration_common import (
+    EMAIL_INPUT_SELECTORS,
+    NEW_PASSWORD_INPUT_SELECTORS,
+    ONE_TIME_CODE_INPUT_SELECTORS,
+    action_pattern,
+    find_action,
+    first_visible,
+)
 from chatgpt_browser_context import BrowserContext
 import chatgpt_browser_registration as _registration
 
@@ -179,40 +187,11 @@ def _account_deactivated_visible(page: Any) -> bool:
         return False
 
 
-_VERIFICATION_SELECTORS = [
-    'input[name="code"]',
-    'input[name="otp"]',
-    'input[autocomplete="one-time-code"]',
-    'input[id*="code" i]',
-    'input[id*="otp" i]',
-    'input[type="text"][maxlength="6"]',
-    'input[type="tel"][maxlength="6"]',
-    'input[type="number"][maxlength="6"]',
-    'input[aria-label*="code" i]',
-    'input[placeholder*="code" i]',
-    'input[inputmode="numeric"]',
-]
+_VERIFICATION_SELECTORS = list(ONE_TIME_CODE_INPUT_SELECTORS)
 
 
 def _first_visible(page: Any, selectors: list[str]) -> Any:
-    for selector in selectors:
-        try:
-            # Auth pages often retain a hidden input from the previous React
-            # render. Inspect every match instead of rejecting the selector
-            # when its first element happens to be that stale hidden node.
-            elements = page.query_selector_all(selector)
-            for element in elements:
-                if element.is_visible():
-                    return element
-            # Keep compatibility with lightweight page adapters that only
-            # implement query_selector (also useful for non-browser tests).
-            if not elements:
-                element = page.query_selector(selector)
-                if element and element.is_visible():
-                    return element
-        except Exception:
-            continue
-    return None
+    return first_visible(page, selectors)
 
 
 def _visible_elements(page: Any, selector: str) -> list[Any]:
@@ -243,21 +222,7 @@ def _element_text(element: Any) -> str:
 
 
 def _find_action(page: Any, pattern: str, *, include_disabled: bool = False) -> Any:
-    regex = re.compile(pattern, re.I)
-    selector = 'button, a, [role="button"], [role="link"], input[type="button"], input[type="submit"]'
-    for element in _visible_elements(page, selector):
-        try:
-            disabled = (
-                bool(element.get_attribute("disabled"))
-                or element.get_attribute("aria-disabled") == "true"
-            )
-            if disabled and not include_disabled:
-                continue
-            if regex.search(_element_text(element)):
-                return element
-        except Exception:
-            continue
-    return None
+    return find_action(page, pattern, include_disabled=include_disabled)
 
 
 def _verification_target(page: Any) -> tuple[str, Any] | None:
@@ -308,7 +273,7 @@ def _verification_submission_pending(page: Any) -> bool:
     """Return True while the verification form visibly reports processing."""
     action = _find_action(
         page,
-        r"verify|confirm|submit|continue|确认|验证|继续|verifying|loading|处理中",
+        action_pattern("verify", r"verifying|loading|processing|处理中"),
         include_disabled=True,
     )
     if not action:
@@ -609,7 +574,10 @@ def _submit_for_element(page: Any, element: Any, pattern: str) -> bool:
 
 def _profile_submit_button(page: Any) -> Any:
     direct = _first_visible(page, ['button[type="submit"]', 'input[type="submit"]'])
-    return direct or _find_action(page, r"完成|创建|create|continue|finish|done|agree")
+    return direct or _find_action(
+        page,
+        action_pattern("signup_submit", action_pattern("continue"), r"finish|done|agree"),
+    )
 
 
 def _action_clickable(element: Any) -> bool:

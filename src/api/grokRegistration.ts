@@ -17,6 +17,7 @@ export interface GrokConfig {
   mail_prefix: string;
   mail_expiry_ms: number;
   hotmail_local_base_url: string;
+  hotmail_account_source: 'mail_management' | 'manual';
   proxy: string;
   proxy_strategy: 'round_robin' | 'random' | 'sticky';
   import_concurrency: number;
@@ -42,6 +43,11 @@ export interface GrokBatch {
   status?: string;
   message?: string;
   count?: number;
+  finished?: number;
+  ok_count?: number;
+  fail_count?: number;
+  running?: number;
+  paused?: number;
   success?: number;
   failed?: number;
   created_at?: number;
@@ -152,12 +158,16 @@ export const grokRegistrationApi = {
       sub2api_api_key: config.sub2api_api_key,
     }),
   }),
-  hotmailAccounts: () => request<Record<string, any>>('/api/grok/mail/hotmail/accounts'),
+  hotmailAccounts: (source: GrokConfig['hotmail_account_source'] = 'mail_management') => request<Record<string, any>>(`/api/grok/mail/hotmail/accounts?source=${encodeURIComponent(source)}`),
   importHotmail: (text: string, baseUrl: string) => request<Record<string, any>>('/api/grok/mail/hotmail/accounts/import', { method: 'POST', body: JSON.stringify({ text, base_url: baseUrl }) }),
-  probeHotmail: (baseUrl: string) => request<Record<string, any>>('/api/grok/mail/hotmail/accounts/probe', { method: 'POST', body: JSON.stringify({ base_url: baseUrl }) }),
+  probeHotmail: (baseUrl: string, source: GrokConfig['hotmail_account_source']) => request<Record<string, any>>('/api/grok/mail/hotmail/accounts/probe', { method: 'POST', body: JSON.stringify({ base_url: baseUrl, source }) }),
   probeHotmailOne: (id: string, baseUrl: string) => request<Record<string, any>>(`/api/grok/mail/hotmail/accounts/${encodeURIComponent(id)}/probe`, { method: 'POST', body: JSON.stringify({ base_url: baseUrl }) }),
   updateHotmail: (id: string, payload: { used?: boolean; preferred_for_next_use?: boolean }) => request<Record<string, any>>(`/api/grok/mail/hotmail/accounts/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  restoreHotmailUses: (id: string, count: number) => request<Record<string, any>>(`/api/grok/mail/hotmail/accounts/${encodeURIComponent(id)}/restore-uses`, { method: 'POST', body: JSON.stringify({ count }) }),
   deleteHotmail: (id: string) => request<Record<string, any>>(`/api/grok/mail/hotmail/accounts/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  deleteHotmailSelected: (ids: string[]) => request<Record<string, any>>('/api/grok/mail/hotmail/accounts', { method: 'DELETE', body: JSON.stringify({ ids }) }),
+  deleteHotmailUsed: () => request<Record<string, any>>('/api/grok/mail/hotmail/accounts/used', { method: 'DELETE' }),
+  deleteHotmailUnhealthy: () => request<Record<string, any>>('/api/grok/mail/hotmail/accounts/unhealthy', { method: 'DELETE' }),
   testHotmail: (config: GrokConfig) => request<Record<string, any>>('/api/grok/mail/hotmail/test', { method: 'POST', body: JSON.stringify(config) }),
   rotation: (params: { status?: string; keyword?: string; page?: number; pageSize?: number }) => {
     const query = new URLSearchParams({

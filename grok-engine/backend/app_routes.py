@@ -69,10 +69,10 @@ def mail_provider_presets(ctx, response):
     }
 
 
-def hotmail_accounts(ctx):
+def hotmail_accounts(ctx, source="mail_management"):
     from hotmail_local import list_accounts
 
-    return list_accounts()
+    return list_accounts(source)
 
 
 def hotmail_import(ctx, request):
@@ -94,8 +94,8 @@ def hotmail_probe_all(ctx, request):
     base_url = request.base_url.strip() or str(
         ctx.load_config().get("hotmail_local_base_url") or ""
     )
-    result = probe_accounts(base_url)
-    result["pool"] = list_accounts()
+    result = probe_accounts(base_url, account_source=request.source)
+    result["pool"] = list_accounts(request.source)
     return result
 
 
@@ -134,6 +134,25 @@ def hotmail_set_status(ctx, account_id, request):
     except RuntimeError as exc:
         raise ctx.HTTPException(status_code=409, detail=str(exc)) from exc
     return {"ok": True, "pool": list_accounts()}
+
+
+def hotmail_restore_uses(ctx, account_id, request):
+    from hotmail_local import list_accounts, restore_uses
+
+    try:
+        restored = restore_uses(account_id, request.count)
+        if restored is None:
+            raise ctx.HTTPException(status_code=404, detail="邮箱账号不存在")
+    except RuntimeError as exc:
+        raise ctx.HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"ok": True, "restored": restored, "pool": list_accounts()}
+
+
+def hotmail_delete_selected(ctx, request):
+    from hotmail_local import delete_accounts, list_accounts
+
+    result = delete_accounts(request.ids)
+    return {"ok": True, **result, "pool": list_accounts()}
 
 
 def hotmail_delete_used(ctx):
@@ -175,6 +194,12 @@ def put_config(ctx, settings):
     return {"ok": True, "config": ctx.save_config(settings.model_dump())}
 
 
+def _effective_registration_concurrency(cfg: dict[str, Any], target: str) -> int:
+    """Keep the operator's requested concurrency in visible and headless modes."""
+    del target  # Reserved for provider-specific caps if a provider needs one later.
+    return max(1, int(cfg.get("concurrency") or 1))
+
+
 def start_register(ctx, settings=None, paused=False):
     cfg = settings.model_dump() if settings else ctx.load_config()
     requested_target = str(cfg.get("registration_target") or "grok").strip().lower()
@@ -194,7 +219,7 @@ def start_register(ctx, settings=None, paused=False):
     if cfg.get("mail_provider") == "hotmail_local":
         from hotmail_local import list_accounts
 
-        pool = list_accounts()
+        pool = list_accounts(cfg.get("hotmail_account_source"))
         available = int(pool.get("available") or 0)
         if available < 1:
             raise ctx.HTTPException(
@@ -206,7 +231,7 @@ def start_register(ctx, settings=None, paused=False):
         cfg["count"] = min(requested_count, available)
     elif int(cfg.get("count") or 0) < 1:
         raise ctx.HTTPException(status_code=400, detail="注册数量必须大于 0")
-    cfg["concurrency"] = max(1, int(cfg.get("concurrency") or 1))
+    cfg["concurrency"] = _effective_registration_concurrency(cfg, target)
     if settings is not None:
         persisted = ctx.load_config()
         persisted["count"] = cfg["count"]
@@ -239,6 +264,7 @@ def start_register(ctx, settings=None, paused=False):
         "expiry_ms": cfg["mail_expiry_ms"],
         "mail_provider": cfg["mail_provider"],
         "hotmail_local_base_url": cfg["hotmail_local_base_url"],
+        "hotmail_account_source": cfg["hotmail_account_source"],
         "count": cfg["count"],
         "concurrency": cfg["concurrency"],
         "stagger_ms": 0 if target == "chatgpt" else cfg["stagger_ms"],

@@ -5,8 +5,24 @@ from __future__ import annotations
 import re
 import secrets
 import time
+from collections.abc import Sequence
 from typing import Any, Callable
 from urllib.parse import parse_qs, urlparse
+
+from browser_geo import resolve_browser_geo_profile
+from browser_registration_common import (
+    CURRENT_PASSWORD_INPUT_SELECTORS,
+    EMAIL_INPUT_SELECTORS,
+    FIRST_NAME_INPUT_SELECTORS,
+    FULL_NAME_INPUT_SELECTORS,
+    LAST_NAME_INPUT_SELECTORS,
+    NEW_PASSWORD_INPUT_SELECTORS,
+    ONE_TIME_CODE_INPUT_SELECTORS,
+    action_pattern,
+    action_text_matches,
+    find_action,
+    first_visible,
+)
 
 
 XAI_SIGNUP_URL = "https://accounts.x.ai/sign-up?redirect=grok-com"
@@ -106,6 +122,7 @@ class XaiBrowserRuntime:
         self.using_camoufox = False
         self.headless = True
         self.proxy_key = ""
+        self.geo_profile: dict[str, Any] = {}
 
     @staticmethod
     def _key(proxy: dict[str, str] | None) -> str:
@@ -137,6 +154,7 @@ class XaiBrowserRuntime:
         _ensure_camoufox()
         self.headless = headless
         self.proxy_key = key
+        self.geo_profile = resolve_browser_geo_profile(proxy)
         width, height = 800, 560
         try:
             from camoufox.sync_api import Camoufox
@@ -175,6 +193,7 @@ class XaiBrowserRuntime:
         self.camoufox_manager = None
         self.using_camoufox = False
         self.proxy_key = ""
+        self.geo_profile = {}
 
 
 class XaiVisibleRegistration:
@@ -286,17 +305,47 @@ class XaiVisibleRegistration:
         )
         if reused:
             self._progress("init", "reused_browser")
+        geo_profile = dict(self.runtime.geo_profile or {})
+        if geo_profile.get("resolved"):
+            self._progress(
+                "init",
+                "regional_profile_applied",
+                ip=geo_profile.get("ip"),
+                country=geo_profile.get("country_code"),
+                locale=geo_profile.get("locale"),
+                timezone=geo_profile.get("timezone"),
+            )
+        else:
+            self._progress(
+                "init",
+                "regional_profile_fallback",
+                locale=geo_profile.get("locale"),
+                timezone=geo_profile.get("timezone"),
+            )
         context_kwargs: dict[str, Any]
         if self.using_camoufox:
-            context_kwargs = {"no_viewport": True}
+            # Applying Camoufox's locale/geolocation config at browser launch
+            # can make Firefox/Juggler spend ~30 seconds initializing every
+            # private context and occasionally never return from new_page().
+            # Playwright context emulation keeps language/timezone aligned with
+            # the proxy while leaving the Camoufox process startup stable.
+            context_kwargs = {
+                "no_viewport": True,
+                "locale": str(geo_profile.get("locale") or "en-US"),
+                "timezone_id": str(
+                    geo_profile.get("timezone") or "America/New_York"
+                ),
+            }
         else:
             context_kwargs = {
                 "viewport": {
                     "width": 760 if not self.headless else 1280,
                     "height": 480 if not self.headless else 800,
                 },
-                "locale": "en-US",
-                "timezone_id": "America/New_York",
+                "locale": str(geo_profile.get("locale") or "en-US"),
+                "timezone_id": str(
+                    geo_profile.get("timezone") or "America/New_York"
+                ),
             }
             if self.proxy and self.proxy.get("server"):
                 context_kwargs["proxy"] = self.proxy
@@ -325,19 +374,8 @@ class XaiVisibleRegistration:
             self.close()
             raise XaiBrowserError(f"xAI 浏览器启动失败：{exc}") from exc
 
-    def _first_visible(self, selectors: list[str]) -> Any | None:
-        if self.page is None:
-            return None
-        for selector in selectors:
-            try:
-                locator = self.page.locator(selector)
-                for index in range(min(10, int(locator.count()))):
-                    candidate = locator.nth(index)
-                    if candidate.is_visible():
-                        return candidate
-            except Exception:
-                continue
-        return None
+    def _first_visible(self, selectors: Sequence[str]) -> Any | None:
+        return first_visible(self.page, selectors, limit=10)
 
     def _fill_first(self, selectors: list[str], value: str) -> Any | None:
         target = self._first_visible(selectors)
@@ -368,16 +406,9 @@ class XaiVisibleRegistration:
     ) -> Any | None:
         if self.page is None:
             return None
-        regex = re.compile(pattern, re.I)
-        for role in ("button", "link"):
-            try:
-                locator = self.page.get_by_role(role, name=regex)
-                for index in range(min(10, int(locator.count()))):
-                    candidate = locator.nth(index)
-                    if candidate.is_visible() and candidate.is_enabled():
-                        return candidate
-            except Exception:
-                continue
+        candidate = find_action(self.page, pattern, limit=20)
+        if candidate is not None:
+            return candidate
         if not allow_submit_fallback:
             return None
         try:
@@ -408,22 +439,16 @@ class XaiVisibleRegistration:
     ) -> bool:
         """Confirm the email form rendered after choosing email signup."""
         deadline = min(self.deadline, time.time() + max(0.1, timeout_sec))
-        selectors = [
-            'input[type="email"]',
-            'input[name="email"]',
-            'input[autocomplete="email"]',
-            'input[placeholder*="email" i]',
-        ]
         while time.time() < deadline:
             self._check_cancel()
-            if self._first_visible(selectors) is not None:
+            if self._first_visible(EMAIL_INPUT_SELECTORS) is not None:
                 return True
             self._wait(200)
         return False
 
     def _select_email_signup(self) -> None:
         """Choose email signup and require the email form to actually appear."""
-        pattern = r"^sign up with email$|使用邮箱.*注册|邮箱注册"
+        pattern = action_pattern("email_signup")
         per_attempt_timeout = max(
             1.0, SIGNUP_FORM_TIMEOUT_SEC / ACTION_TRANSITION_MAX_ATTEMPTS
         )
@@ -499,13 +524,7 @@ class XaiVisibleRegistration:
         # names can include "code". It is not the email-code page until the
         # visible password field has disappeared.
         if (
-            self._first_visible(
-                [
-                    'input[type="password"]',
-                    'input[name*="password" i]',
-                    'input[autocomplete="new-password"]',
-                ]
-            )
+            self._first_visible(NEW_PASSWORD_INPUT_SELECTORS)
             is not None
         ):
             return None
@@ -520,14 +539,7 @@ class XaiVisibleRegistration:
                 return "split", visible
         except Exception:
             pass
-        target = self._first_visible(
-            [
-                'input[name*="code" i]',
-                'input[autocomplete="one-time-code"]',
-                'input[inputmode="numeric"]',
-                'input[maxlength="6"]',
-            ]
-        )
+        target = self._first_visible(ONE_TIME_CODE_INPUT_SELECTORS)
         return ("single", target) if target is not None else None
 
     def _turnstile_status(self) -> str:
@@ -839,17 +851,12 @@ class XaiVisibleRegistration:
     def _signup_form_present(self) -> bool:
         return (
             self._first_visible(
-                [
-                    'input[type="password"]',
-                    'input[name*="password" i]',
-                    'input[autocomplete="new-password"]',
-                    'input[name*="first" i]',
-                    'input[name*="given" i]',
-                    'input[name*="last" i]',
-                    'input[name*="family" i]',
-                    'input[name="name"]',
-                    'input[name*="fullName" i]',
-                ]
+                (
+                    *NEW_PASSWORD_INPUT_SELECTORS,
+                    *FIRST_NAME_INPUT_SELECTORS,
+                    *LAST_NAME_INPUT_SELECTORS,
+                    *FULL_NAME_INPUT_SELECTORS,
+                )
             )
             is not None
         )
@@ -1115,6 +1122,7 @@ class XaiVisibleRegistration:
         first_name_value, last_name_value = self._generate_profile()
         self._progress("profile", "generated")
         sso_seen_at: float | None = None
+        signup_entry_wait_started = time.time()
         while True:
             self._check_cancel()
             sso, cookies = self._extract_sso()
@@ -1141,10 +1149,14 @@ class XaiVisibleRegistration:
                 continue
             self._raise_page_error(email)
 
-            if "signup_method" not in acted and re.search(
-                r"sign up with email|使用邮箱.*注册|邮箱注册",
-                self._page_text(),
-                re.I,
+            page_text = self._page_text()
+            if "signup_method" not in acted and (
+                action_text_matches("email_signup", page_text)
+                or self._find_action(
+                    action_pattern("email_signup"),
+                    allow_submit_fallback=False,
+                )
+                is not None
             ):
                 self._progress("signup_method", "selecting_email")
                 self._select_email_signup()
@@ -1178,9 +1190,7 @@ class XaiVisibleRegistration:
                         target.fill(value)
                         anchor = target
                     self._progress(stage, "code_filled")
-                    submit_pattern = (
-                        "verify|confirm|continue|submit|验证|确认|继续"
-                    )
+                    submit_pattern = action_pattern("verify")
                     self._submit(anchor, submit_pattern)
                     self._progress(stage, "submitted", attempt=1)
                     self._wait_for_verification_transition(
@@ -1195,9 +1205,7 @@ class XaiVisibleRegistration:
                     r"invalid|incorrect|expired|验证码.*(?:错误|过期)", text, re.I
                 ):
                     self._progress(stage, "retrying")
-                    resend = self._click_action(
-                        "resend|send.*again|new code|try again|重新发送|重发"
-                    )
+                    resend = self._click_action(action_pattern("resend_code"))
                     if not resend:
                         raise XaiBrowserError(f"xAI 验证码提交失败：{text[:240]}")
                     try:
@@ -1211,37 +1219,17 @@ class XaiVisibleRegistration:
                     self._settle_page()
                     continue
 
-            email_input = self._first_visible(
-                [
-                    'input[type="email"]',
-                    'input[name="email"]',
-                    'input[autocomplete="email"]',
-                    'input[placeholder*="email" i]',
-                ]
-            )
-            password_input = self._first_visible(
-                [
-                    'input[type="password"]',
-                    'input[name*="password" i]',
-                    'input[autocomplete="new-password"]',
-                ]
-            )
-            first_name = self._first_visible(
-                ['input[name*="first" i]', 'input[name*="given" i]']
-            )
-            last_name = self._first_visible(
-                ['input[name*="last" i]', 'input[name*="family" i]']
-            )
+            email_input = self._first_visible(EMAIL_INPUT_SELECTORS)
+            password_input = self._first_visible(NEW_PASSWORD_INPUT_SELECTORS)
+            first_name = self._first_visible(FIRST_NAME_INPUT_SELECTORS)
+            last_name = self._first_visible(LAST_NAME_INPUT_SELECTORS)
+            # Some locales/experiments open the email form directly and do not
+            # render a separate "sign up with email" chooser.
+            if email_input is not None:
+                acted.add("signup_method")
             full_name = None
             if first_name is None and last_name is None:
-                full_name = self._first_visible(
-                    [
-                        'input[name="name"]',
-                        'input[name*="fullName" i]',
-                        'input[name*="displayName" i]',
-                        'input[autocomplete="name"]',
-                    ]
-                )
+                full_name = self._first_visible(FULL_NAME_INPUT_SELECTORS)
 
             stage_parts: list[str] = []
             anchor = None
@@ -1292,9 +1280,8 @@ class XaiVisibleRegistration:
                             break
                         if attempt == 1:
                             raise XaiBrowserError("xAI 页面反复重绘并清空密码输入框")
-                submit_pattern = (
-                    "complete sign up|continue|next|sign up|create account|submit|"
-                    "继续|下一步|创建"
+                submit_pattern = action_pattern(
+                    "signup_submit", action_pattern("continue")
                 )
                 self._submit(
                     anchor,
@@ -1310,6 +1297,16 @@ class XaiVisibleRegistration:
             if str(self.page.url or "").startswith(XAI_GROK_URL):
                 self._wait(1_000)
                 continue
+            if (
+                "signup_method" not in acted
+                and time.time() - signup_entry_wait_started >= 20.0
+            ):
+                locale = str(self.runtime.geo_profile.get("locale") or "unknown")
+                summary = " ".join(page_text.split())[:240]
+                raise XaiBrowserError(
+                    "xAI 注册首页未识别到邮箱注册入口"
+                    f"（页面语言={locale}，页面内容={summary or '空'}）"
+                )
             self._wait(250)
 
     def login_for_pkce(self, email: str, password: str) -> None:
@@ -1360,31 +1357,14 @@ class XaiVisibleRegistration:
                 email_method_selected = False
                 continue
 
-            email_input = self._first_visible(
-                [
-                    'input[type="email"]',
-                    'input[name="email"]',
-                    'input[autocomplete="email"]',
-                    'input[placeholder*="email" i]',
-                ]
-            )
-            password_input = self._first_visible(
-                [
-                    'input[type="password"]',
-                    'input[name*="password" i]',
-                    'input[autocomplete="current-password"]',
-                ]
-            )
+            email_input = self._first_visible(EMAIL_INPUT_SELECTORS)
+            password_input = self._first_visible(CURRENT_PASSWORD_INPUT_SELECTORS)
             if email_input is None and password_input is None:
-                if not email_method_selected and re.search(
-                    r"sign in with email|log\s*in with email|login with email|"
-                    r"使用邮箱.*登录|邮箱登录",
-                    text,
-                    re.I,
+                if not email_method_selected and action_text_matches(
+                    "email_signin", text
                 ):
                     if self._click_action(
-                        r"^sign in with email$|^log\s*in with email$|"
-                        r"^login with email$|使用邮箱.*登录|邮箱登录",
+                        action_pattern("email_signin"),
                         allow_submit_fallback=False,
                     ):
                         email_method_selected = True
@@ -1422,7 +1402,7 @@ class XaiVisibleRegistration:
             attempts += 1
             self._submit(
                 anchor,
-                r"sign in|log\s*in|login|continue|next|submit|登录|继续|下一步",
+                action_pattern("signin_submit", action_pattern("continue")),
             )
             last_submit_at = time.time()
             self._progress("local_oauth", "login_submitted", attempt=attempts)
@@ -1526,34 +1506,66 @@ class XaiVisibleRegistration:
             return None
         if parsed.hostname != "accounts.x.ai" or parsed.path != "/oauth2/consent":
             return None
-        if not re.search(
-            r"enter this code to finish signing in|copy the code below|"
-            r"automatically detect a successful completion",
-            str(page_text or ""),
-            re.I,
-        ):
-            return None
         state = str((values.get("state") or [""])[0]).strip()
         if expected_state and state and state != expected_state:
             raise XaiBrowserError("xAI OAuth 授权码页面 state 不匹配")
+        # This page is localized according to the proxy exit. Japanese and
+        # other translations do not contain the former English-only phrases,
+        # even though they expose the same out-of-band authorization code.
+        token_pattern = re.compile(
+            r"(?<![A-Za-z0-9._~-])([A-Za-z0-9._~-]{32,512})(?![A-Za-z0-9._~-])"
+        )
+
+        def find_token(*raw_values: object) -> str | None:
+            for raw_value in raw_values:
+                value = str(raw_value or "").strip()
+                if not value:
+                    continue
+                exact = re.fullmatch(r"[A-Za-z0-9._~-]{32,512}", value)
+                if exact:
+                    return exact.group(0)
+                match = token_pattern.search(value)
+                if match:
+                    return match.group(1)
+            return None
+
         try:
-            candidates = self.page.locator("input, textarea, code")
-            for index in range(min(20, int(candidates.count()))):
+            candidates = self.page.locator(
+                'input, textarea, code, pre, [role="textbox"], '
+                '[data-testid*="code" i], [data-code], [data-value]'
+            )
+            for index in range(min(40, int(candidates.count()))):
                 candidate = candidates.nth(index)
                 if not candidate.is_visible():
                     continue
+                raw_values: list[object] = []
                 try:
-                    value = str(candidate.input_value(timeout=500) or "").strip()
+                    raw_values.append(candidate.input_value(timeout=500))
                 except Exception:
+                    pass
+                for attribute in ("value", "data-code", "data-value"):
                     try:
-                        value = str(candidate.inner_text(timeout=500) or "").strip()
+                        raw_values.append(candidate.get_attribute(attribute))
                     except Exception:
-                        continue
-                if re.fullmatch(r"[A-Za-z0-9._~-]{32,512}", value):
-                    return value
+                        pass
+                try:
+                    raw_values.append(candidate.inner_text(timeout=500))
+                except Exception:
+                    pass
+                try:
+                    raw_values.append(candidate.text_content(timeout=500))
+                except Exception:
+                    pass
+                token = find_token(*raw_values)
+                if token:
+                    return token
         except Exception:
-            return None
-        return None
+            pass
+
+        # Some xAI builds render the value in an ordinary div. On the exact
+        # accounts.x.ai consent route, a strict ASCII-token body fallback is
+        # both language-independent and avoids matching localized prose.
+        return find_token(page_text)
 
     def authorize_pkce(self, auth_url: str, expected_state: str) -> str:
         """Authorize a PKCE request and return its callback URL or code."""
@@ -1577,6 +1589,7 @@ class XaiVisibleRegistration:
                 return callback
         self._settle_page()
         clicked_signatures: dict[str, tuple[int, float]] = {}
+        oauth_challenge_seen = False
         deadline = min(self.deadline, time.time() + 120.0)
         while time.time() < deadline:
             self._check_cancel()
@@ -1598,9 +1611,18 @@ class XaiVisibleRegistration:
                 re.I,
             ):
                 raise XaiOAuthAccessDenied(f"xAI OAuth 授权失败：{text[:240]}")
-            action = self._find_action(
-                r"allow|authorize|approve|accept|confirm|continue|grant|允许|授权|同意|确认|继续"
-            )
+            turnstile_status = self._turnstile_status()
+            if turnstile_status != "absent":
+                if not oauth_challenge_seen:
+                    oauth_challenge_seen = True
+                    self._progress(
+                        "human_verification",
+                        "detected",
+                        phase="oauth",
+                    )
+                self._wait_for_turnstile()
+                continue
+            action = self._find_action(action_pattern("oauth_approve"))
             if action is not None:
                 signature = f"{current_url}|{text[:160]}"
                 attempts, last_clicked_at = clicked_signatures.get(

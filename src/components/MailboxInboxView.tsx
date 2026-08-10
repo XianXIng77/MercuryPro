@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { getMicrosoftMessage, listMicrosoftMessages, mapMicrosoftMessage } from '../api/microsoftMail';
 import { Email, MailAccount, StylePreset } from '../types';
+import { StyledSelect } from './StyledSelect';
 
 interface MailboxInboxViewProps {
   account: MailAccount;
@@ -102,12 +103,10 @@ export const MailboxInboxView: React.FC<MailboxInboxViewProps> = ({
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <label className={`flex items-center gap-2 text-xs ${theme.textSecondary}`}>
-            显示
-            <select value={top} onChange={(event) => setTop(Number(event.target.value))} className={`px-2.5 py-1.5 rounded-lg border ${theme.cardBg} ${theme.border} ${theme.textPrimary}`}>
-              {[10, 20, 50].map((value) => <option key={value} value={value}>{value} 封</option>)}
-            </select>
-          </label>
+          <div className={`flex items-center gap-2 text-xs ${theme.textSecondary}`}>
+            <span>显示</span>
+            <div className="w-24"><StyledSelect ariaLabel="显示邮件数量" value={String(top)} onChange={(value) => setTop(Number(value))} options={[10, 20, 50].map((value) => ({ value: String(value), label: `${value} 封` }))} isDark={isDark} className="py-1.5" /></div>
+          </div>
           <button onClick={() => void loadMessages()} disabled={loading} className="px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs flex items-center gap-1.5 disabled:opacity-60">
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />刷新邮件
           </button>

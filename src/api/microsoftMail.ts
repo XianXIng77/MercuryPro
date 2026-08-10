@@ -9,6 +9,8 @@ export interface MicrosoftMailAccountDto {
   scope?: string;
   grantType?: string;
   status?: string;
+  registrationUseCount?: number;
+  registrationUseLimit?: number;
   createTime?: string;
   updateTime?: string;
 }
@@ -72,6 +74,10 @@ function queryString<T extends object>(params: T) {
 
 export function mapAccount(dto: MicrosoftMailAccountDto): MailAccount {
   const email = dto.email || '';
+  const useLimit = Math.max(1, Number(dto.registrationUseLimit || 3));
+  const fallbackCount = dto.status === '1' ? useLimit : 0;
+  const useCount = Math.max(0, Math.min(useLimit, Number(dto.registrationUseCount ?? fallbackCount)));
+  const backendStatus = useCount >= useLimit ? '1' : useCount > 0 ? '2' : '0';
   return {
     id: String(dto.accountId),
     accountId: dto.accountId,
@@ -82,8 +88,10 @@ export function mapAccount(dto: MicrosoftMailAccountDto): MailAccount {
     accessToken: dto.accessToken,
     scope: dto.scope,
     grantType: dto.grantType,
-    backendStatus: dto.status || '0',
-    usageStatus: dto.status === '1' ? '已用' : '未用',
+    backendStatus,
+    usageStatus: backendStatus === '1' ? '已用' : backendStatus === '2' ? '使用中' : '未用',
+    registrationUseCount: useCount,
+    registrationUseLimit: useLimit,
     createdTime: dto.createTime || '',
     refreshResult: '未刷新',
     protocol: 'Exchange',
@@ -116,6 +124,14 @@ export async function deleteMicrosoftMailAccount(accountId: number | string) {
   return request<ApiResponse<unknown>>(`/accounts/${encodeURIComponent(String(accountId))}`, {
     method: 'DELETE',
   });
+}
+
+export async function deleteMicrosoftMailAccounts(accountIds: Array<number | string>) {
+  const response = await request<ApiResponse<{ deleted?: number; missing?: number }>>('/accounts', {
+    method: 'DELETE',
+    body: JSON.stringify({ ids: accountIds }),
+  });
+  return response.data || {};
 }
 
 export async function importMicrosoftMailAccounts(file: File): Promise<ImportRecord[]> {

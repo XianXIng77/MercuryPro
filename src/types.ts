@@ -112,7 +112,9 @@ export interface MailAccount {
   scope?: string;
   grantType?: string;
   backendStatus?: string;
-  usageStatus: '未用' | '已用';
+  usageStatus: '未用' | '使用中' | '已用';
+  registrationUseCount?: number;
+  registrationUseLimit?: number;
   createdTime: string;
   refreshResult: '未刷新' | '刷新成功' | '刷新失败';
   messages: Email[];

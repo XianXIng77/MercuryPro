@@ -1,9 +1,8 @@
 # Local Turnstile Solver (subproject of grokcli-2api)
 quart>=0.19
-# Keep the shared user cache compatible with the main application.  A broad
-# range here upgrades the solver to 0.5+, which replaces the 0.4 cache layout
-# and removes the version.json required by the main registration browser.
-camoufox==0.4.11
+# Keep the solver and registration browser on the same launcher generation.
+# Camoufox browser v152 requires the 0.5 launcher/cache layout.
+camoufox==0.5.4
 patchright>=1.50
 rich>=13
 requests>=2.31

@@ -10,6 +10,7 @@ import {
   Wand2,
 } from 'lucide-react';
 import { Folder, Tag, StylePreset } from '../types';
+import { StyledSelect } from './StyledSelect';
 
 interface ComposeModalProps {
   isOpen: boolean;
@@ -44,6 +45,7 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({
   const [isAiWriting, setIsAiWriting] = useState(false);
 
   const theme = currentPreset.themeClasses;
+  const isDark = currentPreset.mode === 'dark';
 
   if (!isOpen) return null;
 
@@ -191,17 +193,14 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className={`block font-medium mb-1 ${theme.textSecondary}`}>发送备份存入文件夹</label>
-              <select
+              <StyledSelect
+                ariaLabel="发送备份存入文件夹"
                 value={selectedFolderId}
-                onChange={(e) => setSelectedFolderId(e.target.value)}
-                className={`w-full px-3 py-2 text-xs rounded-xl border ${theme.cardBg} ${theme.textPrimary} ${theme.border}`}
-              >
-                {folders.map((f) => (
-                  <option key={f.id} value={f.id}>
-                    {f.name}
-                  </option>
-                ))}
-              </select>
+                onChange={setSelectedFolderId}
+                options={folders.map((folder) => ({ value: folder.id, label: folder.name }))}
+                isDark={isDark}
+                disabled={!folders.length}
+              />
             </div>
 
             <div>

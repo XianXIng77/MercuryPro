@@ -31,6 +31,7 @@ def _prepare_registration_session(
     expiry_ms: int | None = None,
     mail_provider: str | None = None,
     hotmail_local_base_url: str | None = None,
+    hotmail_account_source: str | None = None,
     batch_id: str | None = None,
     batch_index: int | None = None,
     batch_total: int | None = None,
@@ -61,6 +62,7 @@ def _prepare_registration_session(
             expiry_ms=expiry_ms,
             mail_provider=mail_provider,
             hotmail_local_base_url=hotmail_local_base_url,
+            hotmail_account_source=hotmail_account_source,
             should_cancel=should_cancel,
         )
     except Exception as e:  # noqa: BLE001
@@ -123,6 +125,7 @@ def _start_one_registration(
     expiry_ms: int | None = None,
     mail_provider: str | None = None,
     hotmail_local_base_url: str | None = None,
+    hotmail_account_source: str | None = None,
     batch_id: str | None = None,
     batch_index: int | None = None,
     batch_total: int | None = None,
@@ -141,6 +144,7 @@ def _start_one_registration(
         expiry_ms=expiry_ms,
         mail_provider=mail_provider,
         hotmail_local_base_url=hotmail_local_base_url,
+        hotmail_account_source=hotmail_account_source,
         batch_id=batch_id,
         batch_index=batch_index,
         batch_total=batch_total,
@@ -213,6 +217,7 @@ def start_registration(
     expiry_ms: int | None = None,
     mail_provider: str | None = None,
     hotmail_local_base_url: str | None = None,
+    hotmail_account_source: str | None = None,
     count: int | None = None,
     concurrency: int | None = None,
     stagger_ms: int | None = None,
@@ -365,7 +370,7 @@ def start_registration(
     if requested_mail_provider == "hotmail_local":
         from hotmail_local import list_accounts
 
-        available = int(list_accounts().get("available") or 0)
+        available = int(list_accounts(hotmail_account_source).get("available") or 0)
         if available < n:
             return {
                 "ok": False,
@@ -398,6 +403,7 @@ def start_registration(
         stagger_ms=stagger,
         mail_provider=mail_prov,
         hotmail_local_base_url=hotmail_local_base_url,
+        hotmail_account_source=hotmail_account_source,
         post_registration=post_registration,
         auto_tune_enabled=auto_tune_enabled,
         headless=headless,
@@ -493,6 +499,7 @@ def start_registration(
         expiry_ms=expiry_ms,
         mail_provider=mail_prov,
         hotmail_local_base_url=hotmail_local_base_url,
+        hotmail_account_source=hotmail_account_source,
         post_registration=post_registration,
         auto_tune_enabled=auto_tune_enabled,
         headless=headless,

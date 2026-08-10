@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import re
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -40,6 +41,8 @@ ACCOUNTS_FILE = DATA_DIRECTORY / "microsoft-mail-accounts.json"
 
 _accounts_cache: list[dict[str, Any]] | None = None
 _accounts_lock = asyncio.Lock()
+_accounts_file_lock = threading.RLock()
+REGISTRATION_USE_LIMIT = 3
 
 
 class MailServiceError(RuntimeError):
@@ -71,27 +74,30 @@ def _error_response(error: Exception) -> JSONResponse:
 
 
 def _load_accounts_file() -> list[dict[str, Any]]:
-    DATA_DIRECTORY.mkdir(parents=True, exist_ok=True)
-    if not ACCOUNTS_FILE.exists():
-        ACCOUNTS_FILE.write_text("[]\n", encoding="utf-8")
-        return []
-    parsed = json.loads(ACCOUNTS_FILE.read_text(encoding="utf-8"))
-    return parsed if isinstance(parsed, list) else []
+    with _accounts_file_lock:
+        DATA_DIRECTORY.mkdir(parents=True, exist_ok=True)
+        if not ACCOUNTS_FILE.exists():
+            ACCOUNTS_FILE.write_text("[]\n", encoding="utf-8")
+            return []
+        parsed = json.loads(ACCOUNTS_FILE.read_text(encoding="utf-8"))
+        return parsed if isinstance(parsed, list) else []
 
 
 def _save_accounts_file(accounts: list[dict[str, Any]]) -> None:
-    DATA_DIRECTORY.mkdir(parents=True, exist_ok=True)
-    temporary = ACCOUNTS_FILE.with_suffix(f"{ACCOUNTS_FILE.suffix}.tmp")
-    temporary.write_text(
-        f"{json.dumps(accounts, ensure_ascii=False, indent=2)}\n", encoding="utf-8"
-    )
-    temporary.replace(ACCOUNTS_FILE)
+    with _accounts_file_lock:
+        DATA_DIRECTORY.mkdir(parents=True, exist_ok=True)
+        temporary = ACCOUNTS_FILE.with_suffix(f"{ACCOUNTS_FILE.suffix}.tmp")
+        temporary.write_text(
+            f"{json.dumps(accounts, ensure_ascii=False, indent=2)}\n", encoding="utf-8"
+        )
+        temporary.replace(ACCOUNTS_FILE)
 
 
 async def _accounts_unlocked() -> list[dict[str, Any]]:
     global _accounts_cache
-    if _accounts_cache is None:
-        _accounts_cache = await asyncio.to_thread(_load_accounts_file)
+    # Registration workers can update usage from background threads. Reloading
+    # keeps the mailbox page and those workers on one authoritative file.
+    _accounts_cache = await asyncio.to_thread(_load_accounts_file)
     return _accounts_cache
 
 
@@ -99,6 +105,51 @@ async def _save_unlocked(accounts: list[dict[str, Any]]) -> None:
     global _accounts_cache
     await asyncio.to_thread(_save_accounts_file, accounts)
     _accounts_cache = accounts
+
+
+def registration_accounts_snapshot() -> list[dict[str, Any]]:
+    """Return mailbox-management accounts that can be used for registration."""
+    return [
+        dict(item)
+        for item in _load_accounts_file()
+        if item.get("email") and item.get("clientId") and item.get("refreshToken")
+    ]
+
+
+def update_registration_usage_sync(
+    account_id: str | int,
+    *,
+    used_aliases: list[int] | None = None,
+    failed_aliases: list[int] | None = None,
+    refresh_token: str | None = None,
+) -> bool:
+    """Mirror registration slot usage into the mailbox-management record."""
+    global _accounts_cache
+    with _accounts_file_lock:
+        accounts = _load_accounts_file()
+        target = next(
+            (item for item in accounts if str(item.get("accountId")) == str(account_id)),
+            None,
+        )
+        if target is None:
+            return False
+        used = sorted({int(value) for value in (used_aliases or []) if 0 <= int(value) < REGISTRATION_USE_LIMIT})
+        failed = sorted(
+            {int(value) for value in (failed_aliases or []) if 0 <= int(value) < REGISTRATION_USE_LIMIT}
+            - set(used)
+        )
+        consumed = min(REGISTRATION_USE_LIMIT, len(set(used) | set(failed)))
+        target["registrationUsedAliases"] = used
+        target["registrationFailedAliases"] = failed
+        target["registrationUseCount"] = consumed
+        target["registrationUseLimit"] = REGISTRATION_USE_LIMIT
+        target["status"] = "1" if consumed >= REGISTRATION_USE_LIMIT else ("2" if consumed else "0")
+        target["updateTime"] = _now_text()
+        if refresh_token:
+            target["refreshToken"] = str(refresh_token)
+        _save_accounts_file(accounts)
+        _accounts_cache = accounts
+        return True
 
 
 def _find_account(
@@ -214,6 +265,12 @@ async def list_accounts(
     status: str = "",
 ) -> Any:
     try:
+        try:
+            from hotmail_local import sync_mail_management_accounts
+
+            await asyncio.to_thread(sync_mail_management_accounts)
+        except Exception:
+            pass
         async with _accounts_lock:
             accounts = list(await _accounts_unlocked())
         email_filter = email.strip().lower()
@@ -277,6 +334,10 @@ async def import_accounts(
                         "scope": record["scope"],
                         "grantType": record["grantType"],
                         "status": "0",
+                        "registrationUseCount": 0,
+                        "registrationUseLimit": REGISTRATION_USE_LIMIT,
+                        "registrationUsedAliases": [],
+                        "registrationFailedAliases": [],
                         "createTime": timestamp,
                         "updateTime": timestamp,
                     }
@@ -306,9 +367,62 @@ async def update_status(
             next_accounts = [dict(item) for item in accounts]
             for item in next_accounts:
                 if item.get("accountId") == account.get("accountId"):
-                    item.update({"status": status, "updateTime": _now_text()})
+                    aliases = list(range(REGISTRATION_USE_LIMIT)) if status == "1" else []
+                    item.update(
+                        {
+                            "status": status,
+                            "registrationUseCount": len(aliases),
+                            "registrationUseLimit": REGISTRATION_USE_LIMIT,
+                            "registrationUsedAliases": aliases,
+                            "registrationFailedAliases": [],
+                            "updateTime": _now_text(),
+                        }
+                    )
             await _save_unlocked(next_accounts)
+        # Keep the registration pool in sync when status is changed manually.
+        try:
+            from hotmail_local import set_mail_management_status
+
+            set_mail_management_status(account_id, status == "1")
+        except Exception:
+            pass
         return {"code": 200, "data": True}
+    except Exception as exc:
+        return _error_response(exc)
+
+
+@router.delete("/accounts")
+async def delete_accounts(
+    payload: dict[str, Any] = Body(default_factory=dict),
+) -> Any:
+    raw_ids = payload.get("ids") if isinstance(payload.get("ids"), list) else []
+    account_ids = {str(value) for value in raw_ids if str(value).strip()}
+    if not account_ids:
+        return JSONResponse(
+            status_code=400, content={"code": 400, "msg": "请至少选择一个邮箱账号"}
+        )
+    try:
+        async with _accounts_lock:
+            accounts = await _accounts_unlocked()
+            existing_ids = {
+                str(item.get("accountId"))
+                for item in accounts
+                if str(item.get("accountId")) in account_ids
+            }
+            await _save_unlocked(
+                [
+                    dict(item)
+                    for item in accounts
+                    if str(item.get("accountId")) not in account_ids
+                ]
+            )
+        return {
+            "code": 200,
+            "data": {
+                "deleted": len(existing_ids),
+                "missing": len(account_ids - existing_ids),
+            },
+        }
     except Exception as exc:
         return _error_response(exc)
 

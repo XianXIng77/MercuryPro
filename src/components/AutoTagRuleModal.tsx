@@ -14,6 +14,14 @@ import {
   Play,
 } from 'lucide-react';
 import { AutoTagRule, Folder, Tag, StylePreset } from '../types';
+import { StyledSelect, StyledSelectOption } from './StyledSelect';
+
+const CONDITION_TYPE_OPTIONS: StyledSelectOption[] = [
+  { value: 'subject_contains', label: '主题包含关键字' },
+  { value: 'sender_contains', label: '发件人包含关键词/域名' },
+  { value: 'body_contains', label: '正文包含关键字' },
+  { value: 'has_attachment', label: '带有任何文件附件' },
+];
 
 interface AutoTagRuleModalProps {
   isOpen: boolean;
@@ -50,6 +58,7 @@ export const AutoTagRuleModal: React.FC<AutoTagRuleModalProps> = ({
   const [markStarred, setMarkStarred] = useState(false);
 
   const theme = currentPreset.themeClasses;
+  const isDark = currentPreset.mode === 'dark';
 
   if (!isOpen) return null;
 
@@ -230,16 +239,13 @@ export const AutoTagRuleModal: React.FC<AutoTagRuleModalProps> = ({
 
             <div>
               <label className={`block font-medium mb-1 ${theme.textSecondary}`}>匹配条件触发点</label>
-              <select
+              <StyledSelect
+                ariaLabel="匹配条件触发点"
                 value={conditionType}
-                onChange={(e) => setConditionType(e.target.value as any)}
-                className={`w-full px-3 py-2 text-xs rounded-xl border ${theme.cardBg} ${theme.textPrimary} ${theme.border} focus:outline-none focus:ring-2 focus:ring-indigo-500/30`}
-              >
-                <option value="subject_contains">主题包含关键字</option>
-                <option value="sender_contains">发件人包含关键词/域名</option>
-                <option value="body_contains">正文包含关键字</option>
-                <option value="has_attachment">带有任何文件附件</option>
-              </select>
+                onChange={(value) => setConditionType(value as AutoTagRule['conditionType'])}
+                options={CONDITION_TYPE_OPTIONS}
+                isDark={isDark}
+              />
             </div>
 
             {conditionType !== 'has_attachment' && (
@@ -282,18 +288,13 @@ export const AutoTagRuleModal: React.FC<AutoTagRuleModalProps> = ({
 
             <div>
               <label className={`block font-medium mb-1 ${theme.textSecondary}`}>自动移动至文件夹 (可选)</label>
-              <select
+              <StyledSelect
+                ariaLabel="自动移动至文件夹"
                 value={targetFolderId}
-                onChange={(e) => setTargetFolderId(e.target.value)}
-                className={`w-full px-3 py-2 text-xs rounded-xl border ${theme.cardBg} ${theme.textPrimary} ${theme.border} focus:outline-none focus:ring-2 focus:ring-indigo-500/30`}
-              >
-                <option value="">不移动（保留原位置）</option>
-                {folders.map((f) => (
-                  <option key={f.id} value={f.id}>
-                    {f.name}
-                  </option>
-                ))}
-              </select>
+                onChange={setTargetFolderId}
+                options={[{ value: '', label: '不移动（保留原位置）' }, ...folders.map((folder) => ({ value: folder.id, label: folder.name }))]}
+                isDark={isDark}
+              />
             </div>
 
             <div className="flex items-center pt-5">

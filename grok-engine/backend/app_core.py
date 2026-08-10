@@ -42,6 +42,11 @@ def load_config(ctx):
             }
             else "custom"
         )
+        data["hotmail_account_source"] = (
+            "manual"
+            if str(data.get("hotmail_account_source") or "").strip().lower() == "manual"
+            else "mail_management"
+        )
         raw_profiles = data.get("mail_provider_configs")
         profiles = dict(raw_profiles) if isinstance(raw_profiles, dict) else {}
         if "mail_provider_configs" not in loaded:

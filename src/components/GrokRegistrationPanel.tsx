@@ -1,10 +1,7 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { AnimatePresence, motion } from 'motion/react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Check,
   CheckCircle2,
   Activity,
-  ChevronDown,
   CircleDot,
   FileText,
   Globe2,
@@ -30,6 +27,7 @@ import {
   grokRegistrationApi,
 } from '../api/grokRegistration';
 import { ConfirmDialog } from './ConfirmDialog';
+import { StyledSelect, StyledSelectOption } from './StyledSelect';
 
 type ConfigTab = 'registration' | 'mail' | 'proxy' | 'import' | 'rotation';
 
@@ -45,13 +43,14 @@ const DEFAULT_CONFIG: GrokConfig = {
   captcha_provider: 'local',
   local_solver_url: 'http://127.0.0.1:5072',
   yescaptcha_key: '',
-  mail_provider: 'custom',
+  mail_provider: 'hotmail_local',
   mail_base_url: '',
   mail_api_key: '',
   mail_domain: '',
   mail_prefix: '',
   mail_expiry_ms: 86400000,
   hotmail_local_base_url: 'http://127.0.0.1:17373',
+  hotmail_account_source: 'mail_management',
   proxy: '',
   proxy_strategy: 'round_robin',
   import_concurrency: 1,
@@ -71,6 +70,7 @@ const DEFAULT_CONFIG: GrokConfig = {
 };
 
 const FINISHED = new Set(['done', 'success', 'completed', 'partial', 'error', 'failed', 'cancelled', 'stopped']);
+const COMPLETED_BATCH = new Set(['done', 'success', 'completed', 'partial', 'error', 'failed']);
 const CONCURRENCY_WARNING_KEY = 'mercurypro_grok_concurrency_warning_ack';
 const EMPTY_ROTATION: RotationList = {
   items: [], total: 0, page: 1, page_size: 20, pages: 1,
@@ -96,10 +96,11 @@ function mergeConfig(value: Partial<GrokConfig>): GrokConfig {
     registration_target: 'grok',
     registration_mode: 'browser',
     mail_provider: value.mail_provider === 'hotmail_local' ? 'hotmail_local' : 'custom',
+    hotmail_account_source: value.hotmail_account_source === 'manual' ? 'manual' : 'mail_management',
   };
 }
 
-type FlowState = 'pending' | 'running' | 'done' | 'failed';
+type FlowState = 'pending' | 'running' | 'paused' | 'done' | 'failed';
 type LogTone = 'info' | 'success' | 'warning' | 'error';
 
 const REGISTRATION_FLOW: Array<{ key: string; label: string; pattern: RegExp }> = [
@@ -133,6 +134,7 @@ interface HotmailAccount {
   use_count?: number;
   use_limit?: number;
   remaining_uses?: number;
+  failed_aliases?: number[];
   next_alias_email?: string;
   failed?: boolean;
   failure_reason?: string;
@@ -148,6 +150,9 @@ interface HotmailAccount {
 type PendingConfirmation =
   | { kind: 'reset-monitor' }
   | { kind: 'delete-hotmail'; account: HotmailAccount }
+  | { kind: 'delete-hotmail-selected'; ids: string[] }
+  | { kind: 'delete-hotmail-used' }
+  | { kind: 'delete-hotmail-unhealthy' }
   | { kind: 'delete-rotation'; ids: string[] };
 
 interface HotmailPool {
@@ -171,6 +176,110 @@ interface RegistrationLog {
   source: string;
   step: number;
   tone: LogTone;
+  requiresVisibleBrowser?: boolean;
+}
+
+function requiresVisibleBrowserAction(rawMessage?: string, translatedMessage?: string): boolean {
+  const text = `${rawMessage || ''} ${translatedMessage || ''}`;
+  return /manual_click_required|waiting_for_manual_action|人机验证未自动通过|等待手工完成人机验证超时|等待 xAI OAuth 回调或授权码超时/i.test(text);
+}
+
+interface ProxyCheckItem {
+  index?: number;
+  ok?: boolean;
+  ip?: string;
+  country_code?: string;
+  country?: string;
+  region?: string;
+  city?: string;
+  latency_ms?: number;
+  error?: string;
+}
+
+interface ProxyResultView {
+  tone: 'success' | 'warning' | 'error' | 'info';
+  summary: string;
+  detail?: string;
+  items: Array<{
+    index: number;
+    ok: boolean;
+    countryCode?: string;
+    country?: string;
+    ip?: string;
+    location?: string;
+    latency?: string;
+    error?: string;
+  }>;
+}
+
+function proxyWithCredentials(proxy: string, username?: string, password?: string): string {
+  if (!username) return proxy;
+  try {
+    const parsed = new URL(proxy);
+    parsed.username = username;
+    parsed.password = password || '';
+    return parsed.toString().replace(/\/$/, '');
+  } catch {
+    return proxy;
+  }
+}
+
+function proxyCountryName(countryCode?: string, fallback?: string): string {
+  const code = String(countryCode || '').trim().toUpperCase();
+  if (!code) return String(fallback || '未知');
+  try {
+    return new Intl.DisplayNames(['zh-CN'], { type: 'region' }).of(code) || String(fallback || code);
+  } catch {
+    return String(fallback || code);
+  }
+}
+
+function formatProxyCheckResult(result: Record<string, any>, title = '代理检测完成'): ProxyResultView {
+  const items: ProxyCheckItem[] = Array.isArray(result.items)
+    ? result.items
+    : Array.isArray(result.results)
+      ? result.results
+      : [];
+  const total = Number(result.total ?? items.length);
+  const healthy = Number(result.healthy ?? items.filter((item) => item.ok).length);
+  const failed = Number(result.failed ?? Math.max(0, total - healthy));
+  if (!items.length) {
+    return {
+      tone: 'error',
+      summary: `${title}：未取得出口信息`,
+      detail: `原因：${result.error || result.message || '没有可检测的代理'}`,
+      items: [],
+    };
+  }
+  const formattedItems = items.map((item, itemIndex) => {
+    const index = Number(item.index || itemIndex + 1);
+    if (!item.ok) {
+      return {
+        index,
+        ok: false,
+        ip: '未获取',
+        error: item.error || '连接失败',
+      };
+    }
+    const countryCode = String(item.country_code || '').trim().toUpperCase() || '未知';
+    const country = proxyCountryName(countryCode, item.country);
+    const location = [item.region, item.city].filter(Boolean).join(' / ') || '未知';
+    const latency = Number.isFinite(Number(item.latency_ms)) ? `${Number(item.latency_ms)} ms` : '未知';
+    return {
+      index,
+      ok: true,
+      countryCode,
+      country,
+      ip: item.ip || '未知',
+      location,
+      latency,
+    };
+  });
+  return {
+    tone: failed === 0 ? 'success' : healthy > 0 ? 'warning' : 'error',
+    summary: `${title}：共 ${total} 条，可用 ${healthy} 条，不可用 ${failed} 条`,
+    items: formattedItems,
+  };
 }
 
 function translateStructuredXaiMessage(text: string): string {
@@ -183,10 +292,13 @@ function translateStructuredXaiMessage(text: string): string {
   };
   const states: Record<string, string> = {
     starting: '开始执行', launched_camoufox: '已启动 Camoufox 浏览器', launched_chromium: '已启动 Chromium 浏览器',
+    regional_profile_applied: '已按代理出口匹配语言、地区与时区', regional_profile_fallback: '地区解析失败，已使用默认语言与时区',
     reused_browser: '正在复用当前并发窗口', private_context_created: '已创建全新隐私上下文', loading: '正在加载', ready: '页面已就绪',
     selecting_email: '正在选择邮箱注册', selected: '已选择邮箱注册', generated: '已随机生成', filling: '正在填写', filled: '填写完成',
     waiting_before_submit: '填写完成，等待提交', submitted: '已提交', detected: '已检测到验证组件', waiting: '正在等待',
-    manual: '等待人工处理', clicked: '已点击验证组件', passed: '已通过', passed_after_widget_success: '已通过', not_required: '无需验证',
+    manual: '等待人工处理', manual_click_required: '需要人工点击验证', waiting_for_manual_action: '正在等待人工操作',
+    waiting_for_widget_mount: '正在等待验证组件加载', waiting_for_auto_pass: '正在等待自动通过', waiting_for_response_token: '验证成功，正在等待令牌',
+    clicked: '已点击验证组件', passed: '已通过', passed_after_widget_success: '已通过', not_required: '无需验证',
     waiting_for_code: '正在等待验证码', code_received: '已收到验证码', code_filled: '验证码已填写', retrying: '验证码错误，正在重新获取',
     waiting_for_transition: '已点击提交，正在确认页面变化', retrying_submit: '页面未变化，正在重新提交', transition_detected: '已确认进入下一页面',
     waiting_for_landing: '已注册，等待进入登录页面', done: '已完成', opening_authorization: '正在打开本地 OAuth 授权页',
@@ -243,6 +355,8 @@ function logTone(status?: string, message?: string): LogTone {
   const successCounts = [...text.matchAll(/(?:成功|通过)\s*[=:：]?\s*(\d+)/g)].map((item) => Number(item[1]));
   const failed = failedCounts.reduce((total, value) => total + value, 0);
   const succeeded = successCounts.reduce((total, value) => total + value, 0);
+  if (/已按代理出口匹配语言、地区与时区/.test(text)) return 'success';
+  if (/地区解析失败，已使用默认语言与时区/.test(text)) return 'warning';
   if (/invalid management key|unauthorized|forbidden|请求异常|注册失败|处理失败/i.test(text)) return 'error';
   if (failed > 0) return succeeded > 0 ? 'warning' : 'error';
   if (FAILURE_STATUSES.has(key)) return 'error';
@@ -280,6 +394,11 @@ function buildRegistrationFlow(session?: GrokMonitor['sessions'][number]): Array
     const through = session.auto_import?.enabled ? 9 : Math.max(8, furthest);
     for (let index = 0; index < through; index += 1) if (states[index] !== 'failed') states[index] = 'done';
   }
+  if (status === 'paused') {
+    for (let index = 0; index < states.length; index += 1) {
+      if (states[index] === 'running') states[index] = 'paused';
+    }
+  }
   if (session.probe?.state === 'complete') states[8] = Number(session.probe.fail || 0) > 0 ? 'failed' : 'done';
   if (session.auto_import?.enabled) {
     if (session.auto_import.ok === true) states[9] = 'done';
@@ -298,12 +417,6 @@ function hotmailStatusKey(item: HotmailAccount): string {
   return 'unchecked';
 }
 
-interface StyledSelectOption {
-  value: string;
-  label: string;
-  description?: string;
-}
-
 const AUTO_IMPORT_OPTIONS: StyledSelectOption[] = [
   { value: 'false', label: '关闭', description: '仅保存到 MercuryPro 本地' },
   { value: 'true', label: '开启', description: '注册成功后自动测活并导入' },
@@ -319,108 +432,47 @@ const MAIL_PROVIDER_OPTIONS: StyledSelectOption[] = [
   { value: 'hotmail_local', label: '微软邮箱账户池（本地助手）', description: '本地账户池，每个邮箱支持 3 个槽位' },
 ];
 
-function StyledSelect({
-  value,
-  options,
-  onChange,
-  ariaLabel,
-  isDark,
-  fieldClass,
-}: {
-  value: string;
-  options: StyledSelectOption[];
-  onChange: (value: string) => void;
-  ariaLabel: string;
-  isDark: boolean;
-  fieldClass: string;
-}) {
-  const [open, setOpen] = useState(false);
-  const [activeIndex, setActiveIndex] = useState(() => Math.max(0, options.findIndex((option) => option.value === value)));
-  const rootRef = useRef<HTMLDivElement | null>(null);
-  const selected = options.find((option) => option.value === value) || options[0];
+const HOTMAIL_ACCOUNT_SOURCE_OPTIONS: StyledSelectOption[] = [
+  { value: 'mail_management', label: '邮箱管理未用账号', description: '默认使用邮箱管理中 0/3、1/3、2/3 的账号' },
+  { value: 'manual', label: '注册页批量导入', description: '使用在当前注册配置中批量导入的账号' },
+];
 
-  useEffect(() => {
-    if (!open) return;
-    const close = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
-    };
-    document.addEventListener('pointerdown', close);
-    return () => document.removeEventListener('pointerdown', close);
-  }, [open]);
+const CAPTCHA_PROVIDER_OPTIONS: StyledSelectOption[] = [
+  { value: 'local', label: '本地 Turnstile Solver', description: '使用部署在本机的验证码服务' },
+  { value: 'yescaptcha', label: 'YesCaptcha', description: '使用 YesCaptcha API Key' },
+];
 
-  useEffect(() => {
-    if (open) setActiveIndex(Math.max(0, options.findIndex((option) => option.value === value)));
-  }, [open, options, value]);
+const HOTMAIL_STATUS_OPTIONS: StyledSelectOption[] = [
+  { value: '', label: '全部状态' },
+  { value: 'healthy', label: '测活通过' },
+  { value: 'unchecked', label: '未测活' },
+  { value: 'unhealthy', label: '测活失败' },
+  { value: 'reserved', label: '使用中' },
+  { value: 'failed', label: '注册失败' },
+  { value: 'used', label: '已用尽' },
+];
 
-  const choose = (option: StyledSelectOption) => {
-    onChange(option.value);
-    setOpen(false);
-  };
+const PROXY_STRATEGY_OPTIONS: StyledSelectOption[] = [
+  { value: 'round_robin', label: '轮询' },
+  { value: 'random', label: '随机' },
+  { value: 'sticky', label: '固定' },
+];
 
-  const handleKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
-    if (event.key === 'Escape') {
-      setOpen(false);
-      return;
-    }
-    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-      event.preventDefault();
-      if (!open) {
-        setOpen(true);
-        return;
-      }
-      const direction = event.key === 'ArrowDown' ? 1 : -1;
-      setActiveIndex((index) => (index + direction + options.length) % options.length);
-      return;
-    }
-    if (event.key === 'Enter' && open) {
-      event.preventDefault();
-      const activeOption = options[activeIndex];
-      if (activeOption) choose(activeOption);
-    }
-  };
+const SUB2API_AUTH_OPTIONS: StyledSelectOption[] = [
+  { value: 'password', label: '管理员邮箱 + 密码' },
+  { value: 'api_key', label: '管理员 API Key' },
+];
 
-  return <div ref={rootRef} className="relative w-full">
-    <motion.button
-      type="button"
-      aria-label={ariaLabel}
-      aria-haspopup="listbox"
-      aria-expanded={open}
-      onClick={() => setOpen((current) => !current)}
-      onKeyDown={handleKeyDown}
-      whileHover={{ y: -1 }}
-      whileTap={{ scale: 0.975 }}
-      transition={{ type: 'spring', stiffness: 420, damping: 24 }}
-      className={`${fieldClass} flex items-center justify-between gap-3 text-left cursor-pointer ${open ? 'ring-2 ring-blue-500/35 border-blue-400' : ''}`}
-    >
-      <motion.span key={value} initial={{ opacity: 0, y: 5, scale: 0.97 }} animate={{ opacity: 1, y: 0, scale: 1 }} transition={{ type: 'spring', stiffness: 460, damping: 22 }} className="min-w-0 truncate">{selected?.label || value}</motion.span>
-      <ChevronDown className={`w-4 h-4 shrink-0 text-slate-400 transition-transform duration-200 ${open ? 'rotate-180 text-blue-500' : ''}`} />
-    </motion.button>
-    <AnimatePresence>
-    {open && <motion.div role="listbox" aria-label={ariaLabel} initial={{ opacity: 0, y: -8, scale: 0.97 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: -5, scale: 0.985, transition: { duration: 0.12, ease: 'easeOut' } }} transition={{ type: 'spring', stiffness: 420, damping: 27 }} className={`absolute z-50 left-0 right-0 top-full mt-2 overflow-hidden rounded-xl border p-1.5 shadow-[0_18px_45px_rgba(15,23,42,0.18)] origin-top ${isDark ? 'bg-slate-900 border-slate-700' : 'bg-white border-slate-200'}`}>
-      {options.map((option, index) => {
-        const selectedOption = option.value === value;
-        const activeOption = index === activeIndex;
-        return <motion.button
-          key={option.value}
-          type="button"
-          role="option"
-          aria-selected={selectedOption}
-          onMouseEnter={() => setActiveIndex(index)}
-          onClick={() => choose(option)}
-          whileHover={{ x: 4 }}
-          whileTap={{ scale: 0.985 }}
-          transition={{ type: 'spring', stiffness: 430, damping: 24 }}
-          className={`relative overflow-hidden w-full min-h-10 px-3 py-2 rounded-lg flex items-center justify-between gap-3 text-left text-xs transition-colors ${selectedOption ? 'text-white' : activeOption ? isDark ? 'bg-slate-800 text-slate-100' : 'bg-blue-50 text-blue-700' : isDark ? 'text-slate-300 hover:bg-slate-800' : 'text-slate-700 hover:bg-slate-50'}`}
-        >
-          {selectedOption && <motion.span layoutId={`styled-select-highlight-${ariaLabel}`} className="absolute inset-0 rounded-lg bg-blue-600" transition={{ type: 'spring', stiffness: 420, damping: 28 }} />}
-          <span className="relative z-10 min-w-0"><strong className="block font-semibold">{option.label}</strong>{option.description && <small className={`block mt-0.5 ${selectedOption ? 'text-blue-100' : 'text-slate-400'}`}>{option.description}</small>}</span>
-          <span className={`relative z-10 w-5 h-5 rounded-full flex items-center justify-center shrink-0 ${selectedOption ? 'bg-white/20' : 'opacity-0'}`}><Check className="w-3.5 h-3.5" /></span>
-        </motion.button>;
-      })}
-    </motion.div>}
-    </AnimatePresence>
-  </div>;
-}
+const ROTATION_STATUS_OPTIONS: StyledSelectOption[] = [
+  { value: '', label: '全部状态' },
+  { value: 'normal', label: '正常' },
+  { value: 'error', label: '错误' },
+];
+
+const ROTATION_PAGE_SIZE_OPTIONS: StyledSelectOption[] = [20, 50, 80].map((size) => ({
+  value: String(size),
+  label: `${size} 条`,
+}));
 
 interface Props {
   currentPreset: StylePreset;
@@ -442,11 +494,13 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
   const [busy, setBusy] = useState('');
   const [notice, setNotice] = useState<{ tone: 'ok' | 'error' | 'info'; text: string } | null>(null);
   const [solverState, setSolverState] = useState('未检测');
-  const [proxyResult, setProxyResult] = useState('');
+  const [proxyResult, setProxyResult] = useState<ProxyResultView | null>(null);
   const [hotmailPool, setHotmailPool] = useState<HotmailPool | null>(null);
   const [hotmailImportText, setHotmailImportText] = useState('');
   const [hotmailStatus, setHotmailStatus] = useState('');
   const [hotmailKeyword, setHotmailKeyword] = useState('');
+  const [hotmailSelected, setHotmailSelected] = useState<string[]>([]);
+  const [restoreUsesDialog, setRestoreUsesDialog] = useState<{ account: HotmailAccount; count: number } | null>(null);
   const [groups, setGroups] = useState<Array<{ id: number; name: string; platform?: string }>>([]);
   const [rotation, setRotation] = useState<RotationList>(EMPTY_ROTATION);
   const [rotationStatus, setRotationStatus] = useState('');
@@ -467,6 +521,7 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
     [monitor.batches],
   );
   const pausedBatches = activeBatches.filter((item) => ['paused', 'pausing'].includes(String(item.status || '').toLowerCase()));
+  const runningBatches = activeBatches.filter((item) => !['paused', 'pausing'].includes(String(item.status || '').toLowerCase()));
 
   const setField = <K extends keyof GrokConfig>(key: K, value: GrokConfig[K]) => {
     setConfig((previous) => ({ ...previous, [key]: value }));
@@ -551,7 +606,7 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
     let active = true;
     const refresh = async (reportError = false) => {
       try {
-        const pool = await grokRegistrationApi.hotmailAccounts();
+        const pool = await grokRegistrationApi.hotmailAccounts(config.hotmail_account_source);
         if (active) setHotmailPool(pool as HotmailPool);
       } catch (error) {
         if (active && reportError) showError(error);
@@ -560,7 +615,7 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
     void refresh(true);
     const timer = window.setInterval(() => void refresh(false), 2500);
     return () => { active = false; window.clearInterval(timer); };
-  }, [config.mail_provider]);
+  }, [config.mail_provider, config.hotmail_account_source]);
 
   useEffect(() => {
     if (config.mail_provider !== 'hotmail_local' || !hotmailPool) return;
@@ -652,10 +707,21 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
     try {
       const result = await grokRegistrationApi.detectProxy();
       const proxy = result.proxy || result.detected_proxy || result.url;
-      if (proxy) setField('proxy', String(proxy));
-      setProxyResult(result.message || (proxy ? `检测到本机代理：${proxy}` : '未检测到本机代理'));
+      if (!proxy) {
+        setProxyResult({ tone: 'error', summary: '未检测到本机代理', detail: `原因：${result.error || result.message || '系统代理、环境变量和常见代理端口均未发现可用地址'}`, items: [] });
+        return;
+      }
+      const detectedProxy = proxyWithCredentials(
+        String(proxy),
+        String(result.proxy_username || ''),
+        String(result.proxy_password || ''),
+      );
+      setField('proxy', detectedProxy);
+      const checked = await grokRegistrationApi.checkProxy(detectedProxy);
+      setProxyResult(formatProxyCheckResult(checked, `已检测到${result.source || '本机代理'}并查询出口`));
     } catch (error) {
       showError(error);
+      setProxyResult({ tone: 'error', summary: '代理检测失败', detail: `原因：${error instanceof Error ? error.message : String(error)}`, items: [] });
     } finally {
       setBusy('');
     }
@@ -665,10 +731,10 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
     setBusy('proxy-check');
     try {
       const result = await grokRegistrationApi.checkProxy(config.proxy);
-      const items = Array.isArray(result.results) ? result.results : [];
-      setProxyResult(result.message || (items.length ? `检测完成：${items.filter((item: any) => item.ok).length}/${items.length} 个代理可用` : JSON.stringify(result)));
+      setProxyResult(formatProxyCheckResult(result));
     } catch (error) {
       showError(error);
+      setProxyResult({ tone: 'error', summary: '代理检测失败', detail: `原因：${error instanceof Error ? error.message : String(error)}`, items: [] });
     } finally {
       setBusy('');
     }
@@ -679,7 +745,7 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
     setBusy('hotmail-import');
     try {
       const result = await grokRegistrationApi.importHotmail(hotmailImportText, config.hotmail_local_base_url);
-      setHotmailPool(result.pool || result);
+      setHotmailPool(await grokRegistrationApi.hotmailAccounts(config.hotmail_account_source) as HotmailPool);
       setHotmailImportText('');
       setNotice({ tone: 'ok', text: `邮箱导入完成：新增 ${result.added || 0}，更新 ${result.updated || 0}，无效 ${result.invalid || 0}。` });
     } catch (error) {
@@ -704,7 +770,7 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
   const probeHotmail = async () => {
     setBusy('hotmail-probe');
     try {
-      const result = await grokRegistrationApi.probeHotmail(config.hotmail_local_base_url);
+      const result = await grokRegistrationApi.probeHotmail(config.hotmail_local_base_url, config.hotmail_account_source);
       setHotmailPool(result.pool || result);
       setNotice({ tone: result.ok === false ? 'error' : 'ok', text: result.ok === false ? (result.error || '邮箱账户测活失败。') : '邮箱账户池测活完成。' });
     } catch (error) {
@@ -755,7 +821,8 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
         : action === 'delete'
           ? await grokRegistrationApi.deleteHotmail(id)
           : await grokRegistrationApi.updateHotmail(id, action === 'prefer' ? { preferred_for_next_use: true } : { used: false });
-      setHotmailPool((result.pool || result) as HotmailPool);
+      setHotmailPool(await grokRegistrationApi.hotmailAccounts(config.hotmail_account_source) as HotmailPool);
+      if (action === 'delete') setHotmailSelected((previous) => previous.filter((item) => item !== id));
       const message = action === 'delete'
         ? '邮箱已从账户池删除。'
         : action === 'probe'
@@ -764,6 +831,76 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
             ? '已指定该邮箱用于下一次注册。'
             : '邮箱已恢复为可复用状态。';
       setNotice({ tone: action === 'probe' && result.ok === false ? 'error' : 'ok', text: message });
+    } catch (error) {
+      showError(error);
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const openVisibleRegistrationBrowser = async () => {
+    if (activeBatches.length > 0) {
+      setNotice({ tone: 'error', text: '当前仍有注册批次运行。请先停止或等待当前批次结束，再打开新的可视验证浏览器，避免重复启动浏览器。' });
+      return;
+    }
+    setBusy('open-visible-browser');
+    try {
+      const nextConfig = {
+        ...normalizedConfig(),
+        grok_headless: false,
+        count: 1,
+        concurrency: 1,
+      };
+      const result = await grokRegistrationApi.saveConfig(nextConfig);
+      setConfig(mergeConfig(result.config));
+      await grokRegistrationApi.start(nextConfig);
+      await refreshMonitor();
+      setNotice({
+        tone: 'info',
+        text: '已启动一个可视注册任务，Camoufox 将自动打开；检测到人机验证后请在浏览器窗口中手工完成。',
+      });
+    } catch (error) {
+      showError(error);
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const deleteHotmailAccounts = async (kind: 'selected' | 'used' | 'unhealthy', ids: string[] = []) => {
+    if (kind === 'selected' && !ids.length) return;
+    setBusy(`hotmail-delete-${kind}`);
+    try {
+      const result = kind === 'selected'
+        ? await grokRegistrationApi.deleteHotmailSelected(ids)
+        : kind === 'used'
+          ? await grokRegistrationApi.deleteHotmailUsed()
+          : await grokRegistrationApi.deleteHotmailUnhealthy();
+      const selectedPool = await grokRegistrationApi.hotmailAccounts(config.hotmail_account_source) as HotmailPool;
+      setHotmailPool(selectedPool);
+      const remainingIds = new Set((selectedPool.accounts || []).map((item: HotmailAccount) => String(item.id || '')));
+      setHotmailSelected((previous) => previous.filter((id) => remainingIds.has(id)));
+      const skipped = Number(result.skipped_reserved || 0);
+      setNotice({
+        tone: 'ok',
+        text: `已删除 ${Number(result.deleted || 0)} 个邮箱${skipped ? `，跳过 ${skipped} 个使用中的邮箱` : ''}。`,
+      });
+    } catch (error) {
+      showError(error);
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const restoreHotmailUses = async () => {
+    const pending = restoreUsesDialog;
+    const id = String(pending?.account.id || '');
+    if (!pending || !id) return;
+    setBusy(`hotmail-restore-uses-${id}`);
+    try {
+      const result = await grokRegistrationApi.restoreHotmailUses(id, pending.count);
+      setHotmailPool(await grokRegistrationApi.hotmailAccounts(config.hotmail_account_source) as HotmailPool);
+      setRestoreUsesDialog(null);
+      setNotice({ tone: 'ok', text: `已为该邮箱恢复 ${Number(result.restored || 0)} 次注册使用机会。` });
     } catch (error) {
       showError(error);
     } finally {
@@ -847,13 +984,13 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
     { id: 'rotation', label: '账号轮询', icon: <RefreshCw className="w-4 h-4" /> },
   ];
 
-  const Field = ({ label, children, wide = false, hint }: { label: string; children: React.ReactNode; wide?: boolean; hint?: string }) => (
-    <label className={`space-y-1.5 ${wide ? 'md:col-span-2' : ''}`}>
+  const Field = useCallback(({ label, children, wide = false, hint }: { label: string; children: React.ReactNode; wide?: boolean; hint?: string }) => (
+    <div className={`space-y-1.5 ${wide ? 'md:col-span-2' : ''}`}>
       <span className={`block text-xs font-bold ${theme.textPrimary}`}>{label}</span>
       {children}
       {hint && <span className={`block text-[10px] leading-4 ${theme.textSecondary}`}>{hint}</span>}
-    </label>
-  );
+    </div>
+  ), [theme.textPrimary, theme.textSecondary]);
 
   const Toggle = ({ label, checked, onChange, hint }: { label: string; checked: boolean; onChange: (value: boolean) => void; hint?: string }) => (
     <label className={`flex items-center justify-between gap-4 p-3 rounded-lg border cursor-pointer ${isDark ? 'bg-slate-900/50 border-slate-700' : 'bg-slate-50 border-slate-200'}`}>
@@ -873,12 +1010,32 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
   const logs = useMemo<RegistrationLog[]>(() => {
     const entries: RegistrationLog[] = [];
     monitor.batches.forEach((batch) => {
-      const message = translateLogMessage(batch.message || batch.status);
-      const at = Number(batch.updated_at || batch.created_at || 0);
+      const batchId = String(batch.id || batch.batch_id || '');
+      const status = String(batch.status || '').toLowerCase();
+      const completed = COMPLETED_BATCH.has(status);
+      const successCount = Number(batch.ok_count ?? batch.success ?? 0);
+      const failureCount = Number(batch.fail_count ?? batch.failed ?? 0);
+      const total = Number(batch.count ?? batch.finished ?? (successCount + failureCount));
+      const message = completed
+        ? `批次完成：共 ${total} 个，成功 ${successCount} 个，失败 ${failureCount} 个`
+        : translateLogMessage(batch.message || batch.status);
+      const batchAt = Number(batch.updated_at || batch.created_at || 0);
+      const relatedSessionAt = completed
+        ? monitor.sessions.reduce((latest, session) => {
+            if (String(session.batch_id || '') !== batchId) return latest;
+            const latestEventAt = (session.events || []).reduce(
+              (eventLatest, event) => Math.max(eventLatest, Number(event.at || 0)),
+              0,
+            );
+            return Math.max(latest, sessionTimestamp(session), latestEventAt);
+          }, 0)
+        : 0;
+      // Keep the aggregate result after every event belonging to this batch.
+      const at = completed ? Math.max(batchAt, relatedSessionAt) + 0.001 : batchAt;
       entries.push({
-        key: `batch-${batch.id || batch.batch_id}-${at}-${message}`,
+        key: `batch-${batchId}-${at}-${message}`,
         at,
-        status: String(batch.status || ''),
+        status,
         message,
         source: '批次',
         step: 1,
@@ -897,6 +1054,7 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
           source: `Grok${session.batch_index ? ` #${session.batch_index}` : ''}${session.email ? ` · ${session.email}` : ''}`,
           step: registrationStepNumber(event.message || message, event.status),
           tone: logTone(event.status || session.status, message),
+          requiresVisibleBrowser: requiresVisibleBrowserAction(event.message, message),
         });
       });
     });
@@ -907,6 +1065,17 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
     const keyword = hotmailKeyword.trim().toLowerCase();
     return matchesStatus && (!keyword || String(account.email || '').toLowerCase().includes(keyword));
   }), [hotmailPool, hotmailStatus, hotmailKeyword]);
+  const filteredHotmailIds = filteredHotmailAccounts.map((account) => String(account.id || '')).filter(Boolean);
+  const allFilteredHotmailSelected = filteredHotmailIds.length > 0 && filteredHotmailIds.every((id) => hotmailSelected.includes(id));
+  const someFilteredHotmailSelected = filteredHotmailIds.some((id) => hotmailSelected.includes(id));
+
+  useEffect(() => {
+    const existingIds = new Set((hotmailPool?.accounts || []).map((account) => String(account.id || '')));
+    setHotmailSelected((previous) => {
+      const next = previous.filter((id) => existingIds.has(id));
+      return next.length === previous.length ? previous : next;
+    });
+  }, [hotmailPool]);
 
   useEffect(() => {
     const container = logContainerRef.current;
@@ -948,7 +1117,28 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
           detail: '该邮箱的本地账户记录、使用槽位及测活状态会一并移除。',
           confirmLabel: '确认删除',
         }
-      : pendingConfirmation?.kind === 'delete-rotation'
+      : pendingConfirmation?.kind === 'delete-hotmail-selected'
+        ? {
+            title: `删除选中的 ${pendingConfirmation.ids.length} 个邮箱？`,
+            description: '选中的邮箱将从微软邮箱账户池中移除。',
+            detail: '正在被注册任务占用的邮箱会自动跳过；其余删除操作不可撤销。',
+            confirmLabel: '删除所选',
+          }
+        : pendingConfirmation?.kind === 'delete-hotmail-used'
+          ? {
+              title: '删除全部用尽邮箱？',
+              description: `当前账户池有 ${hotmailPool?.used || 0} 个邮箱已用尽全部注册次数。`,
+              detail: '正在被注册任务占用的邮箱会自动跳过；其余删除操作不可撤销。',
+              confirmLabel: '删除用尽邮箱',
+            }
+          : pendingConfirmation?.kind === 'delete-hotmail-unhealthy'
+            ? {
+                title: '删除全部激活失败邮箱？',
+                description: `当前账户池有 ${hotmailPool?.unhealthy || 0} 个邮箱最近一次测活失败。`,
+                detail: '建议确认 Refresh Token 确实失效后再删除；正在使用中的邮箱会自动跳过。',
+                confirmLabel: '删除激活失败',
+              }
+            : pendingConfirmation?.kind === 'delete-rotation'
         ? {
             title: `删除 ${pendingConfirmation.ids.length} 个账号记录？`,
             description: '选中的账号将从 MercuryPro 本地轮询台账中移除。',
@@ -963,6 +1153,9 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
     if (!pending) return;
     if (pending.kind === 'reset-monitor') void resetMonitor();
     else if (pending.kind === 'delete-hotmail') void handleHotmailAction(pending.account, 'delete');
+    else if (pending.kind === 'delete-hotmail-selected') void deleteHotmailAccounts('selected', pending.ids);
+    else if (pending.kind === 'delete-hotmail-used') void deleteHotmailAccounts('used');
+    else if (pending.kind === 'delete-hotmail-unhealthy') void deleteHotmailAccounts('unhealthy');
     else void deleteRotation(pending.ids);
   };
 
@@ -996,8 +1189,8 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
         </div>
 
         {notice && (
-          <div className={`p-3 rounded-lg border text-xs font-medium flex items-start gap-2 ${notice.tone === 'ok' ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-700 dark:text-emerald-300' : notice.tone === 'error' ? 'bg-rose-500/10 border-rose-500/30 text-rose-700 dark:text-rose-300' : 'bg-blue-500/10 border-blue-500/30 text-blue-700 dark:text-blue-300'}`}>
-            {notice.tone === 'ok' ? <CheckCircle2 className="w-4 h-4 shrink-0" /> : <CircleDot className="w-4 h-4 shrink-0" />}
+          <div className={`rounded-lg border px-4 py-3 text-[13px] font-semibold leading-5 flex items-center gap-3 ${isDark ? 'border-slate-700 bg-slate-800/80 text-slate-100' : 'border-slate-300 bg-slate-100 text-slate-800'}`}>
+            <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${notice.tone === 'ok' ? 'bg-emerald-500' : notice.tone === 'error' ? 'bg-rose-500' : 'bg-blue-500'}`} />
             <span>{notice.text}</span>
           </div>
         )}
@@ -1033,7 +1226,7 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
                     <Field label={config.mail_provider === 'hotmail_local' ? `注册数量（可用槽位 ${hotmailAvailableSlots}）` : '注册数量'}><input type="number" min={1} max={config.mail_provider === 'hotmail_local' ? Math.max(1, hotmailAvailableSlots) : 10000} value={config.count} onChange={(e) => setField('count', Number(e.target.value))} className={fieldClass} /></Field>
                     <Field label={`并发数（推荐最大为 ${recommendedConcurrency || '--'}）`}><input type="number" min={1} value={config.concurrency} onChange={(e) => setField('concurrency', Number(e.target.value))} className={fieldClass} /></Field>
                     <Field label="错峰毫秒"><input type="number" min={0} max={60000} value={config.stagger_ms} onChange={(e) => setField('stagger_ms', Number(e.target.value))} className={fieldClass} /></Field>
-                    <Field label="Captcha 服务"><select value={config.captcha_provider} onChange={(e) => setField('captcha_provider', e.target.value as GrokConfig['captcha_provider'])} className={fieldClass}><option value="local">本地 Turnstile Solver</option><option value="yescaptcha">YesCaptcha</option></select></Field>
+                    <Field label="Captcha 服务"><StyledSelect ariaLabel="Captcha 服务" value={config.captcha_provider} onChange={(value) => setField('captcha_provider', value as GrokConfig['captcha_provider'])} options={CAPTCHA_PROVIDER_OPTIONS} isDark={isDark} /></Field>
                     {config.captcha_provider === 'local' ? <Field label={`本地 Solver（${solverState}）`} wide><div className="flex gap-2"><input value={config.local_solver_url} onChange={(e) => setField('local_solver_url', e.target.value)} className={fieldClass} /><button onClick={() => void detectSolver()} disabled={!!busy} className="px-3 rounded-lg bg-slate-600 text-white text-xs font-bold min-w-max flex items-center gap-1.5 disabled:opacity-50">{busy === 'solver' && <Loader2 className="w-3.5 h-3.5 animate-spin" />}重新检测</button></div></Field> : <Field label="YesCaptcha Key" wide><input type="password" value={config.yescaptcha_key} onChange={(e) => setField('yescaptcha_key', e.target.value)} className={fieldClass} /></Field>}
                   </div>
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -1095,14 +1288,15 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
 
                 {tab === 'mail' && <div className="space-y-4">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="space-y-1.5"><span className={`block text-xs font-bold ${theme.textPrimary}`}>邮箱类型</span><StyledSelect ariaLabel="邮箱类型" value={config.mail_provider} onChange={(value) => setField('mail_provider', value as GrokConfig['mail_provider'])} options={MAIL_PROVIDER_OPTIONS} isDark={isDark} fieldClass={fieldClass} /></div>
+                    <div className="space-y-1.5"><span className={`block text-xs font-bold ${theme.textPrimary}`}>邮箱类型</span><StyledSelect ariaLabel="邮箱类型" value={config.mail_provider} onChange={(value) => setField('mail_provider', value as GrokConfig['mail_provider'])} options={MAIL_PROVIDER_OPTIONS} isDark={isDark} /></div>
                     {config.mail_provider === 'custom' ? <>
                       <Field label="邮箱域名"><input value={config.mail_domain} onChange={(e) => setField('mail_domain', e.target.value)} placeholder="多个域名用逗号分隔" className={fieldClass} /></Field>
                       <Field label="API 地址"><input value={config.mail_base_url} onChange={(e) => setField('mail_base_url', e.target.value)} placeholder="YYDS 或自建邮箱 API 地址" className={fieldClass} /></Field>
                       <Field label="API Key / 管理员密钥"><input type="password" value={config.mail_api_key} onChange={(e) => setField('mail_api_key', e.target.value)} className={fieldClass} /></Field>
                     </> : <>
+                      <div className="space-y-1.5"><span className={`block text-xs font-bold ${theme.textPrimary}`}>账号来源</span><StyledSelect ariaLabel="微软邮箱账号来源" value={config.hotmail_account_source} onChange={(value) => setField('hotmail_account_source', value as GrokConfig['hotmail_account_source'])} options={HOTMAIL_ACCOUNT_SOURCE_OPTIONS} isDark={isDark} /></div>
                       <Field label="本地助手地址"><div className="flex gap-2"><input value={config.hotmail_local_base_url} onChange={(e) => setField('hotmail_local_base_url', e.target.value)} className={fieldClass} /><button onClick={() => void testHotmail()} disabled={!!busy} className="px-3 rounded-lg bg-slate-600 text-white text-xs font-bold min-w-max flex items-center gap-1.5 disabled:opacity-50">{busy === 'hotmail-test' && <Loader2 className="w-3.5 h-3.5 animate-spin" />}检测助手</button></div></Field>
-                      <Field label="批量导入微软邮箱账号" wide hint="每行：email----password----refresh-token----client-id"><textarea rows={5} value={hotmailImportText} onChange={(e) => setHotmailImportText(e.target.value)} className={fieldClass} /></Field>
+                      {config.hotmail_account_source === 'manual' && <Field label="批量导入微软邮箱账号" wide hint="每行：email----password----refresh-token----client-id"><textarea rows={5} value={hotmailImportText} onChange={(e) => setHotmailImportText(e.target.value)} className={fieldClass} /></Field>}
                     </>}
                   </div>
                   {config.mail_provider === 'hotmail_local' && <div className={`rounded-xl border overflow-hidden ${theme.border} ${isDark ? 'bg-slate-900/40' : 'bg-slate-50'}`}>
@@ -1114,64 +1308,99 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
                             {hotmailPool ? `账户池：共 ${hotmailPool.total || 0} · 可用槽位 ${hotmailPool.available || 0}（每号 ${hotmailPool.alias_uses || 3} 次含 +别名） · 账号 ${hotmailPool.available_accounts || 0} · 测活通过 ${hotmailPool.healthy || 0} · 测活失败 ${hotmailPool.unhealthy || 0} · 未测活 ${hotmailPool.unchecked || 0} · 注册失败 ${hotmailPool.failed || 0} · 已用尽 ${hotmailPool.used || 0}` : '正在等待读取账户池'}
                           </p>
                         </div>
-                        <div className="flex flex-wrap gap-2 shrink-0"><button onClick={() => void probeHotmail()} disabled={!!busy} className={`px-3 py-2 rounded-lg border text-[11px] font-bold flex items-center gap-1.5 disabled:opacity-50 ${theme.border} ${theme.textPrimary}`}>{busy === 'hotmail-probe' && <Loader2 className="w-3.5 h-3.5 animate-spin" />}全部重新测活</button><button onClick={() => void importHotmail()} disabled={!!busy} className="px-3 py-2 rounded-lg bg-blue-600 text-white text-[11px] font-bold flex items-center gap-1.5 disabled:opacity-50">{busy === 'hotmail-import' && <Loader2 className="w-3.5 h-3.5 animate-spin" />}导入并自动测活</button></div>
+                        <div className="flex flex-wrap gap-2 shrink-0">
+                          {config.hotmail_account_source === 'manual' && <>
+                          <button onClick={() => setPendingConfirmation({ kind: 'delete-hotmail-selected', ids: [...hotmailSelected] })} disabled={!!busy || !hotmailSelected.length} className="px-3 py-2 rounded-lg border border-rose-500/30 text-rose-600 text-[11px] font-bold flex items-center gap-1.5 disabled:opacity-40"><Trash2 className="w-3.5 h-3.5" />删除所选{hotmailSelected.length ? `（${hotmailSelected.length}）` : ''}</button>
+                          <button onClick={() => setPendingConfirmation({ kind: 'delete-hotmail-used' })} disabled={!!busy || !Number(hotmailPool?.used || 0)} className="px-3 py-2 rounded-lg border border-amber-500/30 text-amber-600 text-[11px] font-bold flex items-center gap-1.5 disabled:opacity-40"><Trash2 className="w-3.5 h-3.5" />删除用尽</button>
+                          <button onClick={() => setPendingConfirmation({ kind: 'delete-hotmail-unhealthy' })} disabled={!!busy || !Number(hotmailPool?.unhealthy || 0)} className="px-3 py-2 rounded-lg border border-rose-500/30 text-rose-600 text-[11px] font-bold flex items-center gap-1.5 disabled:opacity-40"><Trash2 className="w-3.5 h-3.5" />删除激活失败</button>
+                          </>}
+                          <button onClick={() => void probeHotmail()} disabled={!!busy} className={`px-3 py-2 rounded-lg border text-[11px] font-bold flex items-center gap-1.5 disabled:opacity-50 ${theme.border} ${theme.textPrimary}`}>{busy === 'hotmail-probe' && <Loader2 className="w-3.5 h-3.5 animate-spin" />}全部重新测活</button>
+                          {config.hotmail_account_source === 'manual' && <button onClick={() => void importHotmail()} disabled={!!busy} className="px-3 py-2 rounded-lg bg-blue-600 text-white text-[11px] font-bold flex items-center gap-1.5 disabled:opacity-50">{busy === 'hotmail-import' && <Loader2 className="w-3.5 h-3.5 animate-spin" />}导入并自动测活</button>}
+                        </div>
                       </div>
                       <div className="grid grid-cols-1 sm:grid-cols-[150px_minmax(220px,1fr)] gap-2 mt-3">
-                        <select value={hotmailStatus} onChange={(event) => setHotmailStatus(event.target.value)} className={fieldClass}><option value="">全部状态</option><option value="healthy">测活通过</option><option value="unchecked">未测活</option><option value="unhealthy">测活失败</option><option value="reserved">使用中</option><option value="failed">注册失败</option><option value="used">已用尽</option></select>
+                        <StyledSelect ariaLabel="邮箱状态" value={hotmailStatus} onChange={setHotmailStatus} options={HOTMAIL_STATUS_OPTIONS} isDark={isDark} />
                         <div className="relative"><Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" /><input value={hotmailKeyword} onChange={(event) => setHotmailKeyword(event.target.value)} placeholder="模糊搜索邮箱名称" className={`${fieldClass} pl-8`} /></div>
                       </div>
                     </div>
 
                     <div className="max-h-[360px] overflow-auto">
-                      <table className="w-full min-w-[920px] text-left text-[10px]">
-                        <thead className={`sticky top-0 z-10 ${isDark ? 'bg-slate-800 text-slate-400' : 'bg-slate-200 text-slate-500'}`}><tr><th className="px-4 py-2.5">邮箱账号</th><th className="px-3 py-2.5">状态</th><th className="px-3 py-2.5">验证码</th><th className="px-3 py-2.5">Client ID / Refresh Token</th><th className="px-3 py-2.5 text-center">操作</th></tr></thead>
+                      <table className="w-full min-w-[760px] text-left text-[10px]">
+                        <thead className={`sticky top-0 z-10 ${isDark ? 'bg-slate-800 text-slate-400' : 'bg-slate-200 text-slate-500'}`}><tr><th className="px-3 py-2.5 w-10 text-center"><input type="checkbox" aria-label="全选当前筛选结果" title="全选当前筛选结果" checked={allFilteredHotmailSelected} ref={(input) => { if (input) input.indeterminate = someFilteredHotmailSelected && !allFilteredHotmailSelected; }} onChange={(event) => setHotmailSelected((previous) => event.target.checked ? Array.from(new Set([...previous, ...filteredHotmailIds])) : previous.filter((id) => !filteredHotmailIds.includes(id)))} className="accent-blue-600" /></th><th className="px-4 py-2.5 text-center">邮箱账号</th><th className="px-3 py-2.5 text-center">状态</th><th className="px-3 py-2.5 text-center">验证码</th><th className="px-3 py-2.5 text-center">操作</th></tr></thead>
                         <tbody className={`divide-y ${isDark ? 'divide-slate-800' : 'divide-slate-200'}`}>
                           {filteredHotmailAccounts.map((account) => {
                             const status = hotmailStatusKey(account);
                             const useLimit = Math.max(1, Number(account.use_limit || hotmailPool?.alias_uses || 3));
                             const useCount = Math.max(0, Number(account.use_count || 0));
                             const remaining = Math.max(0, Number(account.remaining_uses ?? (useLimit - useCount)));
+                            const restorableUses = Math.min(useLimit, useCount);
+                            const accountId = String(account.id || '');
+                            const selected = hotmailSelected.includes(accountId);
                             const latestCode = account.verification_entries?.[0];
                             const statusLabel = account.reserved ? '使用中' : account.failed ? '注册失败' : account.mail_healthy === false ? '测活失败' : account.used || remaining <= 0 ? `已用尽 ${useCount}/${useLimit}` : account.preferred_for_next_use ? `已指定 · 余 ${remaining}/${useLimit}` : account.mail_healthy === true ? `测活通过 · 余 ${remaining}/${useLimit}` : `未测活 · 余 ${remaining}/${useLimit}`;
                             const statusStyle = status === 'healthy' ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600' : status === 'unhealthy' || status === 'failed' ? 'border-rose-500/30 bg-rose-500/10 text-rose-600' : status === 'used' ? 'border-amber-500/30 bg-amber-500/10 text-amber-600' : status === 'reserved' ? 'border-blue-500/30 bg-blue-500/10 text-blue-600' : 'border-yellow-500/30 bg-yellow-500/10 text-yellow-600';
                             const canUse = !account.failed && !account.used && !account.reserved && account.mail_healthy !== false && remaining > 0;
-                            const operationBusy = busy.endsWith(`-${account.id}`);
-                            return <tr key={account.id} className={isDark ? 'hover:bg-white/[0.025]' : 'hover:bg-black/[0.025]'}>
+                            const operationBusy = busy.endsWith(`-${accountId}`);
+                            return <tr key={account.id} className={selected ? 'bg-blue-500/[0.07]' : isDark ? 'hover:bg-white/[0.025]' : 'hover:bg-black/[0.025]'}>
+                              <td className="px-3 py-3 text-center"><input type="checkbox" aria-label={`选择 ${account.email || '邮箱'}`} checked={selected} onChange={(event) => setHotmailSelected((previous) => event.target.checked ? Array.from(new Set([...previous, accountId])) : previous.filter((id) => id !== accountId))} className="accent-blue-600" /></td>
                               <td className="px-4 py-3 max-w-[260px]"><div className="flex items-center gap-2 min-w-0"><span className={`w-2 h-2 rounded-full shrink-0 ${account.mail_healthy === false ? 'bg-rose-500' : account.mail_healthy === true ? 'bg-emerald-400' : 'bg-amber-400'}`} /><strong className={`truncate text-[11px] ${theme.textPrimary}`} title={account.email}>{account.email || '未记录邮箱'}</strong></div><p className={`mt-1 ml-4 truncate ${account.failure_reason || account.mail_health_error ? 'text-rose-500' : theme.textSecondary}`} title={account.failure_reason || account.mail_health_error || account.next_alias_email}>{account.failure_reason ? `注册失败：${account.failure_reason}` : account.mail_health_error ? `测活失败：${account.mail_health_error}` : account.next_alias_email && remaining > 0 ? `下次注册：${account.next_alias_email}` : `已用 ${useCount}/${useLimit} 次（含 +别名）`}</p></td>
-                              <td className="px-3 py-3"><span className={`inline-flex px-2 py-1 rounded-md border font-bold ${statusStyle}`}>{statusLabel}</span></td>
-                              <td className="px-3 py-3"><strong className={latestCode?.status === 'received' ? 'text-emerald-500 text-xs' : latestCode?.status === 'waiting' ? 'text-amber-500' : latestCode ? 'text-rose-500' : theme.textSecondary}>{latestCode?.status === 'received' ? latestCode.code || '--' : latestCode?.status === 'waiting' ? '读取中…' : latestCode ? '读取失败' : '--'}</strong>{latestCode?.email && <p className={`mt-1 max-w-[150px] truncate ${theme.textSecondary}`} title={latestCode.email}>{latestCode.email}</p>}</td>
-                              <td className="px-3 py-3 font-mono"><strong className={theme.textPrimary}>{account.client_id_masked || '--'}</strong><p className={`mt-1 max-w-[190px] truncate ${theme.textSecondary}`} title={account.refresh_token_masked}>Refresh Token {account.refresh_token_masked || '--'}</p></td>
-                              <td className="px-3 py-3"><div className="flex justify-center gap-1.5">{(account.failed || account.mail_healthy !== false && (account.used || remaining <= 0)) && <button onClick={() => void handleHotmailAction(account, 'restore')} disabled={!!busy} className="px-2 py-1.5 rounded-md border border-emerald-500/30 text-emerald-600 font-bold disabled:opacity-40">恢复未用</button>}{canUse && <button onClick={() => void handleHotmailAction(account, 'prefer')} disabled={!!busy || account.preferred_for_next_use} className="px-2 py-1.5 rounded-md border border-cyan-500/30 text-cyan-600 font-bold disabled:opacity-40">{account.preferred_for_next_use ? '已指定' : '指定使用'}</button>}<button onClick={() => void handleHotmailAction(account, 'probe')} disabled={!!busy} className={`px-2 py-1.5 rounded-md border font-bold disabled:opacity-40 ${theme.border} ${theme.textPrimary}`}>{operationBusy && busy.startsWith('hotmail-probe-') ? <Loader2 className="w-3 h-3 animate-spin" /> : '重新测活'}</button><button onClick={() => setPendingConfirmation({ kind: 'delete-hotmail', account })} disabled={!!busy} className="px-2 py-1.5 rounded-md border border-rose-500/30 text-rose-600 font-bold disabled:opacity-40">删除</button></div></td>
+                              <td className="px-3 py-3 text-center"><span className={`inline-flex px-2 py-1 rounded-md border font-bold ${statusStyle}`}>{statusLabel}</span></td>
+                              <td className="px-3 py-3 text-center"><strong className={latestCode?.status === 'received' ? 'text-emerald-500 text-xs' : latestCode?.status === 'waiting' ? 'text-amber-500' : latestCode ? 'text-rose-500' : theme.textSecondary}>{latestCode?.status === 'received' ? latestCode.code || '--' : latestCode?.status === 'waiting' ? '读取中…' : latestCode ? '读取失败' : '--'}</strong>{latestCode?.email && <p className={`mx-auto mt-1 max-w-[150px] truncate ${theme.textSecondary}`} title={latestCode.email}>{latestCode.email}</p>}</td>
+                              <td className="px-3 py-3"><div className="flex justify-center gap-1.5">{account.failed && <button onClick={() => void handleHotmailAction(account, 'restore')} disabled={!!busy || account.reserved} className="px-2 py-1.5 rounded-md border border-emerald-500/30 text-emerald-600 font-bold disabled:opacity-40">允许复用</button>}{restorableUses > 0 && <button onClick={() => setRestoreUsesDialog({ account, count: 1 })} disabled={!!busy || account.reserved} className="px-2 py-1.5 rounded-md border border-amber-500/30 text-amber-600 font-bold disabled:opacity-40">恢复次数</button>}{canUse && <button onClick={() => void handleHotmailAction(account, 'prefer')} disabled={!!busy || account.preferred_for_next_use} className="px-2 py-1.5 rounded-md border border-cyan-500/30 text-cyan-600 font-bold disabled:opacity-40">{account.preferred_for_next_use ? '已指定' : '指定使用'}</button>}<button onClick={() => void handleHotmailAction(account, 'probe')} disabled={!!busy} className={`px-2 py-1.5 rounded-md border font-bold disabled:opacity-40 ${theme.border} ${theme.textPrimary}`}>{operationBusy && busy.startsWith('hotmail-probe-') ? <Loader2 className="w-3 h-3 animate-spin" /> : '重新测活'}</button>{config.hotmail_account_source === 'manual' && <button onClick={() => setPendingConfirmation({ kind: 'delete-hotmail', account })} disabled={!!busy} className="px-2 py-1.5 rounded-md border border-rose-500/30 text-rose-600 font-bold disabled:opacity-40">删除</button>}</div></td>
                             </tr>;
                           })}
                           {!filteredHotmailAccounts.length && <tr><td colSpan={5} className={`p-10 text-center ${theme.textSecondary}`}>{hotmailPool?.accounts?.length ? '没有匹配的邮箱账号' : '尚未导入微软邮箱账号'}</td></tr>}
                         </tbody>
                       </table>
                     </div>
-                    <div className={`px-4 py-2 border-t text-[10px] ${theme.border} ${theme.textSecondary}`}>显示 {filteredHotmailAccounts.length} / {hotmailPool?.total || 0} 个物理邮箱；每个邮箱依次使用本体、+1、+2 三个注册地址。</div>
+                    <div className={`px-4 py-2 border-t text-[10px] ${theme.border} ${theme.textSecondary}`}>显示 {filteredHotmailAccounts.length} / {hotmailPool?.total || 0} 个物理邮箱 · 已选 {hotmailSelected.length} 个；每个邮箱依次使用本体、+1、+2 三个注册地址。</div>
                   </div>}
                 </div>}
 
                 {tab === 'proxy' && <div className="space-y-4">
-                  <Field label="代理池" wide hint="每行一个代理；支持 http/socks5 URL、host:port 及带用户名密码格式"><textarea rows={8} value={config.proxy} onChange={(e) => setField('proxy', e.target.value)} placeholder={'http://127.0.0.1:7890\nsocks5://user:password@host:port'} className={`${fieldClass} font-mono`} /></Field>
+                  <Field label="代理池" wide hint="每行一条；推荐格式：主机:端口:用户名:密码（不需要添加 http://），例如 us.1024proxy.io:3000:账号-region-US-sid-随机ID-t-5:密码"><textarea rows={8} value={config.proxy} onChange={(e) => setField('proxy', e.target.value)} placeholder={'us.1024proxy.io:3000:username-region-US-sid-AbCd1234-t-5:password\nus.1024proxy.io:3000:username-region-US-sid-EfGh5678-t-5:password'} className={`${fieldClass} font-mono`} /></Field>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <Field label="轮换策略"><select value={config.proxy_strategy} onChange={(e) => setField('proxy_strategy', e.target.value as GrokConfig['proxy_strategy'])} className={fieldClass}><option value="round_robin">轮询</option><option value="random">随机</option><option value="sticky">固定</option></select></Field>
+                    <Field label="轮换策略"><StyledSelect ariaLabel="代理轮换策略" value={config.proxy_strategy} onChange={(value) => setField('proxy_strategy', value as GrokConfig['proxy_strategy'])} options={PROXY_STRATEGY_OPTIONS} isDark={isDark} /></Field>
                     <div className="flex items-end gap-2"><button onClick={() => void detectProxy()} disabled={!!busy} className={`flex-1 px-3 py-2 rounded-lg border text-xs font-bold flex items-center justify-center gap-1.5 disabled:opacity-50 ${theme.border} ${theme.textPrimary}`}>{busy === 'proxy' && <Loader2 className="w-3.5 h-3.5 animate-spin" />}检测本机代理</button><button onClick={() => void checkProxy()} disabled={!!busy || !config.proxy.trim()} className="flex-1 px-3 py-2 rounded-lg bg-blue-600 text-white text-xs font-bold flex items-center justify-center gap-1.5 disabled:opacity-50">{busy === 'proxy-check' && <Loader2 className="w-3.5 h-3.5 animate-spin" />}检测代理可用性</button></div>
                   </div>
-                  {proxyResult && <div className="p-3 rounded-lg bg-blue-500/10 border border-blue-500/20 text-xs text-blue-700 dark:text-blue-300 whitespace-pre-wrap">{proxyResult}</div>}
+                  {proxyResult && <div className={`rounded-lg border shadow-sm ${isDark ? 'border-slate-700 bg-slate-900 text-slate-200' : 'border-slate-300 bg-white text-slate-800'}`}>
+                    <div className="flex items-center gap-2.5 px-3.5 py-3 text-xs">
+                      <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${proxyResult.tone === 'success' ? 'bg-emerald-500' : proxyResult.tone === 'warning' ? 'bg-amber-500' : proxyResult.tone === 'error' ? 'bg-rose-500' : 'bg-blue-500'}`} />
+                      <strong className="leading-5">{proxyResult.summary}</strong>
+                    </div>
+                    {proxyResult.detail && <div className={`border-t px-3.5 py-2.5 text-xs ${isDark ? 'border-slate-700 text-rose-300' : 'border-slate-200 text-rose-700'}`}>{proxyResult.detail}</div>}
+                    {proxyResult.items.length > 0 && <div className={`divide-y border-t ${isDark ? 'divide-slate-700 border-slate-700' : 'divide-slate-200 border-slate-200'}`}>
+                      {proxyResult.items.map((item) => <div key={item.index} className="flex items-start gap-2.5 px-3.5 py-2.5 text-xs leading-6">
+                        <span className={`mt-2 h-2 w-2 shrink-0 rounded-full ${item.ok ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+                        <p>
+                          <strong>代理 {item.index}：</strong>
+                          <span className={item.ok ? 'font-bold text-emerald-600 dark:text-emerald-300' : 'font-bold text-rose-600 dark:text-rose-300'}>{item.ok ? '可用' : '不可用'}</span>
+                          {item.ok ? <>
+                            <span>｜国家/地区：</span><span className="font-semibold text-emerald-600 dark:text-emerald-300">{item.countryCode}（{item.country}）</span>
+                            <span>｜出口 IP：</span><span className="font-semibold text-emerald-600 dark:text-emerald-300">{item.ip}</span>
+                            <span>｜位置：</span><span className="font-semibold text-emerald-600 dark:text-emerald-300">{item.location}</span>
+                            <span>｜延迟：</span><span className="font-semibold text-emerald-600 dark:text-emerald-300">{item.latency}</span>
+                          </> : <>
+                            <span>｜出口 IP：</span><span className="font-semibold text-rose-600 dark:text-rose-300">{item.ip}</span>
+                            <span>｜原因：</span><span className="font-semibold text-rose-600 dark:text-rose-300">{item.error}</span>
+                          </>}
+                        </p>
+                      </div>)}
+                    </div>}
+                  </div>}
                 </div>}
 
                 {tab === 'import' && <div className="space-y-5">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="space-y-1.5"><span className={`block text-xs font-bold ${theme.textPrimary}`}>自动导入</span><StyledSelect ariaLabel="自动导入" value={String(config.auto_import_enabled)} onChange={(value) => setField('auto_import_enabled', value === 'true')} options={AUTO_IMPORT_OPTIONS} isDark={isDark} fieldClass={fieldClass} /></div>
-                    <div className="space-y-1.5"><span className={`block text-xs font-bold ${theme.textPrimary}`}>导入对象</span><StyledSelect ariaLabel="导入对象" value={config.auto_import_target} onChange={(value) => setField('auto_import_target', value as GrokConfig['auto_import_target'])} options={IMPORT_TARGET_OPTIONS} isDark={isDark} fieldClass={fieldClass} /></div>
+                    <div className="space-y-1.5"><span className={`block text-xs font-bold ${theme.textPrimary}`}>自动导入</span><StyledSelect ariaLabel="自动导入" value={String(config.auto_import_enabled)} onChange={(value) => setField('auto_import_enabled', value === 'true')} options={AUTO_IMPORT_OPTIONS} isDark={isDark} /></div>
+                    <div className="space-y-1.5"><span className={`block text-xs font-bold ${theme.textPrimary}`}>导入对象</span><StyledSelect ariaLabel="导入对象" value={config.auto_import_target} onChange={(value) => setField('auto_import_target', value as GrokConfig['auto_import_target'])} options={IMPORT_TARGET_OPTIONS} isDark={isDark} /></div>
                     <Field label="导入并发数"><input type="number" min={1} max={10} value={config.import_concurrency} onChange={(e) => setField('import_concurrency', Number(e.target.value))} className={fieldClass} /></Field>
                     <Field label="导入错峰毫秒"><input type="number" min={0} max={60000} value={config.import_stagger_ms} onChange={(e) => setField('import_stagger_ms', Number(e.target.value))} className={fieldClass} /></Field>
                     {config.auto_import_target === 'sub2api' ? <>
                       <Field label="Sub2API 地址"><input value={config.sub2api_base_url} onChange={(e) => setField('sub2api_base_url', e.target.value)} placeholder="https://sub2.example.com" className={fieldClass} /></Field>
-                      <Field label="认证方式"><select value={config.sub2api_auth_mode} onChange={(e) => setField('sub2api_auth_mode', e.target.value as GrokConfig['sub2api_auth_mode'])} className={fieldClass}><option value="password">管理员邮箱 + 密码</option><option value="api_key">管理员 API Key</option></select></Field>
+                      <Field label="认证方式"><StyledSelect ariaLabel="Sub2API 认证方式" value={config.sub2api_auth_mode} onChange={(value) => setField('sub2api_auth_mode', value as GrokConfig['sub2api_auth_mode'])} options={SUB2API_AUTH_OPTIONS} isDark={isDark} /></Field>
                       {config.sub2api_auth_mode === 'password' ? <><Field label="管理员邮箱"><input type="email" value={config.sub2api_admin_email} onChange={(e) => setField('sub2api_admin_email', e.target.value)} className={fieldClass} /></Field><Field label="管理员密码"><input type="password" value={config.sub2api_admin_password} onChange={(e) => setField('sub2api_admin_password', e.target.value)} className={fieldClass} /></Field></> : <Field label="管理员 API Key" wide><input type="password" value={config.sub2api_api_key} onChange={(e) => setField('sub2api_api_key', e.target.value)} className={fieldClass} /></Field>}
-                      <Field label="导入后绑定 Grok 分组" wide><div className="flex gap-2"><select value={config.sub2api_xai_group_id} onChange={(e) => { const id = Number(e.target.value); const group = groups.find((item) => item.id === id); setConfig((previous) => ({ ...previous, sub2api_xai_group_id: id, sub2api_xai_group_name: group ? `${group.platform ? `[${group.platform}] ` : ''}${group.name}` : '' })); }} className={fieldClass}><option value={0}>使用 Sub2API 默认分组</option>{groups.map((group) => <option key={group.id} value={group.id}>{group.platform ? `[${group.platform}] ` : ''}{group.name}</option>)}</select><button onClick={() => void loadGroups()} disabled={!!busy} className="px-3 rounded-lg bg-slate-600 text-white text-xs font-bold min-w-max flex items-center gap-1.5 disabled:opacity-50">{busy === 'groups' && <Loader2 className="w-3.5 h-3.5 animate-spin" />}自动获取分组</button></div></Field>
+                      <Field label="导入后绑定 Grok 分组" wide><div className="flex gap-2"><StyledSelect ariaLabel="导入后绑定 Grok 分组" value={String(config.sub2api_xai_group_id)} onChange={(value) => { const id = Number(value); const group = groups.find((item) => item.id === id); setConfig((previous) => ({ ...previous, sub2api_xai_group_id: id, sub2api_xai_group_name: group ? `${group.platform ? `[${group.platform}] ` : ''}${group.name}` : '' })); }} options={[{ value: '0', label: '使用 Sub2API 默认分组' }, ...groups.map((group) => ({ value: String(group.id), label: `${group.platform ? `[${group.platform}] ` : ''}${group.name}` }))]} isDark={isDark} /><button onClick={() => void loadGroups()} disabled={!!busy} className="px-3 rounded-lg bg-slate-600 text-white text-xs font-bold min-w-max flex items-center gap-1.5 disabled:opacity-50">{busy === 'groups' && <Loader2 className="w-3.5 h-3.5 animate-spin" />}自动获取分组</button></div></Field>
                     </> : <><Field label="CPA 地址"><input value={config.cpa_base_url} onChange={(e) => setField('cpa_base_url', e.target.value)} placeholder="https://cpa.example.com" className={fieldClass} /></Field><Field label="CPA 管理密钥"><input type="password" value={config.cpa_management_key} onChange={(e) => setField('cpa_management_key', e.target.value)} className={fieldClass} /></Field></>}
                   </div>
                   <div className={`p-3 rounded-lg border text-[11px] ${theme.border} ${theme.textSecondary}`}><ShieldCheck className="inline w-4 h-4 mr-1 text-blue-500" />开启后，注册完成的 Grok 凭据会在测活通过后自动导入所选站点；关闭时仅保存在 MercuryPro 本地。</div>
@@ -1186,9 +1415,9 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
 
                   <div className={`p-3 rounded-xl border ${theme.border} flex flex-col lg:flex-row lg:items-end gap-3`}>
                     <div className="grid grid-cols-1 sm:grid-cols-[140px_minmax(220px,1fr)_120px] gap-3 flex-1">
-                      <Field label="账号状态"><select value={rotationStatus} onChange={(event) => { setRotationStatus(event.target.value); setRotationSelected([]); }} className={fieldClass}><option value="">全部状态</option><option value="normal">正常</option><option value="error">错误</option></select></Field>
+                      <Field label="账号状态"><StyledSelect ariaLabel="账号状态" value={rotationStatus} onChange={(value) => { setRotationStatus(value); setRotationSelected([]); }} options={ROTATION_STATUS_OPTIONS} isDark={isDark} /></Field>
                       <Field label="搜索"><div className="relative"><Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" /><input value={rotationKeyword} onChange={(event) => setRotationKeyword(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { setRotationQuery(rotationKeyword.trim()); setRotationSelected([]); } }} placeholder="账号、类型或错误信息" className={`${fieldClass} pl-8`} /></div></Field>
-                      <Field label="每页"><select value={rotationPageSize} onChange={(event) => { setRotationPageSize(Number(event.target.value)); setRotationSelected([]); }} className={fieldClass}><option value={20}>20 条</option><option value={50}>50 条</option><option value={80}>80 条</option></select></Field>
+                      <Field label="每页"><StyledSelect ariaLabel="每页显示数量" value={String(rotationPageSize)} onChange={(value) => { setRotationPageSize(Number(value)); setRotationSelected([]); }} options={ROTATION_PAGE_SIZE_OPTIONS} isDark={isDark} /></Field>
                     </div>
                     <button onClick={() => { setRotationQuery(rotationKeyword.trim()); setRotationSelected([]); if (rotationQuery === rotationKeyword.trim()) void loadRotation(1); }} className="px-4 py-2 rounded-lg bg-blue-600 text-white text-xs font-bold flex items-center justify-center gap-1.5"><Search className="w-3.5 h-3.5" />搜索</button>
                   </div>
@@ -1246,7 +1475,7 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
                   <div className={`w-8 h-8 shrink-0 rounded-lg border flex items-center justify-center ${theme.border}`}><ListChecks className="w-4 h-4 text-blue-500" /></div>
                   <div className="min-w-0">
                     <div className="flex items-center gap-2"><h3 className={`text-sm font-bold ${theme.textPrimary}`}>注册监控</h3><span className="px-1.5 py-0.5 rounded border border-cyan-500/30 bg-cyan-500/10 text-[10px] font-mono text-cyan-600">{String(monitor.sessions.length).padStart(2, '0')}</span></div>
-                    <p className={`text-[10px] mt-0.5 truncate ${theme.textSecondary}`}>批次 {monitor.batches.length} · 运行中 {activeBatches.length}</p>
+                    <p className={`text-[10px] mt-0.5 truncate ${theme.textSecondary}`}>批次 {monitor.batches.length} · 运行中 {runningBatches.length}{pausedBatches.length ? ` · 已暂停 ${pausedBatches.length}` : ''}</p>
                   </div>
                 </div>
                 <div className="flex items-center gap-1.5 shrink-0">
@@ -1263,10 +1492,10 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
               <div className={`rounded-lg border px-3 py-2.5 ${theme.border} ${isDark ? 'bg-slate-950/35' : 'bg-slate-50/70'}`}>
                 {flowSteps.map((step, index) => <div key={step.label} className="relative flex gap-3 pb-2 last:pb-0">
                   {index < flowSteps.length - 1 && <span className={`absolute left-[9px] top-5 bottom-0 w-px ${step.state === 'done' ? 'bg-emerald-400' : isDark ? 'bg-slate-700' : 'bg-slate-200'}`} />}
-                  <span className={`relative z-10 mt-0.5 w-[19px] h-[19px] shrink-0 rounded-full border flex items-center justify-center ${step.state === 'done' ? 'bg-emerald-500 border-emerald-500 text-white' : step.state === 'running' ? 'bg-blue-500/10 border-blue-500 text-blue-600' : step.state === 'failed' ? 'bg-rose-500/10 border-rose-500 text-rose-600' : isDark ? 'bg-slate-900 border-slate-700 text-slate-600' : 'bg-white border-slate-300 text-slate-300'}`}>
-                    {step.state === 'done' ? <CheckCircle2 className="w-3 h-3" /> : step.state === 'running' ? <Loader2 className="w-3 h-3 animate-spin" /> : step.state === 'failed' ? <CircleDot className="w-3 h-3" /> : <span className="w-1.5 h-1.5 rounded-full bg-current" />}
+                  <span className={`relative z-10 mt-0.5 w-[19px] h-[19px] shrink-0 rounded-full border flex items-center justify-center ${step.state === 'done' ? 'bg-emerald-500 border-emerald-500 text-white' : step.state === 'running' ? 'bg-blue-500/10 border-blue-500 text-blue-600' : step.state === 'paused' ? 'bg-amber-500/10 border-amber-500 text-amber-600' : step.state === 'failed' ? 'bg-rose-500/10 border-rose-500 text-rose-600' : isDark ? 'bg-slate-900 border-slate-700 text-slate-600' : 'bg-white border-slate-300 text-slate-300'}`}>
+                    {step.state === 'done' ? <CheckCircle2 className="w-3 h-3" /> : step.state === 'running' ? <Loader2 className="w-3 h-3 animate-spin" /> : step.state === 'paused' ? <Pause className="w-3 h-3" /> : step.state === 'failed' ? <CircleDot className="w-3 h-3" /> : <span className="w-1.5 h-1.5 rounded-full bg-current" />}
                   </span>
-                  <div className="min-w-0 flex-1 pt-0.5 flex items-center justify-between gap-2"><p className={`text-[11px] font-medium truncate ${step.state === 'pending' ? theme.textSecondary : theme.textPrimary}`}>{step.label}</p><span className={`shrink-0 text-[9px] ${step.state === 'done' ? 'text-emerald-600' : step.state === 'running' ? 'text-blue-500' : step.state === 'failed' ? 'text-rose-600' : theme.textSecondary}`}>{step.state === 'done' ? '已完成' : step.state === 'running' ? '执行中' : step.state === 'failed' ? '执行失败' : '等待中'}</span></div>
+                  <div className="min-w-0 flex-1 pt-0.5 flex items-center justify-between gap-2"><p className={`text-[11px] font-medium truncate ${step.state === 'pending' ? theme.textSecondary : theme.textPrimary}`}>{step.label}</p><span className={`shrink-0 text-[9px] ${step.state === 'done' ? 'text-emerald-600' : step.state === 'running' ? 'text-blue-500' : step.state === 'paused' ? 'text-amber-500' : step.state === 'failed' ? 'text-rose-600' : theme.textSecondary}`}>{step.state === 'done' ? '已完成' : step.state === 'running' ? '执行中' : step.state === 'paused' ? '已暂停' : step.state === 'failed' ? '执行失败' : '等待中'}</span></div>
                 </div>)}
               </div>
             </div>
@@ -1289,13 +1518,38 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
                     : log.tone === 'warning'
                       ? 'border-amber-500/20 bg-amber-500/[0.07] text-amber-300'
                       : 'border-white/[0.06] bg-white/[0.025] text-slate-300';
-                return <div key={log.key} title={log.source} className={`px-2.5 py-2 rounded-md border text-[10px] leading-4 ${toneStyle}`}><p className="break-words"><time className="opacity-50 mr-2">{log.at ? new Date(log.at * 1000).toLocaleTimeString('zh-CN', { hour12: false }) : '--'}</time><b>步骤 {log.step}：</b>{log.message}</p></div>;
+                return <div key={log.key} title={log.source} className={`px-2.5 py-2 rounded-md border text-[10px] leading-4 ${toneStyle}`}>
+                  <p className="break-words"><time className="opacity-50 mr-2">{log.at ? new Date(log.at * 1000).toLocaleTimeString('zh-CN', { hour12: false }) : '--'}</time><b>步骤 {log.step}：</b>{log.message}</p>
+                  {log.requiresVisibleBrowser && <div className="mt-2 flex justify-end"><button type="button" onClick={() => void openVisibleRegistrationBrowser()} disabled={!!busy} className="inline-flex items-center gap-1.5 rounded-md border border-amber-400/40 bg-amber-400/10 px-2.5 py-1.5 text-[10px] font-bold text-amber-200 transition hover:bg-amber-400/20 disabled:opacity-50"><Play className="h-3 w-3" />打开验证浏览器</button></div>}
+                </div>;
               })}</div> : <div className="min-h-44 flex items-center justify-center text-center text-[11px] leading-5 text-slate-500"><span className="mr-2 text-emerald-500">$</span>注册日志将在这里自动滚动显示<span className="ml-1 inline-block w-1.5 h-3 bg-slate-500/70 animate-pulse" aria-hidden="true" /></div>}
             </div>
           </section>
         </aside>}
         </div>
       </div>
+      {restoreUsesDialog && <div className="fixed inset-0 z-[150] flex items-center justify-center bg-slate-950/65 p-4 backdrop-blur-[3px]" role="dialog" aria-modal="true" aria-labelledby="restore-hotmail-uses-title" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) setRestoreUsesDialog(null); }}>
+        <div className={`w-full max-w-md rounded-2xl border p-5 shadow-[0_24px_80px_rgba(0,0,0,0.35)] ${isDark ? 'border-slate-700 bg-slate-900' : 'border-slate-200 bg-white'}`}>
+          <h2 id="restore-hotmail-uses-title" className={`text-base font-bold ${theme.textPrimary}`}>恢复邮箱使用次数</h2>
+          <p className={`mt-2 text-xs leading-5 ${theme.textSecondary}`}>邮箱：{restoreUsesDialog.account.email || '未记录邮箱'}</p>
+          <div className="mt-4 space-y-1.5">
+            <span className={`block text-xs font-bold ${theme.textPrimary}`}>本次恢复次数</span>
+            <StyledSelect
+              ariaLabel="本次恢复次数"
+              value={String(restoreUsesDialog.count)}
+              onChange={(value) => setRestoreUsesDialog((previous) => previous ? { ...previous, count: Number(value) } : null)}
+              options={Array.from({ length: Math.max(1, Math.min(Number(restoreUsesDialog.account.use_limit || hotmailPool?.alias_uses || 3), Number(restoreUsesDialog.account.use_count || 0) + (restoreUsesDialog.account.failed_aliases?.length || 0))) }, (_, index) => ({ value: String(index + 1), label: `恢复 ${index + 1} 次` }))}
+              isDark={isDark}
+              disabled={busy.startsWith('hotmail-restore-uses-')}
+            />
+          </div>
+          <div className={`mt-4 rounded-xl border px-3.5 py-3 text-[11px] leading-5 ${isDark ? 'border-slate-700/80 bg-slate-950/55 text-slate-400' : 'border-slate-200 bg-slate-50 text-slate-600'}`}>系统会优先恢复测试失败占用的次数，再从最近使用的注册地址开始恢复。正在执行注册任务的邮箱不能修改。</div>
+          <div className="mt-6 grid grid-cols-2 gap-3">
+            <button type="button" disabled={!!busy} onClick={() => setRestoreUsesDialog(null)} className={`rounded-xl border px-4 py-2.5 text-xs font-bold disabled:opacity-50 ${theme.border} ${theme.textPrimary}`}>取消</button>
+            <button type="button" disabled={!!busy} onClick={() => void restoreHotmailUses()} className="rounded-xl bg-amber-500 hover:bg-amber-400 px-4 py-2.5 text-xs font-bold text-white flex items-center justify-center gap-2 disabled:opacity-60">{busy.startsWith('hotmail-restore-uses-') && <Loader2 className="w-4 h-4 animate-spin" />}确认恢复</button>
+          </div>
+        </div>
+      </div>}
       <ConfirmDialog
         open={Boolean(pendingConfirmation && confirmationContent)}
         title={confirmationContent?.title || ''}

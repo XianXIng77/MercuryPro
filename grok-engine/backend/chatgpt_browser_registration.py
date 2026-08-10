@@ -166,18 +166,20 @@ def register_chatgpt_account(
             'button[data-testid="signup-button"]',
         ]
         _action_delay()
-        if not ctx._find_and_click(page, signup_selectors, timeout=10):
+        signup_clicked = ctx._find_and_click(page, signup_selectors, timeout=10)
+        if not signup_clicked:
+            signup_action = ctx._find_action(
+                page, ctx.action_pattern("signup_submit")
+            )
+            if signup_action:
+                signup_action.click()
+                signup_clicked = True
+        if not signup_clicked:
             _step("signup_page", "already_on_signup")
         page.wait_for_timeout(2000)
         _step("email", "filling")
         _cancel_check()
-        email_selectors = [
-            'input[type="email"]',
-            'input[name="email"]',
-            "input#email",
-            'input[placeholder*="email" i]',
-            'input[placeholder*="Email" i]',
-        ]
+        email_selectors = list(ctx.EMAIL_INPUT_SELECTORS)
         _action_delay()
         if not ctx._find_and_fill_input(page, email_selectors, email, timeout=10):
             raise ctx.ChatGPTRegistrationError("找不到邮箱输入框")
@@ -186,18 +188,14 @@ def register_chatgpt_account(
         email_input = ctx._first_visible(page, email_selectors)
         _action_delay()
         if not ctx._submit_for_element(
-            page, email_input, "^continue$|^next$|^submit$|继续|下一步"
+            page, email_input, ctx.action_pattern("continue")
         ):
             if not email_input:
                 raise ctx.ChatGPTRegistrationError("邮箱输入框在提交前消失")
             email_input.press("Enter")
         page.wait_for_timeout(3000)
         _step("email", "submitted")
-        new_password_selectors = [
-            'input[name="new-password"]',
-            'input[autocomplete="new-password"]',
-            'input[type="password"][placeholder*="password" i]',
-        ]
+        new_password_selectors = list(ctx.NEW_PASSWORD_INPUT_SELECTORS)
         first_name, last_name = ctx._random_name()
         birthdate = ctx._random_birthdate()
         profile_filled = False
@@ -225,7 +223,9 @@ def register_chatgpt_account(
             _cancel_check()
             _action_delay()
             if not ctx._submit_for_element(
-                page, password_input, "continue|sign\\s*up|submit|create|继续|创建"
+                page,
+                password_input,
+                ctx.action_pattern("signup_submit", ctx.action_pattern("continue")),
             ):
                 password_input.press("Enter")
             _step("password", "submitted", attempt=password_submit_attempts)
@@ -347,7 +347,7 @@ def register_chatgpt_account(
                 page.wait_for_timeout(800)
                 _action_delay()
                 if not ctx._submit_for_element(
-                    page, submit_anchor, "verify|confirm|submit|continue|确认|验证|继续"
+                    page, submit_anchor, ctx.action_pattern("verify")
                 ):
                     submit_anchor.press("Enter")
                 _step("verification", "code_submitted", attempt=verification_attempt)
@@ -397,7 +397,7 @@ def register_chatgpt_account(
                             break
                         resend = ctx._find_action(
                             page,
-                            "resend|send.*again|new\\s+code|try\\s+again|重新发送|重发|重新获取|再次发送|发送新代码",
+                            ctx.action_pattern("resend_code"),
                         )
                         if resend:
                             break

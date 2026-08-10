@@ -58,6 +58,7 @@ def _spawn_batch_runner(
     expiry_ms: int | None,
     mail_provider: str | None = None,
     hotmail_local_base_url: str | None = None,
+    hotmail_account_source: str | None = None,
     post_registration: dict[str, Any] | None = None,
     auto_tune_enabled: bool = False,
     headless: bool = True,
@@ -201,6 +202,7 @@ def _spawn_batch_runner(
             stagger_ms=stagger,
             mail_provider=mail_provider,
             hotmail_local_base_url=hotmail_local_base_url,
+            hotmail_account_source=hotmail_account_source,
             post_registration=pipeline_config,
             auto_tune_enabled=auto_tune_enabled,
             headless=headless,
@@ -360,6 +362,7 @@ def _spawn_batch_runner(
             prepared_mailboxes = ensure_healthy_accounts(
                 workers,
                 hotmail_local_base_url,
+                account_source=hotmail_account_source,
                 should_cancel=lambda: _batch_cancel_requested()
                 or _batch_pause_requested(),
             )
@@ -417,6 +420,7 @@ def _spawn_batch_runner(
                     expiry_ms=expiry_ms,
                     mail_provider=mail_provider,
                     hotmail_local_base_url=hotmail_local_base_url,
+                    hotmail_account_source=hotmail_account_source,
                     batch_id=bid,
                     batch_index=i,
                     batch_total=int(

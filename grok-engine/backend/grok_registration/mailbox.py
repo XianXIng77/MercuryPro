@@ -16,6 +16,7 @@ def make_email_receiver(
     expiry_ms: int | None = None,
     mail_provider: str | None = None,
     hotmail_local_base_url: str | None = None,
+    hotmail_account_source: str | None = None,
     cancelled_error: type[Exception],
     should_cancel: Any | None = None,
 ) -> tuple[str, Any]:
@@ -26,6 +27,7 @@ def make_email_receiver(
         return create_receiver(
             hotmail_local_base_url,
             verification_target="xai",
+            account_source=hotmail_account_source,
             should_cancel=should_cancel,
         )
 

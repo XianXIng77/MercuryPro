@@ -14,13 +14,14 @@ import {
   RefreshCw,
   RotateCcw,
   Search,
+  ShoppingCart,
   Square,
   Trash2,
   Upload,
   X,
 } from 'lucide-react';
 import {
-  deleteMicrosoftMailAccount,
+  deleteMicrosoftMailAccounts,
   importMicrosoftMailAccounts,
   ImportRecord,
   listMicrosoftMailAccounts,
@@ -28,6 +29,7 @@ import {
   updateMicrosoftMailAccount,
 } from '../api/microsoftMail';
 import { MailAccount, StylePreset } from '../types';
+import { StyledSelect } from './StyledSelect';
 import { ConfirmDialog } from './ConfirmDialog';
 
 interface MailAccountListProps {
@@ -55,8 +57,8 @@ export const MailAccountList: React.FC<MailAccountListProps> = ({
   const [loadError, setLoadError] = useState('');
 
   const [emailDraft, setEmailDraft] = useState('');
-  const [statusDraft, setStatusDraft] = useState<'all' | '0' | '1'>('all');
-  const [filters, setFilters] = useState<{ email: string; status: 'all' | '0' | '1' }>({ email: '', status: 'all' });
+  const [statusDraft, setStatusDraft] = useState<'all' | '0' | '2' | '1'>('all');
+  const [filters, setFilters] = useState<{ email: string; status: 'all' | '0' | '2' | '1' }>({ email: '', status: 'all' });
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [refreshStates, setRefreshStates] = useState<Record<string, RefreshState>>({});
   const [isBulkRefreshing, setIsBulkRefreshing] = useState(false);
@@ -70,7 +72,7 @@ export const MailAccountList: React.FC<MailAccountListProps> = ({
   const [importSummary, setImportSummary] = useState<ImportSummary | null>(null);
   const [showAccountDataModal, setShowAccountDataModal] = useState(false);
   const [accountDataText, setAccountDataText] = useState('');
-  const [pendingDeleteAccount, setPendingDeleteAccount] = useState<MailAccount | null>(null);
+  const [pendingDeleteAccounts, setPendingDeleteAccounts] = useState<MailAccount[]>([]);
   const [isDeletingAccount, setIsDeletingAccount] = useState(false);
 
   const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
@@ -124,7 +126,7 @@ export const MailAccountList: React.FC<MailAccountListProps> = ({
     setFilters({ email: emailDraft.trim(), status: statusDraft });
   };
 
-  const handleStatusFilter = (status: 'all' | '0' | '1') => {
+  const handleStatusFilter = (status: 'all' | '0' | '2' | '1') => {
     setStatusDraft(status);
     setCurrentPage(1);
     setFilters({ email: emailDraft.trim(), status });
@@ -174,23 +176,14 @@ export const MailAccountList: React.FC<MailAccountListProps> = ({
     if (valid.length !== items.length) showToast(`已跳过 ${items.length - valid.length} 个数据不完整的账号`);
   };
 
-  const handleCopyJson = async (account: MailAccount) => {
-    await copyText(JSON.stringify({
-      client_id: account.clientId,
-      refresh_token: account.refreshToken,
-      access_token: account.accessToken,
-      scope: account.scope,
-      grant_type: account.grantType,
-    }, null, 2));
-    showToast('账号 JSON 已复制');
-  };
-
   const handleStatusChange = async (account: MailAccount) => {
     const nextStatus = account.backendStatus === '1' ? '0' : '1';
+    const nextUseCount = nextStatus === '1' ? (account.registrationUseLimit || 3) : 0;
     setAccounts((previous) => previous.map((item) => item.id === account.id ? {
       ...item,
       backendStatus: nextStatus,
       usageStatus: nextStatus === '1' ? '已用' : '未用',
+      registrationUseCount: nextUseCount,
     } : item));
     try {
       await updateMicrosoftMailAccount(account.accountId || account.id, nextStatus);
@@ -230,12 +223,13 @@ export const MailAccountList: React.FC<MailAccountListProps> = ({
     showToast(`批量刷新完成：成功 ${success} 个，失败 ${failed} 个`);
   };
 
-  const handleDelete = async (account: MailAccount) => {
+  const handleDelete = async (items: MailAccount[]) => {
+    if (!items.length) return;
     setIsDeletingAccount(true);
     try {
-      await deleteMicrosoftMailAccount(account.accountId || account.id);
-      showToast('删除成功');
-      setPendingDeleteAccount(null);
+      const result = await deleteMicrosoftMailAccounts(items.map((account) => account.accountId || account.id));
+      showToast(`已删除 ${Number(result.deleted || 0)} 个邮箱账号`);
+      setPendingDeleteAccounts([]);
       await loadAccounts();
     } catch (error: any) {
       showToast(error.message || '删除失败');
@@ -306,16 +300,16 @@ export const MailAccountList: React.FC<MailAccountListProps> = ({
         <div className="flex items-center gap-2">
           <span className={`font-semibold ${theme.textPrimary}`}>使用状态</span>
           <div className={`inline-flex p-1 rounded-xl border ${theme.border} ${isDark ? 'bg-white/[0.035]' : 'bg-black/[0.035]'}`}>
-            {([['all', '全部'], ['0', '未用'], ['1', '已用']] as const).map(([value, label]) => (
+            {([['all', '全部'], ['0', '未用'], ['2', '使用中'], ['1', '已用']] as const).map(([value, label]) => (
               <button
                 key={value}
                 type="button"
                 onClick={() => handleStatusFilter(value)}
                 className={`px-3 py-1.5 rounded-lg font-semibold transition-all ${statusDraft === value
-                  ? value === '1' ? 'bg-emerald-600 text-white shadow-xs' : `${isDark ? 'bg-white/10 text-white' : 'bg-black/10 text-slate-800'} shadow-xs`
+                  ? value === '1' ? 'bg-emerald-600 text-white shadow-xs' : value === '2' ? 'bg-amber-500 text-white shadow-xs' : `${isDark ? 'bg-white/10 text-white' : 'bg-black/10 text-slate-800'} shadow-xs`
                   : theme.textSecondary}`}
               >
-                {value !== 'all' && <span className={`inline-block w-2 h-2 rounded-full mr-1.5 ${value === '1' ? 'bg-emerald-500' : 'bg-slate-400'}`} />}
+                {value !== 'all' && <span className={`inline-block w-2 h-2 rounded-full mr-1.5 ${value === '1' ? 'bg-emerald-500' : value === '2' ? 'bg-amber-400' : 'bg-slate-400'}`} />}
                 {label}
               </button>
             ))}
@@ -335,12 +329,18 @@ export const MailAccountList: React.FC<MailAccountListProps> = ({
             <button onClick={() => { setShowAddModal(true); setImportSummary(null); }} className="px-3 py-1.5 rounded-lg border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 font-semibold flex items-center gap-1">
               <Plus className="w-4 h-4" />新增
             </button>
+            <a href="https://wmemail.com/products/outlookbm" target="_blank" rel="noopener noreferrer" className="px-3 py-1.5 rounded-lg border border-violet-200 bg-violet-50 text-violet-700 hover:bg-violet-100 font-semibold flex items-center gap-1">
+              <ShoppingCart className="w-4 h-4" />购买邮箱
+            </a>
             <button disabled={isBulkRefreshing || accounts.length === 0} onClick={handleBulkRefresh} className="px-3 py-1.5 rounded-lg border border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100 disabled:opacity-50 font-semibold flex items-center gap-1">
               <RefreshCw className={`w-4 h-4 ${isBulkRefreshing ? 'animate-spin' : ''}`} />
               {selectedIds.length > 0 ? `刷新选中 (${selectedIds.length})` : '批量刷新Token'}
             </button>
             <button onClick={() => openAccountData(accounts.filter((item) => selectedIds.includes(item.id)))} disabled={selectedIds.length === 0} className="px-3 py-1.5 rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 disabled:opacity-50 font-semibold flex items-center gap-1">
               <FileText className="w-4 h-4" />获取选中账号
+            </button>
+            <button onClick={() => setPendingDeleteAccounts(accounts.filter((item) => selectedIds.includes(item.id)))} disabled={selectedIds.length === 0} className="px-3 py-1.5 rounded-lg border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 disabled:opacity-50 font-semibold flex items-center gap-1">
+              <Trash2 className="w-4 h-4" />删除选中{selectedIds.length > 0 ? ` (${selectedIds.length})` : ''}
             </button>
           </div>
           <div className="flex items-center gap-2">
@@ -359,36 +359,34 @@ export const MailAccountList: React.FC<MailAccountListProps> = ({
         )}
 
         <div className={`flex-1 min-h-0 overflow-auto ${isDark ? 'bg-black/5' : 'bg-white/15'}`}>
-          <table className="w-full min-w-[1080px] border-collapse text-left text-sm">
+          <table className="w-full min-w-[960px] border-collapse text-left text-sm">
             <thead className={`sticky top-0 z-10 border-b font-semibold backdrop-blur-md ${isDark ? 'bg-white/10 text-slate-300 border-white/10' : 'bg-black/5 text-slate-700 border-black/10'}`}>
               <tr>
                 <th className="py-3 px-3 w-12 text-center"><button onClick={toggleSelectAll}>{isAllSelected ? <CheckSquare className="w-4 h-4 text-blue-600" /> : <Square className="w-4 h-4" />}</button></th>
-                <th className="py-3 px-3 w-16 text-center">序号</th>
                 <th className="py-3 px-3 min-w-[260px] text-center">邮箱</th>
-                <th className="py-3 px-3 w-24 text-center">已用</th>
+                <th className="py-3 px-3 w-36 text-center">使用状态</th>
                 <th className="py-3 px-3 w-44 text-center">创建时间</th>
                 <th className="py-3 px-3 w-36 text-center">刷新结果</th>
-                <th className={`py-3 px-3 min-w-[330px] text-center sticky right-0 backdrop-blur-md ${isDark ? 'bg-white/10' : 'bg-black/5'}`}>操作</th>
+                <th className={`py-3 px-3 min-w-[280px] text-center sticky right-0 backdrop-blur-md ${isDark ? 'bg-white/10' : 'bg-black/5'}`}>操作</th>
               </tr>
             </thead>
             <tbody className={`divide-y ${isDark ? 'divide-slate-800' : 'divide-slate-200'}`}>
               {loading ? (
-                <tr><td colSpan={7} className="py-20 text-center"><LoaderCircle className="w-7 h-7 animate-spin text-blue-600 mx-auto mb-2" /><span className={theme.textSecondary}>正在加载真实邮箱数据...</span></td></tr>
+                <tr><td colSpan={6} className="py-20 text-center"><LoaderCircle className="w-7 h-7 animate-spin text-blue-600 mx-auto mb-2" /><span className={theme.textSecondary}>正在加载真实邮箱数据...</span></td></tr>
               ) : accounts.length === 0 && !loadError ? (
-                <tr><td colSpan={7} className="py-20 text-center"><Info className="w-8 h-8 text-slate-400 mx-auto mb-2" /><span className={theme.textSecondary}>暂无符合条件的邮箱账号</span></td></tr>
-              ) : accounts.map((account, index) => {
+                <tr><td colSpan={6} className="py-20 text-center"><Info className="w-8 h-8 text-slate-400 mx-auto mb-2" /><span className={theme.textSecondary}>暂无符合条件的邮箱账号</span></td></tr>
+              ) : accounts.map((account) => {
                 const selected = selectedIds.includes(account.id);
                 const refresh = refreshStates[account.id];
                 return (
                   <tr key={account.id} className={`group ${isDark ? 'bg-white/[0.015] hover:bg-white/[0.045] text-slate-200' : 'bg-white/20 hover:bg-white/45 text-slate-800'}`}>
                     <td className="py-3 px-3 text-center"><button onClick={() => toggleSelection(account.id)}>{selected ? <CheckSquare className="w-4 h-4 text-blue-600" /> : <Square className="w-4 h-4 text-slate-400" />}</button></td>
-                    <td className={`py-3 px-3 text-center font-mono ${theme.textSecondary}`}>{(currentPage - 1) * pageSize + index + 1}</td>
                     <td className="py-3 px-3 text-center font-mono font-semibold">
                       <button onClick={async () => { await copyText(account.emailAddress); showToast('邮箱地址已复制'); }} className="text-blue-600 hover:text-blue-800 hover:underline">{account.emailAddress}</button>
                     </td>
                     <td className="py-3 px-3 text-center">
-                      <button onClick={() => void handleStatusChange(account)} className={`inline-flex items-center px-2.5 py-1 rounded-full border text-xs font-bold ${account.backendStatus === '1' ? 'border-emerald-300 bg-emerald-50 text-emerald-700' : 'border-slate-300 bg-slate-100 text-slate-600'}`}>
-                        {account.backendStatus === '1' ? <Check className="w-3.5 h-3.5 mr-1" /> : <Square className="w-3 h-3 mr-1" />}{account.usageStatus}
+                      <button onClick={() => void handleStatusChange(account)} className={`inline-flex items-center px-2.5 py-1 rounded-full border text-xs font-bold ${account.backendStatus === '1' ? 'border-emerald-300 bg-emerald-50 text-emerald-700' : account.backendStatus === '2' ? 'border-amber-300 bg-amber-50 text-amber-700' : 'border-slate-300 bg-slate-100 text-slate-600'}`}>
+                        {account.backendStatus === '1' ? <Check className="w-3.5 h-3.5 mr-1" /> : account.backendStatus === '2' ? <RotateCcw className="w-3.5 h-3.5 mr-1" /> : <Square className="w-3 h-3 mr-1" />}{account.usageStatus} · {account.registrationUseCount || 0}/{account.registrationUseLimit || 3}
                       </button>
                     </td>
                     <td className={`py-3 px-3 text-center font-mono text-xs ${theme.textSecondary}`}>{account.createdTime || '-'}</td>
@@ -402,9 +400,8 @@ export const MailAccountList: React.FC<MailAccountListProps> = ({
                       <div className="flex items-center justify-center gap-3 text-xs whitespace-nowrap">
                         <button onClick={() => onOpenAccountInbox(account)} className="text-blue-600 hover:text-blue-800 font-semibold flex items-center gap-1"><Mail className="w-3.5 h-3.5" />收信</button>
                         <button onClick={() => openAccountData([account])} className="text-blue-600 hover:text-blue-800 font-semibold flex items-center gap-1"><FileText className="w-3.5 h-3.5" />获取</button>
-                        <button onClick={() => void handleCopyJson(account)} className="text-blue-600 hover:text-blue-800 font-semibold flex items-center gap-1"><Copy className="w-3.5 h-3.5" />复制JSON</button>
                         <button disabled={refresh?.status === 'loading'} onClick={() => void refreshOne(account)} className="text-blue-600 hover:text-blue-800 disabled:opacity-50 font-semibold flex items-center gap-1"><RefreshCw className={`w-3.5 h-3.5 ${refresh?.status === 'loading' ? 'animate-spin' : ''}`} />刷新</button>
-                        <button onClick={() => setPendingDeleteAccount(account)} className="text-blue-600 hover:text-rose-600 font-semibold flex items-center gap-1"><Trash2 className="w-3.5 h-3.5" />删除</button>
+                        <button onClick={() => setPendingDeleteAccounts([account])} className="text-blue-600 hover:text-rose-600 font-semibold flex items-center gap-1"><Trash2 className="w-3.5 h-3.5" />删除</button>
                       </div>
                     </td>
                   </tr>
@@ -417,9 +414,7 @@ export const MailAccountList: React.FC<MailAccountListProps> = ({
         <div className={`px-4 py-3 border-t flex flex-wrap items-center justify-between gap-3 ${theme.navBg} ${theme.border}`}>
           <div className={`flex items-center gap-4 ${theme.textSecondary}`}>
             <span>共 {totalItems} 条</span>
-            <select value={pageSize} onChange={(event) => { setPageSize(Number(event.target.value)); setCurrentPage(1); }} className={`px-2.5 py-1.5 border rounded-lg ${theme.cardBg} ${theme.border} ${theme.textPrimary}`}>
-              {[10, 20, 50, 100].map((size) => <option key={size} value={size}>{size}条/页</option>)}
-            </select>
+            <div className="w-28"><StyledSelect ariaLabel="每页显示数量" value={String(pageSize)} onChange={(value) => { setPageSize(Number(value)); setCurrentPage(1); }} options={[10, 20, 50, 100].map((size) => ({ value: String(size), label: `${size}条/页` }))} isDark={isDark} className="py-1.5" /></div>
           </div>
           <div className="flex items-center gap-2">
             <button disabled={currentPage === 1} onClick={() => setCurrentPage((page) => page - 1)} className={`p-1.5 border rounded-lg disabled:opacity-40 ${theme.cardBg} ${theme.border}`}><ChevronLeft className="w-4 h-4" /></button>
@@ -480,16 +475,16 @@ export const MailAccountList: React.FC<MailAccountListProps> = ({
       )}
 
       <ConfirmDialog
-        open={Boolean(pendingDeleteAccount)}
-        title="删除邮箱账号？"
-        description={<>确定删除邮箱账号 <strong className={isDark ? 'text-slate-200' : 'text-slate-900'}>“{pendingDeleteAccount?.emailAddress}”</strong> 吗？</>}
+        open={pendingDeleteAccounts.length > 0}
+        title={pendingDeleteAccounts.length > 1 ? `批量删除 ${pendingDeleteAccounts.length} 个邮箱账号？` : '删除邮箱账号？'}
+        description={pendingDeleteAccounts.length > 1 ? <>确定删除当前选中的 <strong className={isDark ? 'text-slate-200' : 'text-slate-900'}>{pendingDeleteAccounts.length} 个邮箱账号</strong> 吗？</> : <>确定删除邮箱账号 <strong className={isDark ? 'text-slate-200' : 'text-slate-900'}>“{pendingDeleteAccounts[0]?.emailAddress}”</strong> 吗？</>}
         detail="删除后该邮箱将从 MercuryPro 邮箱列表中移除；如果仍需使用，请重新导入账号数据。"
-        confirmLabel="确认删除"
+        confirmLabel={pendingDeleteAccounts.length > 1 ? '确认批量删除' : '确认删除'}
         tone="danger"
         loading={isDeletingAccount}
         currentPreset={currentPreset}
-        onCancel={() => setPendingDeleteAccount(null)}
-        onConfirm={() => pendingDeleteAccount && void handleDelete(pendingDeleteAccount)}
+        onCancel={() => setPendingDeleteAccounts([])}
+        onConfirm={() => void handleDelete(pendingDeleteAccounts)}
       />
     </div>
   );

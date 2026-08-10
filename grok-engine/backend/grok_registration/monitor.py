@@ -179,7 +179,7 @@ def batch_stats(
     batch: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Compute live batch counters without treating missing sessions as active."""
-    imported = error = running = cancelled = missing = 0
+    imported = error = running = paused = cancelled = missing = 0
     for session_id in session_ids:
         session = state._load_reg_sess(session_id)
         if not session:
@@ -188,6 +188,8 @@ def batch_stats(
         status = str(session.get("status") or "").lower()
         if status in ("imported", "success", "completed"):
             imported += 1
+        elif status == "paused":
+            paused += 1
         elif status in ("cancelled", "stopped"):
             cancelled += 1
         elif status in ("error", "failed", "expired", "protocol_error", "protocol_blocked"):
@@ -196,7 +198,7 @@ def batch_stats(
             running += 1
 
     total = len(session_ids)
-    observed = imported + error + cancelled + running
+    observed = imported + error + paused + cancelled + running
     done = imported + error + cancelled
     target = 0
     if isinstance(batch, dict):
@@ -315,6 +317,7 @@ def batch_stats(
         "imported": imported,
         "error": error,
         "cancelled": cancelled,
+        "paused": paused,
         "running": running,
         "missing": missing,
         "done": done,

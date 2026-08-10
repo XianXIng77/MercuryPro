@@ -238,6 +238,7 @@ def _snapshot_reg_config(
     stagger_ms: int,
     mail_provider: str | None = None,
     hotmail_local_base_url: str | None = None,
+    hotmail_account_source: str | None = None,
     post_registration: dict[str, Any] | None = None,
     auto_tune_enabled: bool = False,
     headless: bool = True,
@@ -257,6 +258,9 @@ def _snapshot_reg_config(
         "local_solver_url": "http://127.0.0.1:5072",
         "mail_provider": (mail_provider or "moemail").strip().lower() or "moemail",
         "hotmail_local_base_url": hotmail_local_base_url or "http://127.0.0.1:17373",
+        "hotmail_account_source": (
+            "manual" if str(hotmail_account_source or "").strip().lower() == "manual" else "mail_management"
+        ),
         "post_registration": dict(post_registration or {}),
         "auto_tune_enabled": bool(auto_tune_enabled),
         "headless": bool(headless),

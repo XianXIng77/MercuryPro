@@ -276,6 +276,7 @@ def resume_registration_batch(
         expiry_ms=cfg.get("expiry_ms"),
         mail_provider=mail_provider,
         hotmail_local_base_url=cfg.get("hotmail_local_base_url"),
+        hotmail_account_source=cfg.get("hotmail_account_source"),
         post_registration=cfg.get("post_registration")
         if isinstance(cfg.get("post_registration"), dict)
         else None,
