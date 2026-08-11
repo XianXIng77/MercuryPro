@@ -22,6 +22,8 @@ from browser_registration_common import (
     action_text_matches,
     find_action,
     first_visible,
+    visible_browser_viewport_size,
+    visible_browser_window_size,
 )
 
 
@@ -155,7 +157,7 @@ class XaiBrowserRuntime:
         self.headless = headless
         self.proxy_key = key
         self.geo_profile = resolve_browser_geo_profile(proxy)
-        width, height = 800, 560
+        width, height = visible_browser_window_size()
         try:
             from camoufox.sync_api import Camoufox
 
@@ -282,16 +284,21 @@ class XaiVisibleRegistration:
     def _enforce_visible_window(self) -> None:
         if self.headless or self.page is None:
             return
+        window_width, window_height = visible_browser_window_size()
+        viewport_width, viewport_height = visible_browser_viewport_size()
         try:
-            self.page.set_viewport_size({"width": 760, "height": 480})
+            self.page.set_viewport_size(
+                {"width": viewport_width, "height": viewport_height}
+            )
         except Exception:
             pass
         try:
             self.page.evaluate(
-                """() => {
-                    try { window.resizeTo(800, 560); } catch (e) {}
-                    try { window.moveTo(24, 24); } catch (e) {}
-                }"""
+                """size => {
+                    try { window.resizeTo(size.width, size.height); } catch (e) {}
+                    try { window.moveTo(0, 0); } catch (e) {}
+                }""",
+                {"width": window_width, "height": window_height},
             )
         except Exception:
             pass
@@ -326,6 +333,7 @@ class XaiVisibleRegistration:
                 locale=geo_profile.get("locale"),
                 timezone=geo_profile.get("timezone"),
             )
+        visible_viewport = visible_browser_viewport_size()
         context_kwargs: dict[str, Any]
         if self.using_camoufox:
             # Keep Camoufox's native fingerprint internally consistent. Adding
@@ -335,8 +343,8 @@ class XaiVisibleRegistration:
         else:
             context_kwargs = {
                 "viewport": {
-                    "width": 760 if not self.headless else 1280,
-                    "height": 480 if not self.headless else 800,
+                    "width": visible_viewport[0] if not self.headless else 1280,
+                    "height": visible_viewport[1] if not self.headless else 800,
                 },
                 "locale": str(geo_profile.get("locale") or "en-US"),
                 "timezone_id": str(

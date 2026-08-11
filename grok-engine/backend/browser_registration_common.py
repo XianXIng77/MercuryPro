@@ -7,9 +7,35 @@ new provider from requiring another copy of the same Playwright helpers.
 
 from __future__ import annotations
 
+import os
 import re
 from collections.abc import Sequence
 from typing import Any
+
+
+DEFAULT_VISIBLE_BROWSER_WINDOW = (1440, 900)
+VISIBLE_BROWSER_CHROME_SIZE = (40, 80)
+
+
+def visible_browser_window_size(environ: Any = None) -> tuple[int, int]:
+    """Return the visible browser size, matching the configured Xvfb screen."""
+
+    source = os.environ if environ is None else environ
+    raw = str(source.get("VNC_SCREEN", "") or "").strip()
+    match = re.fullmatch(r"(\d+)x(\d+)(?:x\d+)?", raw, re.I)
+    if not match:
+        return DEFAULT_VISIBLE_BROWSER_WINDOW
+    width = min(3840, max(800, int(match.group(1))))
+    height = min(2160, max(560, int(match.group(2))))
+    return width, height
+
+
+def visible_browser_viewport_size(environ: Any = None) -> tuple[int, int]:
+    """Leave room for Firefox chrome while filling the visible desktop."""
+
+    width, height = visible_browser_window_size(environ)
+    chrome_width, chrome_height = VISIBLE_BROWSER_CHROME_SIZE
+    return max(760, width - chrome_width), max(480, height - chrome_height)
 
 
 EMAIL_INPUT_SELECTORS = (

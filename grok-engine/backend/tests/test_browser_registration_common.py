@@ -14,6 +14,8 @@ from browser_registration_common import (  # noqa: E402
     action_pattern,
     action_text_matches,
     find_action,
+    visible_browser_viewport_size,
+    visible_browser_window_size,
 )
 
 
@@ -55,6 +57,18 @@ class _FakePage:
 
 
 class BrowserRegistrationCommonTests(unittest.TestCase):
+    def test_visible_browser_matches_configured_vnc_screen(self) -> None:
+        environ = {"VNC_SCREEN": "1440x900x24"}
+
+        self.assertEqual((1440, 900), visible_browser_window_size(environ))
+        self.assertEqual((1400, 820), visible_browser_viewport_size(environ))
+
+    def test_visible_browser_uses_large_default_for_invalid_screen(self) -> None:
+        self.assertEqual((1440, 900), visible_browser_window_size({}))
+        self.assertEqual(
+            (1440, 900), visible_browser_window_size({"VNC_SCREEN": "invalid"})
+        )
+
     def test_email_signup_covers_proxy_locales(self) -> None:
         labels = (
             "Sign up with email",

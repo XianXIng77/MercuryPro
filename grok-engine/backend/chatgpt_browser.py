@@ -28,6 +28,8 @@ from browser_registration_common import (
     action_pattern,
     find_action,
     first_visible,
+    visible_browser_viewport_size,
+    visible_browser_window_size,
 )
 from chatgpt_browser_context import BrowserContext
 import chatgpt_browser_registration as _registration
@@ -1203,8 +1205,7 @@ class ChatGPTBrowserRuntime:
         _ensure_camoufox()
         self.headless = headless
         self.proxy_key = key
-        debug_window_width = 800
-        debug_window_height = 560
+        debug_window_width, debug_window_height = visible_browser_window_size()
         try:
             from camoufox.sync_api import Camoufox
 

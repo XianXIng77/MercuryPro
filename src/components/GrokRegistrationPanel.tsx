@@ -644,6 +644,7 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
   const [chatgptAccountsLoading, setChatgptAccountsLoading] = useState(false);
   const [currentChatgptBatchId, setCurrentChatgptBatchId] = useState('');
   const [logClearBefore, setLogClearBefore] = useState(0);
+  const [archivedLogs, setArchivedLogs] = useState<RegistrationLog[]>([]);
   const [debugBrowserKey, setDebugBrowserKey] = useState(0);
   const [browserDebugStatus, setBrowserDebugStatus] = useState<BrowserDebugStatus | null>(null);
   const rotationPageRef = useRef(1);
@@ -711,13 +712,14 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
 
   const resetMonitor = async () => {
     setBusy('reset-monitor');
+    const logsToKeep = logs;
     try {
       const result = await grokRegistrationApi.resetMonitor();
       if (result.ok === false) throw new Error(result.error || '本轮任务暂时无法清除');
+      setArchivedLogs(logsToKeep);
       setCurrentChatgptBatchId('');
-      setLogClearBefore(0);
       await refreshMonitor();
-      setNotice({ tone: 'ok', text: '本轮注册流程与日志已清除。' });
+      setNotice({ tone: 'ok', text: '本轮注册监控已清除，任务日志已保留。' });
     } catch (error) {
       showError(error);
     } finally {
@@ -1254,7 +1256,7 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
       && session.access_token_available)
     .sort((a, b) => sessionTimestamp(b) - sessionTimestamp(a)), [monitor.sessions, currentChatgptBatchId]);
   const logs = useMemo<RegistrationLog[]>(() => {
-    const entries: RegistrationLog[] = [];
+    const entries: RegistrationLog[] = [...archivedLogs];
     monitor.batches.forEach((batch) => {
       const batchId = String(batch.id || batch.batch_id || '');
       const status = String(batch.status || '').toLowerCase();
@@ -1305,11 +1307,11 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
         });
       });
     });
-    return entries
+    return [...new Map(entries.map((entry) => [entry.key, entry])).values()]
       .filter((entry) => entry.at > logClearBefore)
       .sort((a, b) => a.at - b.at)
       .slice(-300);
-  }, [monitor, logClearBefore]);
+  }, [monitor, archivedLogs, logClearBefore]);
   const filteredHotmailAccounts = useMemo(() => (hotmailPool?.accounts || []).filter((account) => {
     const matchesStatus = !hotmailStatus || hotmailStatusKey(account) === hotmailStatus;
     const keyword = hotmailKeyword.trim().toLowerCase();
@@ -1368,8 +1370,8 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
   const confirmationContent = pendingConfirmation?.kind === 'reset-monitor'
     ? {
         title: '清除本轮注册记录？',
-        description: '将清除当前批次的注册流程状态和全部日志。',
-        detail: '如果任务仍在运行，请先暂停或等待任务结束；此操作不会删除已经注册或导入的账号。',
+        description: '仅清除当前批次的注册监控和流程状态，任务日志会继续保留。',
+        detail: '如果任务仍在运行，请先暂停或等待任务结束；此操作不会清理日志，也不会删除已经注册或导入的账号。',
         confirmLabel: '确认清除',
       }
     : pendingConfirmation?.kind === 'delete-hotmail'

@@ -147,13 +147,18 @@ def register_chatgpt_account(
     def _enforce_visible_window() -> None:
         if headless or page is None:
             return
+        window_width, window_height = ctx.visible_browser_window_size()
+        viewport_width, viewport_height = ctx.visible_browser_viewport_size()
         try:
-            page.set_viewport_size({"width": 760, "height": 480})
+            page.set_viewport_size(
+                {"width": viewport_width, "height": viewport_height}
+            )
         except Exception:
             pass
         try:
             page.evaluate(
-                "() => {\n                try { window.resizeTo(800, 560); } catch(e) {}\n                try { window.moveTo(24, 24); } catch(e) {}\n            }"
+                "size => {\n                try { window.resizeTo(size.width, size.height); } catch(e) {}\n                try { window.moveTo(0, 0); } catch(e) {}\n            }",
+                {"width": window_width, "height": window_height},
             )
         except Exception:
             pass
@@ -315,13 +320,14 @@ def register_chatgpt_account(
         if reused_browser:
             _step("init", "reused_browser")
         _cancel_check()
+        visible_viewport = ctx.visible_browser_viewport_size()
         context_kwargs: dict[str, Any] = (
             {"no_viewport": True}
             if using_camoufox
             else {
                 "viewport": {
-                    "width": 760 if not headless else 1280,
-                    "height": 480 if not headless else 800,
+                    "width": visible_viewport[0] if not headless else 1280,
+                    "height": visible_viewport[1] if not headless else 800,
                 },
                 "locale": "en-US",
                 "timezone_id": "America/New_York",
