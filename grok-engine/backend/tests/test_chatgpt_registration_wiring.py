@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import threading
+import traceback
 import unittest
 import uuid
 from pathlib import Path
@@ -15,11 +16,15 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 import app_core  # noqa: E402
+import chatgpt_browser  # noqa: E402
 import chatgpt_build_adapter  # noqa: E402
 from chatgpt_registration import flow, operations  # noqa: E402
 
 
 class ChatGPTRegistrationWiringTests(unittest.TestCase):
+    def test_browser_context_exposes_traceback_for_exception_reporting(self) -> None:
+        self.assertIs(traceback, chatgpt_browser._browser_context().traceback)
+
     def test_prepare_session_uses_selected_mailbox_source(self) -> None:
         captured: dict[str, object] = {}
         receiver = SimpleNamespace(account_id="mail-1", alias_index=0)
