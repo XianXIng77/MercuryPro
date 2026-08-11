@@ -84,6 +84,19 @@ class ChatGPTPasswordTransitionTests(unittest.TestCase):
         self.assertEqual("task_stopped", reason)
         self.assertEqual(2, page.waits)
 
+    def test_visible_debug_page_times_out_even_with_active_task(self) -> None:
+        page = _DebugPage()
+
+        reason = _wait_for_visible_debug_release(
+            page,
+            lambda: False,
+            poll_ms=50,
+            fallback_timeout_ms=100,
+        )
+
+        self.assertEqual("timeout", reason)
+        self.assertEqual(2, page.waits)
+
     def test_visible_debug_page_can_be_released_by_closing_window(self) -> None:
         page = _DebugPage(close_after=2)
 

@@ -17,6 +17,12 @@ export default defineConfig(() => {
         '/api': {
           target: `http://127.0.0.1:${process.env.GROK_ENGINE_PORT || '39181'}`,
           changeOrigin: true,
+          ws: true,
+          xfwd: true,
+        },
+        '/browser-debug': {
+          target: `http://127.0.0.1:${process.env.GROK_ENGINE_PORT || '39181'}`,
+          changeOrigin: true,
         },
       },
       // HMR is disabled in AI Studio via DISABLE_HMR env var.

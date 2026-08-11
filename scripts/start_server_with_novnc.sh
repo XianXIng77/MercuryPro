@@ -14,7 +14,6 @@ esac
 
 display="${DISPLAY:-:99}"
 vnc_port="${VNC_PORT:-5900}"
-novnc_port="${NOVNC_PORT:-6080}"
 screen="${VNC_SCREEN:-1440x900x24}"
 
 export DISPLAY="$display"
@@ -46,27 +45,14 @@ if ! kill -0 "$vnc_pid" 2>/dev/null; then
     exit 1
 fi
 
-echo "[MercuryPro] Starting noVNC web client on port $novnc_port"
-websockify \
-    --web=/usr/share/novnc \
-    "$novnc_port" \
-    "127.0.0.1:$vnc_port" &
-novnc_pid=$!
-
-sleep 1
-if ! kill -0 "$novnc_pid" 2>/dev/null; then
-    echo "[MercuryPro] noVNC web bridge failed to start" >&2
-    exit 1
-fi
-
 echo "[MercuryPro] Starting application server"
 python scripts/start_server.py &
 app_pid=$!
 
 cleanup() {
     trap - HUP INT TERM EXIT
-    kill "$app_pid" "$novnc_pid" "$vnc_pid" "$xvfb_pid" 2>/dev/null || true
-    wait "$app_pid" "$novnc_pid" "$vnc_pid" "$xvfb_pid" 2>/dev/null || true
+    kill "$app_pid" "$vnc_pid" "$xvfb_pid" 2>/dev/null || true
+    wait "$app_pid" "$vnc_pid" "$xvfb_pid" 2>/dev/null || true
 }
 
 trap 'cleanup; exit 0' HUP INT TERM
@@ -75,7 +61,6 @@ trap cleanup EXIT
 while :; do
     for process in \
         "$app_pid:application server" \
-        "$novnc_pid:noVNC web bridge" \
         "$vnc_pid:x11vnc" \
         "$xvfb_pid:Xvfb"
     do

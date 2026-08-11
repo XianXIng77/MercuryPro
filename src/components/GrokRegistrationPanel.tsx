@@ -26,6 +26,7 @@ import {
   GrokConfig,
   GrokMonitor,
   ChatGPTAccountRecord,
+  BrowserDebugStatus,
   RegistrationPerformanceProfile,
   RotationList,
   grokRegistrationApi,
@@ -35,7 +36,7 @@ import { StyledSelect, StyledSelectOption } from './StyledSelect';
 
 type ConfigTab = 'registration' | 'browser' | 'mail' | 'proxy' | 'import' | 'rotation';
 
-const NOVNC_DEBUG_URL = 'http://127.0.0.1:6080/vnc.html?autoconnect=true&reconnect=true&reconnect_delay=1000&resize=scale';
+const NOVNC_DEBUG_URL = '/browser-debug/vnc.html?autoconnect=true&reconnect=true&reconnect_delay=1000&resize=scale&path=/api/browser-debug/vnc';
 
 const DEFAULT_CONFIG: GrokConfig = {
   registration_target: 'grok',
@@ -386,12 +387,15 @@ function translateStructuredChatgptMessage(text: string): string {
     cs_test: '结账类型为 cs_test',
     failed: '获取失败',
     cancelled: '已取消',
-    debug_hold: '保留失败页面',
+    debug_hold: '短暂保留异常页面，便于查看',
+    debug_released: '调试结束，正在关闭浏览器',
     error: '失败',
     exception: '发生异常',
   };
   let detail = match[3] || '';
   detail = detail
+    .replace(/\buntil=task_stopped_window_closed_or_20_seconds\b/gi, '停止任务、关闭窗口或等待 20 秒后继续')
+    .replace(/\buntil=20_seconds\b/gi, '保留 20 秒')
     .replace(/\bemail=/gi, '邮箱=')
     .replace(/\battempt=/gi, '尝试次数=')
     .replace(/\bbirthdate=/gi, '生日=')
@@ -641,6 +645,7 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
   const [currentChatgptBatchId, setCurrentChatgptBatchId] = useState('');
   const [logClearBefore, setLogClearBefore] = useState(0);
   const [debugBrowserKey, setDebugBrowserKey] = useState(0);
+  const [browserDebugStatus, setBrowserDebugStatus] = useState<BrowserDebugStatus | null>(null);
   const rotationPageRef = useRef(1);
   const logContainerRef = useRef<HTMLDivElement | null>(null);
 
@@ -654,7 +659,16 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
   );
   const pausedBatches = activeBatches.filter((item) => ['paused', 'pausing'].includes(String(item.status || '').toLowerCase()));
   const runningBatches = activeBatches.filter((item) => !['paused', 'pausing'].includes(String(item.status || '').toLowerCase()));
-  const debugBrowserVisible = config.registration_target === 'chatgpt' ? !config.chatgpt_headless : !config.grok_headless;
+  const visibleBrowserRequested = config.registration_target === 'chatgpt' ? !config.chatgpt_headless : !config.grok_headless;
+  const debugBrowserVisible = visibleBrowserRequested && !!browserDebugStatus?.enabled && !!browserDebugStatus.viewer_available;
+  const debugBrowserDisabledReason = !visibleBrowserRequested
+    ? '请先在注册配置中开启“显示注册浏览器”'
+    : !browserDebugStatus?.enabled
+      ? '服务器尚未开启浏览器调试桌面'
+      : !browserDebugStatus.viewer_available
+        ? '服务器缺少 noVNC 页面资源'
+        : '';
+  const browserViewerUrl = browserDebugStatus?.viewer_url || NOVNC_DEBUG_URL;
 
   const setField = <K extends keyof GrokConfig>(key: K, value: GrokConfig[K]) => {
     setConfig((previous) => ({ ...previous, [key]: value }));
@@ -714,8 +728,12 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
   const load = async () => {
     setLoading(true);
     try {
-      const loaded = await grokRegistrationApi.config();
+      const [loaded, debugStatus] = await Promise.all([
+        grokRegistrationApi.config(),
+        grokRegistrationApi.browserDebugStatus().catch(() => null),
+      ]);
       setConfig(mergeConfig(loaded));
+      setBrowserDebugStatus(debugStatus);
       setServiceOnline(true);
       await refreshMonitor();
     } catch (error) {
@@ -1426,7 +1444,7 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
 
         <div className={`${cardClass} p-1.5 flex gap-1 overflow-x-auto`}>
           {tabs.map((item) => (
-            <button key={item.id} type="button" disabled={item.disabled} title={item.disabled ? '请先在注册配置中开启“显示注册浏览器”' : undefined} onClick={() => setTab(item.id)} className={`min-w-max flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-bold transition disabled:cursor-not-allowed ${tab === item.id ? 'bg-blue-600 text-white shadow-sm' : item.disabled ? `${theme.textSecondary} opacity-35` : `${theme.textSecondary} hover:bg-slate-500/10`}`}>
+            <button key={item.id} type="button" disabled={item.disabled} title={item.id === 'browser' && item.disabled ? debugBrowserDisabledReason : undefined} onClick={() => setTab(item.id)} className={`min-w-max flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-bold transition disabled:cursor-not-allowed ${tab === item.id ? 'bg-blue-600 text-white shadow-sm' : item.disabled ? `${theme.textSecondary} opacity-35` : `${theme.textSecondary} hover:bg-slate-500/10`}`}>
               {item.icon}{item.label}
             </button>
           ))}
@@ -1444,12 +1462,12 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
           <div className={`px-4 py-3 border-b ${theme.border} flex flex-col sm:flex-row sm:items-center justify-between gap-3`}>
             <div>
               <h3 className={`text-sm font-bold ${theme.textPrimary}`}>{tabs.find((item) => item.id === tab)?.label}</h3>
-              <p className={`text-[11px] ${theme.textSecondary}`}>{tab === 'rotation' ? (config.registration_target === 'chatgpt' ? '管理已注册 OpenAI 账号，并复制本地保存的 Access Token。' : '持续维护已注册账号状态，每 30 分钟自动执行全量探活。') : tab === 'browser' ? '通过本机 SSH 隧道查看 Linux 容器中的注册浏览器画面。' : `当前注册目标：${config.registration_target === 'chatgpt' ? 'ChatGPT（OpenAI）' : 'Grok（xAI）'}。`}</p>
+              <p className={`text-[11px] ${theme.textSecondary}`}>{tab === 'rotation' ? (config.registration_target === 'chatgpt' ? '管理已注册 OpenAI 账号，并复制本地保存的 Access Token。' : '持续维护已注册账号状态，每 30 分钟自动执行全量探活。') : tab === 'browser' ? '通过 MercuryPro 主站实时查看 Linux 容器中的注册浏览器画面。' : `当前注册目标：${config.registration_target === 'chatgpt' ? 'ChatGPT（OpenAI）' : 'Grok（xAI）'}。`}</p>
             </div>
             <div className="flex items-center gap-2">
               {tab === 'browser' ? <>
                 <button type="button" onClick={() => setDebugBrowserKey((value) => value + 1)} className={`px-3 py-2 rounded-lg border text-xs font-bold flex items-center gap-1.5 ${theme.border} ${theme.textPrimary}`}><RefreshCw className="w-3.5 h-3.5" />重新连接</button>
-                <button type="button" onClick={() => window.open(NOVNC_DEBUG_URL, '_blank', 'noopener,noreferrer')} className="px-3 py-2 rounded-lg bg-blue-600 text-white text-xs font-bold flex items-center gap-1.5"><Globe2 className="w-3.5 h-3.5" />新窗口打开</button>
+                <button type="button" onClick={() => window.open(browserViewerUrl, '_blank', 'noopener,noreferrer')} className="px-3 py-2 rounded-lg bg-blue-600 text-white text-xs font-bold flex items-center gap-1.5"><Globe2 className="w-3.5 h-3.5" />新窗口打开</button>
               </> : tab === 'rotation' ? config.registration_target === 'chatgpt' ? <>
                 <button onClick={() => void loadChatgptAccounts()} disabled={chatgptAccountsLoading} className={`px-3 py-2 rounded-lg border text-xs font-bold flex items-center gap-1.5 ${theme.border} ${theme.textPrimary}`}><RefreshCw className={`w-3.5 h-3.5 ${chatgptAccountsLoading ? 'animate-spin' : ''}`} />刷新</button>
                 <button onClick={() => void copyChatgptAccountTokens(chatgptAccountSelected)} disabled={!!busy || !chatgptAccountSelected.length} className="px-3 py-2 rounded-lg bg-blue-600 text-white text-xs font-bold flex items-center gap-1.5 disabled:opacity-40">{busy === 'copy-selected-at' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Copy className="w-3.5 h-3.5" />}复制所选 AT</button>
@@ -1669,7 +1687,7 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
                 </div>}
 
                 {tab === 'browser' && <div className="h-[calc(100vh-330px)] min-h-[560px] overflow-hidden rounded-xl border border-slate-700 bg-black shadow-inner">
-                  <iframe key={debugBrowserKey} src={NOVNC_DEBUG_URL} title="注册浏览器实时画面" allow="clipboard-read; clipboard-write; fullscreen" allowFullScreen className="block h-full w-full border-0 bg-black" />
+                  <iframe key={debugBrowserKey} src={browserViewerUrl} title="注册浏览器实时画面" allow="clipboard-read; clipboard-write; fullscreen" allowFullScreen className="block h-full w-full border-0 bg-black" />
                 </div>}
 
                 {tab === 'import' && (config.registration_target === 'chatgpt' ? <div className={`p-5 rounded-xl border ${theme.border} ${isDark ? 'bg-slate-900/50' : 'bg-slate-50'}`}>

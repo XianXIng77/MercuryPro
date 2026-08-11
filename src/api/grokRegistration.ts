@@ -164,6 +164,12 @@ export interface CheckoutProbe {
   reason?: string;
 }
 
+export interface BrowserDebugStatus {
+  enabled: boolean;
+  viewer_available: boolean;
+  viewer_url: string;
+}
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
     headers: { 'Content-Type': 'application/json' },
@@ -180,6 +186,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 
 export const grokRegistrationApi = {
   health: () => request<Record<string, unknown>>('/api/grok/health'),
+  browserDebugStatus: () => request<BrowserDebugStatus>('/api/browser-debug/status'),
   config: () => request<GrokConfig>('/api/grok/config'),
   performance: (provider: GrokConfig['captcha_provider']) => request<RegistrationPerformanceProfile>(`/api/grok/performance?provider=${encodeURIComponent(provider)}`),
   saveConfig: (config: GrokConfig) => request<{ ok: boolean; config: GrokConfig }>('/api/grok/config', { method: 'PUT', body: JSON.stringify(config) }),

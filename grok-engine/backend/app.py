@@ -70,6 +70,7 @@ import app_network as _app_network
 import app_routes as _app_routes
 from mercury_ai import router as mercury_ai_router
 from mercury_mail import router as mercury_mail_router
+from browser_debug import router as browser_debug_router
 
 BACKEND_DIR = Path(__file__).resolve().parent
 APP_DIR = BACKEND_DIR.parent
@@ -349,6 +350,7 @@ app = FastAPI(title="MercuryPro", version="2.0.0")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.include_router(mercury_mail_router)
 app.include_router(mercury_ai_router)
+app.include_router(browser_debug_router)
 
 
 @app.middleware("http")
