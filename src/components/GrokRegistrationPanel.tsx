@@ -36,7 +36,7 @@ import { StyledSelect, StyledSelectOption } from './StyledSelect';
 
 type ConfigTab = 'registration' | 'browser' | 'mail' | 'proxy' | 'import' | 'rotation';
 
-const NOVNC_DEBUG_URL = '/browser-debug/vnc.html?autoconnect=true&reconnect=true&reconnect_delay=1000&resize=scale&path=/api/browser-debug/vnc';
+const NOVNC_DEBUG_URL = '/browser-debug/vnc.html?autoconnect=true&reconnect=true&reconnect_delay=1000&resize=scale&path=api/browser-debug/vnc';
 
 const DEFAULT_CONFIG: GrokConfig = {
   registration_target: 'grok',

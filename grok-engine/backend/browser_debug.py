@@ -61,7 +61,7 @@ def browser_debug_status() -> dict[str, object]:
     return {
         "enabled": enabled,
         "viewer_available": enabled and (root / "vnc.html").is_file(),
-        "viewer_url": "/browser-debug/vnc.html?autoconnect=true&reconnect=true&reconnect_delay=1000&resize=scale&path=/api/browser-debug/vnc",
+        "viewer_url": "/browser-debug/vnc.html?autoconnect=true&reconnect=true&reconnect_delay=1000&resize=scale&path=api/browser-debug/vnc",
     }
 
 

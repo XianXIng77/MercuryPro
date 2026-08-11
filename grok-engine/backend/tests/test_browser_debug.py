@@ -14,6 +14,7 @@ if str(BACKEND_DIR) not in sys.path:
 
 from browser_debug import (  # noqa: E402
     browser_debug_enabled,
+    browser_debug_status,
     browser_debug_vnc,
     resolve_novnc_asset,
     same_origin_websocket_allowed,
@@ -21,6 +22,12 @@ from browser_debug import (  # noqa: E402
 
 
 class BrowserDebugHelpersTests(unittest.TestCase):
+    def test_viewer_url_does_not_generate_double_slash_websocket_path(self) -> None:
+        viewer_url = str(browser_debug_status()["viewer_url"])
+
+        self.assertIn("path=api/browser-debug/vnc", viewer_url)
+        self.assertNotIn("path=/api/browser-debug/vnc", viewer_url)
+
     def test_debug_desktop_requires_explicit_enablement(self) -> None:
         self.assertTrue(browser_debug_enabled({"BROWSER_DEBUG_DESKTOP_ENABLED": "true"}))
         self.assertFalse(browser_debug_enabled({"BROWSER_DEBUG_DESKTOP_ENABLED": "false"}))
