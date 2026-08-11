@@ -5,6 +5,15 @@ from __future__ import annotations
 from typing import Any
 
 
+def _browser_debug_desktop_disabled(environ: Any) -> bool:
+    value = environ.get("BROWSER_DEBUG_DESKTOP_ENABLED")
+    return bool(
+        value is not None
+        and str(value).strip().lower() not in {"1", "true", "yes", "on"}
+        and str(environ.get("DISPLAY") or "").strip() == ":99"
+    )
+
+
 
 def get_config(ctx):
     return ctx.load_config()
@@ -229,6 +238,18 @@ def start_register(ctx, settings=None, paused=False):
     target = str(cfg.get("registration_target") or "grok").strip().lower()
     if target not in ("grok", "chatgpt"):
         target = "grok"
+    if target == "chatgpt" and not bool(cfg.get("chatgpt_headless", True)):
+        import os
+
+        if _browser_debug_desktop_disabled(os.environ):
+            raise ctx.HTTPException(
+                status_code=400,
+                detail=(
+                    "Linux 浏览器调试桌面未开启，请设置 "
+                    "BROWSER_DEBUG_DESKTOP_ENABLED=true 并重建容器，"
+                    "或关闭“显示注册浏览器”"
+                ),
+            )
     if target == "chatgpt" and bool(cfg.get("chatgpt_checkout_probe_enabled")):
         checkout_proxy = str(cfg.get("chatgpt_checkout_proxy") or "").strip()
         if not checkout_proxy:

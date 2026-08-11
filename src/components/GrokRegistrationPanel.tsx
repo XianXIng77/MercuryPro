@@ -1478,7 +1478,7 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                     <Toggle label="自动调优错峰" checked={config.auto_tune_enabled} onChange={(value) => setField('auto_tune_enabled', value)} />
                     <Toggle label="导入前测活" checked={config.pre_import_probe_enabled} onChange={(value) => setField('pre_import_probe_enabled', value)} />
-                    <Toggle label="显示注册浏览器" hint="仅建议调试时开启" checked={config.registration_target === 'chatgpt' ? !config.chatgpt_headless : !config.grok_headless} onChange={(value) => config.registration_target === 'chatgpt' ? setField('chatgpt_headless', !value) : setField('grok_headless', !value)} />
+                    <Toggle label="显示注册浏览器" hint={config.registration_target === 'chatgpt' ? 'Linux Docker 需同时设置 BROWSER_DEBUG_DESKTOP_ENABLED=true，再通过本机 6080 端口查看' : '仅建议调试时开启'} checked={config.registration_target === 'chatgpt' ? !config.chatgpt_headless : !config.grok_headless} onChange={(value) => config.registration_target === 'chatgpt' ? setField('chatgpt_headless', !value) : setField('grok_headless', !value)} />
                   </div>
 
                   {config.registration_target === 'chatgpt' && <div className={`rounded-xl border p-4 space-y-3 ${theme.border} ${isDark ? 'bg-slate-900/45' : 'bg-slate-50/70'}`}>

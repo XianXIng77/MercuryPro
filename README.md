@@ -210,6 +210,39 @@ http://127.0.0.1:9100
 GET http://127.0.0.1:9100/api/health
 ```
 
+### 查看 Linux 容器中的注册浏览器
+
+容器内置 Xvfb + noVNC 调试桌面，默认不启动。需要调试时先在 `.env` 设置：
+
+```env
+BROWSER_DEBUG_DESKTOP_ENABLED=true
+```
+
+然后执行 `docker compose up -d --force-recreate`，并在注册配置中打开
+“显示注册浏览器”。noVNC 只绑定服务器本机 `127.0.0.1:6080`，在自己的电脑建立 SSH 隧道：
+
+```bash
+ssh -L 6080:127.0.0.1:6080 用户名@服务器地址
+```
+
+保持 SSH 连接，再打开：
+
+```text
+http://127.0.0.1:6080/vnc.html?autoconnect=true&resize=scale
+```
+
+即可实时查看 Camoufox 的页面填写、点击和报错画面。该桌面没有额外登录验证，
+不要把 `6080` 端口直接绑定到公网；如需修改本机端口，可在 `.env` 设置
+`NOVNC_HOST_PORT`。
+
+调试结束后关闭“显示注册浏览器”，再把 `.env` 改回：
+
+```env
+BROWSER_DEBUG_DESKTOP_ENABLED=false
+```
+
+执行 `docker compose up -d --force-recreate` 后，Xvfb、x11vnc 和 noVNC 均不会启动。
+
 停止服务：
 
 ```bash
