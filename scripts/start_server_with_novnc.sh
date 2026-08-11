@@ -60,4 +60,33 @@ if ! kill -0 "$novnc_pid" 2>/dev/null; then
 fi
 
 echo "[MercuryPro] Starting application server"
-exec python scripts/start_server.py
+python scripts/start_server.py &
+app_pid=$!
+
+cleanup() {
+    trap - HUP INT TERM EXIT
+    kill "$app_pid" "$novnc_pid" "$vnc_pid" "$xvfb_pid" 2>/dev/null || true
+    wait "$app_pid" "$novnc_pid" "$vnc_pid" "$xvfb_pid" 2>/dev/null || true
+}
+
+trap 'cleanup; exit 0' HUP INT TERM
+trap cleanup EXIT
+
+while :; do
+    for process in \
+        "$app_pid:application server" \
+        "$novnc_pid:noVNC web bridge" \
+        "$vnc_pid:x11vnc" \
+        "$xvfb_pid:Xvfb"
+    do
+        pid="${process%%:*}"
+        label="${process#*:}"
+        if ! kill -0 "$pid" 2>/dev/null; then
+            status=0
+            wait "$pid" || status=$?
+            echo "[MercuryPro] $label exited unexpectedly (status=$status); stopping container for automatic recovery" >&2
+            exit "$status"
+        fi
+    done
+    sleep 2
+done

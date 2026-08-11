@@ -33,7 +33,9 @@ import {
 import { ConfirmDialog } from './ConfirmDialog';
 import { StyledSelect, StyledSelectOption } from './StyledSelect';
 
-type ConfigTab = 'registration' | 'mail' | 'proxy' | 'import' | 'rotation';
+type ConfigTab = 'registration' | 'browser' | 'mail' | 'proxy' | 'import' | 'rotation';
+
+const NOVNC_DEBUG_URL = 'http://127.0.0.1:6080/vnc.html?autoconnect=true&reconnect=true&reconnect_delay=1000&resize=scale';
 
 const DEFAULT_CONFIG: GrokConfig = {
   registration_target: 'grok',
@@ -638,6 +640,7 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
   const [chatgptAccountsLoading, setChatgptAccountsLoading] = useState(false);
   const [currentChatgptBatchId, setCurrentChatgptBatchId] = useState('');
   const [logClearBefore, setLogClearBefore] = useState(0);
+  const [debugBrowserKey, setDebugBrowserKey] = useState(0);
   const rotationPageRef = useRef(1);
   const logContainerRef = useRef<HTMLDivElement | null>(null);
 
@@ -651,6 +654,7 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
   );
   const pausedBatches = activeBatches.filter((item) => ['paused', 'pausing'].includes(String(item.status || '').toLowerCase()));
   const runningBatches = activeBatches.filter((item) => !['paused', 'pausing'].includes(String(item.status || '').toLowerCase()));
+  const debugBrowserVisible = config.registration_target === 'chatgpt' ? !config.chatgpt_headless : !config.grok_headless;
 
   const setField = <K extends keyof GrokConfig>(key: K, value: GrokConfig[K]) => {
     setConfig((previous) => ({ ...previous, [key]: value }));
@@ -1193,8 +1197,9 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
     return () => window.clearInterval(timer);
   }, [tab, config.registration_target]);
 
-  const tabs: Array<{ id: ConfigTab; label: string; icon: React.ReactNode }> = [
+  const tabs: Array<{ id: ConfigTab; label: string; icon: React.ReactNode; disabled?: boolean }> = [
     { id: 'registration', label: '注册配置', icon: <Settings2 className="w-4 h-4" /> },
+    { id: 'browser', label: '显示浏览器', icon: <Globe2 className="w-4 h-4" />, disabled: !debugBrowserVisible },
     { id: 'mail', label: '邮箱配置', icon: <Mail className="w-4 h-4" /> },
     { id: 'proxy', label: '代理配置', icon: <Globe2 className="w-4 h-4" /> },
     { id: 'import', label: config.registration_target === 'chatgpt' ? '自动导入（暂不启用）' : '自动导入配置', icon: <UploadCloud className="w-4 h-4" /> },
@@ -1421,7 +1426,7 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
 
         <div className={`${cardClass} p-1.5 flex gap-1 overflow-x-auto`}>
           {tabs.map((item) => (
-            <button key={item.id} onClick={() => setTab(item.id)} className={`min-w-max flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-bold transition ${tab === item.id ? 'bg-blue-600 text-white shadow-sm' : `${theme.textSecondary} hover:bg-slate-500/10`}`}>
+            <button key={item.id} type="button" disabled={item.disabled} title={item.disabled ? '请先在注册配置中开启“显示注册浏览器”' : undefined} onClick={() => setTab(item.id)} className={`min-w-max flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-bold transition disabled:cursor-not-allowed ${tab === item.id ? 'bg-blue-600 text-white shadow-sm' : item.disabled ? `${theme.textSecondary} opacity-35` : `${theme.textSecondary} hover:bg-slate-500/10`}`}>
               {item.icon}{item.label}
             </button>
           ))}
@@ -1434,15 +1439,18 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
           </div>
         )}
 
-        <div className={`relative ${tab === 'rotation' ? '' : 'space-y-4 xl:space-y-0 xl:pr-[376px]'}`}>
+        <div className={`relative ${tab === 'rotation' || tab === 'browser' ? '' : 'space-y-4 xl:space-y-0 xl:pr-[376px]'}`}>
         <section className={`${cardClass} min-w-0 overflow-hidden flex flex-col ${tab === 'rotation' ? '' : 'xl:min-h-[calc(100vh-260px)]'}`}>
           <div className={`px-4 py-3 border-b ${theme.border} flex flex-col sm:flex-row sm:items-center justify-between gap-3`}>
             <div>
               <h3 className={`text-sm font-bold ${theme.textPrimary}`}>{tabs.find((item) => item.id === tab)?.label}</h3>
-              <p className={`text-[11px] ${theme.textSecondary}`}>{tab === 'rotation' ? (config.registration_target === 'chatgpt' ? '管理已注册 OpenAI 账号，并复制本地保存的 Access Token。' : '持续维护已注册账号状态，每 30 分钟自动执行全量探活。') : `当前注册目标：${config.registration_target === 'chatgpt' ? 'ChatGPT（OpenAI）' : 'Grok（xAI）'}。`}</p>
+              <p className={`text-[11px] ${theme.textSecondary}`}>{tab === 'rotation' ? (config.registration_target === 'chatgpt' ? '管理已注册 OpenAI 账号，并复制本地保存的 Access Token。' : '持续维护已注册账号状态，每 30 分钟自动执行全量探活。') : tab === 'browser' ? '通过本机 SSH 隧道查看 Linux 容器中的注册浏览器画面。' : `当前注册目标：${config.registration_target === 'chatgpt' ? 'ChatGPT（OpenAI）' : 'Grok（xAI）'}。`}</p>
             </div>
             <div className="flex items-center gap-2">
-              {tab === 'rotation' ? config.registration_target === 'chatgpt' ? <>
+              {tab === 'browser' ? <>
+                <button type="button" onClick={() => setDebugBrowserKey((value) => value + 1)} className={`px-3 py-2 rounded-lg border text-xs font-bold flex items-center gap-1.5 ${theme.border} ${theme.textPrimary}`}><RefreshCw className="w-3.5 h-3.5" />重新连接</button>
+                <button type="button" onClick={() => window.open(NOVNC_DEBUG_URL, '_blank', 'noopener,noreferrer')} className="px-3 py-2 rounded-lg bg-blue-600 text-white text-xs font-bold flex items-center gap-1.5"><Globe2 className="w-3.5 h-3.5" />新窗口打开</button>
+              </> : tab === 'rotation' ? config.registration_target === 'chatgpt' ? <>
                 <button onClick={() => void loadChatgptAccounts()} disabled={chatgptAccountsLoading} className={`px-3 py-2 rounded-lg border text-xs font-bold flex items-center gap-1.5 ${theme.border} ${theme.textPrimary}`}><RefreshCw className={`w-3.5 h-3.5 ${chatgptAccountsLoading ? 'animate-spin' : ''}`} />刷新</button>
                 <button onClick={() => void copyChatgptAccountTokens(chatgptAccountSelected)} disabled={!!busy || !chatgptAccountSelected.length} className="px-3 py-2 rounded-lg bg-blue-600 text-white text-xs font-bold flex items-center gap-1.5 disabled:opacity-40">{busy === 'copy-selected-at' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Copy className="w-3.5 h-3.5" />}复制所选 AT</button>
                 <button onClick={() => void copyChatgptAccountTokens([], true)} disabled={!!busy || !chatgptAccounts.length} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-xs font-bold flex items-center gap-1.5 disabled:opacity-40">{busy === 'copy-all-at' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Copy className="w-3.5 h-3.5" />}复制全部 AT</button>
@@ -1478,7 +1486,7 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                     <Toggle label="自动调优错峰" checked={config.auto_tune_enabled} onChange={(value) => setField('auto_tune_enabled', value)} />
                     <Toggle label="导入前测活" checked={config.pre_import_probe_enabled} onChange={(value) => setField('pre_import_probe_enabled', value)} />
-                    <Toggle label="显示注册浏览器" hint={config.registration_target === 'chatgpt' ? 'Linux Docker 需同时设置 BROWSER_DEBUG_DESKTOP_ENABLED=true，再通过本机 6080 端口查看' : '仅建议调试时开启'} checked={config.registration_target === 'chatgpt' ? !config.chatgpt_headless : !config.grok_headless} onChange={(value) => config.registration_target === 'chatgpt' ? setField('chatgpt_headless', !value) : setField('grok_headless', !value)} />
+                    <Toggle label="显示注册浏览器" checked={config.registration_target === 'chatgpt' ? !config.chatgpt_headless : !config.grok_headless} onChange={(value) => config.registration_target === 'chatgpt' ? setField('chatgpt_headless', !value) : setField('grok_headless', !value)} />
                   </div>
 
                   {config.registration_target === 'chatgpt' && <div className={`rounded-xl border p-4 space-y-3 ${theme.border} ${isDark ? 'bg-slate-900/45' : 'bg-slate-50/70'}`}>
@@ -1660,6 +1668,10 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
                   </div>}
                 </div>}
 
+                {tab === 'browser' && <div className="h-[calc(100vh-330px)] min-h-[560px] overflow-hidden rounded-xl border border-slate-700 bg-black shadow-inner">
+                  <iframe key={debugBrowserKey} src={NOVNC_DEBUG_URL} title="注册浏览器实时画面" allow="clipboard-read; clipboard-write; fullscreen" allowFullScreen className="block h-full w-full border-0 bg-black" />
+                </div>}
+
                 {tab === 'import' && (config.registration_target === 'chatgpt' ? <div className={`p-5 rounded-xl border ${theme.border} ${isDark ? 'bg-slate-900/50' : 'bg-slate-50'}`}>
                   <div className="flex items-start gap-3"><ShieldCheck className="w-5 h-5 mt-0.5 text-emerald-500 shrink-0" /><div><strong className={`text-sm ${theme.textPrimary}`}>OpenAI 自动导入暂不启用</strong><p className={`mt-1 text-xs leading-5 ${theme.textSecondary}`}>当前 OpenAI 注册在获取并保存 Session / Access Token 后直接完成，不执行 Codex Agent Identity，也不会导入 Sub2API 或 CPA。已保存的 AT 可在“账号管理”中复制。</p></div></div>
                 </div> : <div className="space-y-5">
@@ -1776,7 +1788,7 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
           </div>
         </section>
 
-        {tab !== 'rotation' && <aside className="min-w-0 flex flex-col gap-4 xl:absolute xl:inset-y-0 xl:right-0 xl:w-[360px] xl:grid xl:grid-rows-[minmax(0,1fr)_minmax(0,1.15fr)]">
+        {tab !== 'rotation' && tab !== 'browser' && <aside className="min-w-0 flex flex-col gap-4 xl:absolute xl:inset-y-0 xl:right-0 xl:w-[360px] xl:grid xl:grid-rows-[minmax(0,1fr)_minmax(0,1.15fr)]">
           <section className={`${cardClass} order-2 min-h-0 overflow-hidden flex flex-col`}>
             <div className={`px-3 py-2.5 border-b ${theme.border}`}>
               <div className="flex items-center justify-between gap-3">
