@@ -25,6 +25,21 @@ class ChatGPTRegistrationWiringTests(unittest.TestCase):
     def test_browser_context_exposes_traceback_for_exception_reporting(self) -> None:
         self.assertIs(traceback, chatgpt_browser._browser_context().traceback)
 
+    def test_authenticated_proxy_is_split_for_camoufox(self) -> None:
+        proxy_urls = chatgpt_build_adapter._proxy_pool(
+            "us.1024proxy.io:3000:user-region-DE-sid-Test123-t-5:secret"
+        )
+
+        self.assertEqual(1, len(proxy_urls))
+        self.assertEqual(
+            {
+                "server": "http://us.1024proxy.io:3000",
+                "username": "user-region-DE-sid-Test123-t-5",
+                "password": "secret",
+            },
+            chatgpt_build_adapter._proxy_for_browser(proxy_urls[0]),
+        )
+
     def test_prepare_session_uses_selected_mailbox_source(self) -> None:
         captured: dict[str, object] = {}
         receiver = SimpleNamespace(account_id="mail-1", alias_index=0)

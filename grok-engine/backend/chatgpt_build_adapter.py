@@ -494,14 +494,31 @@ def _pick_proxy_from_pool(
 
 
 def _proxy_for_browser(proxy_url: str) -> dict[str, str] | None:
-    """Convert proxy URL to browser context proxy dict."""
-    if not proxy_url or not proxy_url.strip():
+    """Convert a proxy URL into Playwright/Camoufox proxy settings."""
+    raw = str(proxy_url or "").strip()
+    if not raw:
         return None
-    url = proxy_url.strip()
-    # Ensure scheme
-    if "://" not in url:
-        url = f"http://{url}"
-    return {"server": url}
+    try:
+        from urllib.parse import unquote, urlparse
+
+        source = raw if "://" in raw else f"http://{raw}"
+        parsed = urlparse(source)
+        if not parsed.hostname:
+            return {"server": source}
+        host = parsed.hostname
+        if ":" in host and not host.startswith("["):
+            host = f"[{host}]"
+        server = f"{parsed.scheme or 'http'}://{host}"
+        if parsed.port:
+            server += f":{parsed.port}"
+        result = {"server": server}
+        if parsed.username:
+            result["username"] = unquote(parsed.username)
+        if parsed.password:
+            result["password"] = unquote(parsed.password)
+        return result
+    except Exception:
+        return {"server": raw if "://" in raw else f"http://{raw}"}
 
 
 # --------------------------------------------------------------------------- #
