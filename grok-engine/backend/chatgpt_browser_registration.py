@@ -21,6 +21,34 @@ def _wait_for_password_transition(ctx, page, check_cancel, timeout=12.0):
     return state
 
 
+def _wait_for_visible_debug_release(
+    page,
+    should_cancel=None,
+    *,
+    poll_ms=500,
+    fallback_timeout_ms=20000,
+):
+    """Keep a visible page open until the operator releases it."""
+    interval = max(50, int(poll_ms or 500))
+    waited = 0
+    while True:
+        if should_cancel is not None:
+            try:
+                if should_cancel():
+                    return "task_stopped"
+            except Exception:
+                return "task_stopped"
+        elif waited >= max(0, int(fallback_timeout_ms or 0)):
+            return "timeout"
+        try:
+            if page.is_closed():
+                return "window_closed"
+            page.wait_for_timeout(interval)
+        except Exception:
+            return "window_closed"
+        waited += interval
+
+
 
 def register_chatgpt_account(
     ctx,
@@ -103,15 +131,18 @@ def register_chatgpt_account(
                 ctx.time.sleep(chunk / 1000.0)
             remaining -= chunk
 
-    def _hold_visible_failure() -> None:
-        """Keep a failed visible browser open briefly for visual diagnosis."""
+    def _hold_visible_browser() -> str:
+        """Keep the final visible page open for operator diagnosis."""
         if headless or page is None:
-            return
-        try:
-            _step("flow", "debug_hold", seconds=20)
-            page.wait_for_timeout(20000)
-        except Exception:
-            pass
+            return "disabled"
+        _step(
+            "flow",
+            "debug_hold",
+            until="task_stopped_or_window_closed" if should_cancel else "20_seconds",
+        )
+        reason = _wait_for_visible_debug_release(page, should_cancel)
+        _step("flow", "debug_released", reason=reason)
+        return reason
 
     def _enforce_visible_window() -> None:
         if headless or page is None:
@@ -820,7 +851,6 @@ def register_chatgpt_account(
         }
     except ctx.ChatGPTRegistrationError as e:
         _step("flow", "error", error=str(e)[:200])
-        _hold_visible_failure()
         return {"ok": False, "email": email, "error": str(e), "steps": steps}
     except Exception as e:
         _step(
@@ -829,7 +859,6 @@ def register_chatgpt_account(
             error=str(e)[:200],
             traceback=ctx.traceback.format_exc()[-500:],
         )
-        _hold_visible_failure()
         return {
             "ok": False,
             "email": email,
@@ -837,6 +866,7 @@ def register_chatgpt_account(
             "steps": steps,
         }
     finally:
+        _hold_visible_browser()
         try:
             if page:
                 page.evaluate(
