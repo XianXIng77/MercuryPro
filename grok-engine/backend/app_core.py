@@ -77,10 +77,14 @@ def load_config(ctx):
             data["chatgpt_headless"] = True
         if "grok_headless" not in loaded:
             data["grok_headless"] = True
-        # ChatGPT registration is temporarily disabled. Existing account,
-        # import and probe data remain available; only the registration target
-        # is migrated back to Grok.
-        data["registration_target"] = "grok"
+        registration_target = str(
+            data.get("registration_target") or "grok"
+        ).strip().lower()
+        data["registration_target"] = (
+            registration_target
+            if registration_target in {"grok", "chatgpt"}
+            else "grok"
+        )
         data["registration_mode"] = "browser"
         selected_format = str(data.get("registration_json_format") or "cpa").lower()
         data["registration_json_format"] = (
@@ -129,7 +133,14 @@ def save_config(ctx, data):
         selected_format if selected_format in {"cpa", "sub2api"} else "cpa"
     )
     clean["auto_import_target"] = clean["registration_json_format"]
-    clean["registration_target"] = "grok"
+    registration_target = str(
+        clean.get("registration_target") or "grok"
+    ).strip().lower()
+    clean["registration_target"] = (
+        registration_target
+        if registration_target in {"grok", "chatgpt"}
+        else "grok"
+    )
     clean["registration_mode"] = "browser"
     clean["sub2api_chatgpt_models"] = list(ctx.CHATGPT_SUB2API_MODELS)
     with ctx._config_lock:
@@ -219,6 +230,8 @@ def _post_registration_config(ctx, cfg):
         "registration_target": registration_target,
         "registration_mode": registration_mode,
         "step_delay_ms": int(cfg.get("chatgpt_step_delay_ms") or 0),
+        "checkout_probe_enabled": bool(cfg.get("chatgpt_checkout_probe_enabled")),
+        "checkout_proxy": str(cfg.get("chatgpt_checkout_proxy") or "").strip(),
         "pipeline_concurrency": int(cfg.get("concurrency") or 1),
         "probe_concurrency": int(
             cfg.get("probe_concurrency") or cfg.get("concurrency") or 1

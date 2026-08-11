@@ -3,8 +3,11 @@ import {
   CheckCircle2,
   Activity,
   CircleDot,
+  Copy,
   FileText,
   Globe2,
+  Eye,
+  EyeOff,
   ListChecks,
   Loader2,
   Mail,
@@ -22,6 +25,7 @@ import type { StylePreset } from '../types';
 import {
   GrokConfig,
   GrokMonitor,
+  ChatGPTAccountRecord,
   RegistrationPerformanceProfile,
   RotationList,
   grokRegistrationApi,
@@ -40,6 +44,10 @@ const DEFAULT_CONFIG: GrokConfig = {
   auto_tune_enabled: false,
   pre_import_probe_enabled: true,
   grok_headless: true,
+  chatgpt_headless: true,
+  chatgpt_step_delay_ms: 3000,
+  chatgpt_checkout_probe_enabled: false,
+  chatgpt_checkout_proxy: '',
   captcha_provider: 'local',
   local_solver_url: 'http://127.0.0.1:5072',
   yescaptcha_key: '',
@@ -93,7 +101,7 @@ function mergeConfig(value: Partial<GrokConfig>): GrokConfig {
   return {
     ...DEFAULT_CONFIG,
     ...value,
-    registration_target: 'grok',
+    registration_target: value.registration_target === 'chatgpt' ? 'chatgpt' : 'grok',
     registration_mode: 'browser',
     mail_provider: value.mail_provider === 'hotmail_local' ? 'hotmail_local' : 'custom',
     hotmail_account_source: value.hotmail_account_source === 'manual' ? 'manual' : 'mail_management',
@@ -313,11 +321,97 @@ function translateStructuredXaiMessage(text: string): string {
   return `${names[match[1]] || match[1]}：${states[match[2]] || match[2]}${detail}`;
 }
 
+function translateStructuredChatgptMessage(text: string): string {
+  const match = text.match(/^\[chatgpt\]\s+([^:]+):\s*([^ (]+)(.*)$/i);
+  if (!match) return '';
+  const names: Record<string, string> = {
+    init: '初始化浏览器',
+    navigate: '打开 ChatGPT 登录页',
+    cookie_consent: '处理 Cookie 授权',
+    signup_page: '选择注册入口',
+    email: '填写注册邮箱',
+    password: '填写注册密码',
+    recovery: '恢复认证页面',
+    verification: '处理邮箱验证码',
+    profile: '填写账号资料',
+    completion: '完成 OpenAI 注册',
+    passkey: '处理通行密钥',
+    session: '获取 Session / AT',
+    plus_trial: '检测 Plus 试用资格',
+    checkout_kind: '检测结账类型',
+    flow: 'OpenAI 注册流程',
+  };
+  const states: Record<string, string> = {
+    starting: '开始执行',
+    launched_camoufox: '已启动 Camoufox 浏览器',
+    launched_chromium: '已启动 Chromium 浏览器',
+    reused_browser: '正在复用当前并发浏览器',
+    private_context_created: '已创建全新隐私上下文',
+    loading: '正在加载',
+    checking: '正在检查',
+    skipped: '未开启，已跳过',
+    detected: '已检测到 Cookie 弹窗',
+    clicking: '正在点击“全部接受”',
+    accepted: '已点击“Accept all”',
+    click_not_applied: '点击后弹窗仍存在，正在重试',
+    unsupported: '已检测到弹窗，但未识别接受按钮',
+    not_present: '未出现 Cookie 弹窗，无需处理',
+    finding_signup: '正在查找注册入口',
+    already_on_signup: '当前已在注册页面',
+    filling: '正在填写',
+    filled: '填写完成',
+    submitted: '已提交',
+    auth_retry: '正在重试认证页面',
+    waiting_for_form: '正在等待验证码输入框',
+    waiting_for_code: '正在等待邮箱验证码',
+    code_received: '已收到验证码',
+    code_filled: '验证码已填写',
+    code_submitted: '验证码已提交',
+    waiting_for_result: '正在等待验证结果',
+    still_processing: '验证仍在处理中',
+    resent: '已重新发送验证码',
+    prefilling_combined: '正在预填账号资料',
+    skipping: '正在跳过',
+    waiting: '正在等待注册完成',
+    done: '已完成',
+    extracting: '正在提取 Access Token',
+    extracted: 'Access Token 已提取',
+    eligible: '有 Plus 试用资格',
+    ineligible: '无 Plus 试用资格',
+    unknown: '检测结果暂时无法确认',
+    oaics: '结账类型为 oaics',
+    cs_live: '结账类型为 cs_live',
+    cs_test: '结账类型为 cs_test',
+    failed: '获取失败',
+    cancelled: '已取消',
+    debug_hold: '保留失败页面',
+    error: '失败',
+    exception: '发生异常',
+  };
+  let detail = match[3] || '';
+  detail = detail
+    .replace(/\bemail=/gi, '邮箱=')
+    .replace(/\battempt=/gi, '尝试次数=')
+    .replace(/\bbirthdate=/gi, '生日=')
+    .replace(/\bmode=/gi, '输入模式=')
+    .replace(/\btimeout_sec=/gi, '超时秒数=')
+    .replace(/\bseconds=/gi, '秒数=')
+    .replace(/\burl=/gi, '页面=')
+    .replace(/\blanguage=/gi, '语言=')
+    .replace(/\blabel=/gi, '按钮=')
+    .replace(/\bamount=/gi, '今日应付=')
+    .replace(/\breason=/gi, '说明=')
+    .replace(/\berror=/gi, '原因=');
+  return `${names[match[1]] || match[1]}：${states[match[2]] || match[2]}${detail}`;
+}
+
 function translateLogMessage(value?: string): string {
   const text = String(value || '').split(/\r?\nCall log:/i, 1)[0].trim();
   if (!text) return '任务状态更新';
   const xai = translateStructuredXaiMessage(text);
   if (xai) return xai;
+  const chatgpt = translateStructuredChatgptMessage(text);
+  if (chatgpt) return chatgpt;
   let match: RegExpMatchArray | null;
   if ((match = text.match(/^finished (\d+)\/(\d+) \(ok=(\d+) fail=(\d+), threads=(\d+)\)$/i))) {
     return `批次完成 ${match[1]}/${match[2]}：成功 ${match[3]}，失败 ${match[4]}，并发 ${match[5]}`;
@@ -327,6 +421,8 @@ function translateLogMessage(value?: string): string {
   }
   const replacements: Array<[RegExp, string]> = [
     [/^batch started count=(\d+) concurrency=(\d+)$/i, '批量注册已启动：共 $1 个账号，并发 $2'],
+    [/^starting ChatGPT registration; email=/i, '启动 OpenAI 浏览器注册；邮箱='],
+    [/^launching browser for ChatGPT signup$/i, '正在启动浏览器并打开 ChatGPT 注册页面'],
     [/^started; email=/i, '注册线程已启动，邮箱：'],
     [/^queued; email=/i, '已创建邮箱并进入注册队列：'],
     [/^visiting signup page$/i, '正在打开 Grok 注册页面'],
@@ -366,10 +462,11 @@ function logTone(status?: string, message?: string): LogTone {
   return 'info';
 }
 
-function registrationStepNumber(message?: string, status?: string): number {
+function registrationStepNumber(message?: string, status?: string, target: 'grok' | 'chatgpt' = 'grok'): number {
   const text = `${message || ''} ${status || ''}`;
-  for (let index = REGISTRATION_FLOW.length - 1; index >= 0; index -= 1) {
-    if (REGISTRATION_FLOW[index].pattern.test(text)) return index + 1;
+  const flow = target === 'chatgpt' ? CHATGPT_REGISTRATION_FLOW : REGISTRATION_FLOW;
+  for (let index = flow.length - 1; index >= 0; index -= 1) {
+    if (flow[index].pattern.test(text)) return index + 1;
   }
   return 1;
 }
@@ -379,12 +476,14 @@ function sessionTimestamp(session: GrokMonitor['sessions'][number]): number {
   return Math.max(lastEvent, Number(session.updated_at || 0), Number(session.created_at || 0));
 }
 
-function buildRegistrationFlow(session?: GrokMonitor['sessions'][number]): Array<{ label: string; state: FlowState }> {
-  if (!session) return REGISTRATION_FLOW.map(({ label }) => ({ label, state: 'pending' }));
-  const states: FlowState[] = REGISTRATION_FLOW.map(() => 'pending');
+function buildRegistrationFlow(session?: GrokMonitor['sessions'][number], configuredTarget: 'grok' | 'chatgpt' = 'grok'): Array<{ label: string; state: FlowState }> {
+  const target = session ? registrationTargetOf(session) : configuredTarget;
+  const flow = target === 'chatgpt' ? CHATGPT_REGISTRATION_FLOW : REGISTRATION_FLOW;
+  if (!session) return flow.map(({ label }) => ({ label, state: 'pending' }));
+  const states: FlowState[] = flow.map(() => 'pending');
   let furthest = 0;
   for (const event of session.events || []) {
-    const step = registrationStepNumber(event.message, event.status);
+    const step = registrationStepNumber(event.message, event.status, target);
     const tone = logTone(event.status, translateLogMessage(event.message || event.status));
     for (let index = 0; index < step - 1; index += 1) if (states[index] !== 'failed') states[index] = 'done';
     states[step - 1] = tone === 'error' ? 'failed' : tone === 'success' ? 'done' : 'running';
@@ -392,7 +491,9 @@ function buildRegistrationFlow(session?: GrokMonitor['sessions'][number]): Array
   }
   const status = String(session.status || '').toLowerCase();
   if (['done', 'success', 'completed', 'imported'].includes(status)) {
-    const through = session.auto_import?.enabled ? 9 : Math.max(8, furthest);
+    const through = target === 'chatgpt'
+      ? flow.length
+      : session.auto_import?.enabled ? 9 : Math.max(8, furthest);
     for (let index = 0; index < through; index += 1) if (states[index] !== 'failed') states[index] = 'done';
   }
   if (status === 'paused') {
@@ -400,13 +501,13 @@ function buildRegistrationFlow(session?: GrokMonitor['sessions'][number]): Array
       if (states[index] === 'running') states[index] = 'paused';
     }
   }
-  if (session.probe?.state === 'complete') states[8] = Number(session.probe.fail || 0) > 0 ? 'failed' : 'done';
-  if (session.auto_import?.enabled) {
+  if (target === 'grok' && session.probe?.state === 'complete') states[8] = Number(session.probe.fail || 0) > 0 ? 'failed' : 'done';
+  if (target === 'grok' && session.auto_import?.enabled) {
     if (session.auto_import.ok === true) states[9] = 'done';
     else if (Number(session.auto_import.failed || 0) > 0 || session.auto_import.error) states[9] = 'failed';
   }
   if (FAILURE_STATUSES.has(status) && !states.includes('failed')) states[Math.max(0, furthest - 1)] = 'failed';
-  return REGISTRATION_FLOW.map(({ label }, index) => ({ label, state: states[index] }));
+  return flow.map(({ label }, index) => ({ label, state: states[index] }));
 }
 
 function hotmailStatusKey(item: HotmailAccount): string {
@@ -433,6 +534,22 @@ const MAIL_PROVIDER_OPTIONS: StyledSelectOption[] = [
   { value: 'hotmail_local', label: '微软邮箱账户池（本地助手）', description: '本地账户池，每个邮箱支持 3 个槽位' },
 ];
 
+const CHATGPT_REGISTRATION_FLOW: Array<{ key: string; label: string; pattern: RegExp }> = [
+  { key: 'open', label: '打开 ChatGPT 注册页面', pattern: /launching browser|navigate|signup|打开.*注册页面/i },
+  { key: 'email', label: '填写注册邮箱', pattern: /queued; email=|email: (?:filling|filled|submitted)|邮箱/i },
+  { key: 'password', label: '填写注册密码', pattern: /password: (?:filling|filled|submitted)|密码/i },
+  { key: 'verification', label: '获取邮箱验证码', pattern: /verification|code|otp|验证码/i },
+  { key: 'profile', label: '完善账号资料', pattern: /profile|birth|name|账号资料/i },
+  { key: 'session', label: '获取 ChatGPT Session / AT', pattern: /completion: done|session|access.?token|fetching_sso/i },
+  { key: 'plus_trial', label: '检测 Plus 试用资格并保存结果', pattern: /plus_trial|plus 试用资格/i },
+  { key: 'checkout_kind', label: '检测 cs_live / oaics（可选）', pattern: /checkout_kind|结账类型|cs_live|oaics|openai 注册完成|completed/i },
+];
+
+function registrationTargetOf(value?: { registration_target?: string; id?: string; batch_id?: string }): 'grok' | 'chatgpt' {
+  if (value?.registration_target === 'chatgpt' || String(value?.id || value?.batch_id || '').startsWith('cgpt_') || String(value?.id || value?.batch_id || '').startsWith('batch_cgpt_')) return 'chatgpt';
+  return 'grok';
+}
+
 const HOTMAIL_ACCOUNT_SOURCE_OPTIONS: StyledSelectOption[] = [
   { value: 'mail_management', label: '邮箱管理未用账号', description: '默认使用邮箱管理中 0/3、1/3、2/3 的账号' },
   { value: 'manual', label: '注册页批量导入', description: '使用在当前注册配置中批量导入的账号' },
@@ -441,6 +558,11 @@ const HOTMAIL_ACCOUNT_SOURCE_OPTIONS: StyledSelectOption[] = [
 const CAPTCHA_PROVIDER_OPTIONS: StyledSelectOption[] = [
   { value: 'local', label: '本地 Turnstile Solver', description: '使用部署在本机的验证码服务' },
   { value: 'yescaptcha', label: 'YesCaptcha', description: '使用 YesCaptcha API Key' },
+];
+
+const REGISTRATION_TARGET_OPTIONS: StyledSelectOption[] = [
+  { value: 'grok', label: 'Grok（xAI）', description: '使用现有 xAI 注册流程' },
+  { value: 'chatgpt', label: 'ChatGPT（OpenAI）', description: '使用隔离的 OpenAI 浏览器注册流程' },
 ];
 
 const HOTMAIL_STATUS_OPTIONS: StyledSelectOption[] = [
@@ -510,6 +632,12 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
   const [rotationPageSize, setRotationPageSize] = useState(20);
   const [rotationSelected, setRotationSelected] = useState<string[]>([]);
   const [rotationLoading, setRotationLoading] = useState(false);
+  const [chatgptAccounts, setChatgptAccounts] = useState<ChatGPTAccountRecord[]>([]);
+  const [chatgptAccountSelected, setChatgptAccountSelected] = useState<string[]>([]);
+  const [visibleChatgptPasswords, setVisibleChatgptPasswords] = useState<Set<string>>(() => new Set());
+  const [chatgptAccountsLoading, setChatgptAccountsLoading] = useState(false);
+  const [currentChatgptBatchId, setCurrentChatgptBatchId] = useState('');
+  const [logClearBefore, setLogClearBefore] = useState(0);
   const rotationPageRef = useRef(1);
   const logContainerRef = useRef<HTMLDivElement | null>(null);
 
@@ -568,6 +696,8 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
     try {
       const result = await grokRegistrationApi.resetMonitor();
       if (result.ok === false) throw new Error(result.error || '本轮任务暂时无法清除');
+      setCurrentChatgptBatchId('');
+      setLogClearBefore(0);
       await refreshMonitor();
       setNotice({ tone: 'ok', text: '本轮注册流程与日志已清除。' });
     } catch (error) {
@@ -607,7 +737,7 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
     let active = true;
     const refresh = async (reportError = false) => {
       try {
-        const pool = await grokRegistrationApi.hotmailAccounts(config.hotmail_account_source);
+        const pool = await grokRegistrationApi.hotmailAccounts(config.hotmail_account_source, config.registration_target);
         if (active) setHotmailPool(pool as HotmailPool);
       } catch (error) {
         if (active && reportError) showError(error);
@@ -616,7 +746,7 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
     void refresh(true);
     const timer = window.setInterval(() => void refresh(false), 2500);
     return () => { active = false; window.clearInterval(timer); };
-  }, [config.mail_provider, config.hotmail_account_source]);
+  }, [config.mail_provider, config.hotmail_account_source, config.registration_target]);
 
   useEffect(() => {
     if (config.mail_provider !== 'hotmail_local' || !hotmailPool) return;
@@ -633,7 +763,7 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
     const count = config.mail_provider === 'hotmail_local' && availableSlots > 0 ? Math.min(requestedCount, availableSlots) : requestedCount;
     return {
       ...config,
-      registration_target: 'grok',
+      registration_target: config.registration_target,
       registration_mode: 'browser',
       count,
       concurrency: Math.max(1, Math.floor(Number(config.concurrency) || 1)),
@@ -646,7 +776,7 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
     try {
       const result = await grokRegistrationApi.saveConfig(normalizedConfig());
       setConfig(mergeConfig(result.config));
-      setNotice({ tone: 'ok', text: 'Grok 注册配置已保存到 MercuryPro。' });
+      setNotice({ tone: 'ok', text: `${config.registration_target === 'chatgpt' ? 'ChatGPT' : 'Grok'} 注册配置已保存到 MercuryPro。` });
     } catch (error) {
       showError(error);
     } finally {
@@ -656,9 +786,13 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
 
   const runStart = async (settings: GrokConfig) => {
     setBusy('start');
+    if (settings.registration_target === 'chatgpt') setCurrentChatgptBatchId('');
     try {
-      await grokRegistrationApi.start(settings);
-      setNotice({ tone: 'ok', text: 'Grok 注册任务已启动，执行进度会在下方实时更新。' });
+      const result = await grokRegistrationApi.start(settings);
+      if (settings.registration_target === 'chatgpt') {
+        setCurrentChatgptBatchId(String(result.batch_id || result.id || ''));
+      }
+      setNotice({ tone: 'ok', text: `${settings.registration_target === 'chatgpt' ? 'ChatGPT' : 'Grok'} 注册任务已启动，执行进度会在下方实时更新。` });
       await refreshMonitor();
     } catch (error) {
       showError(error);
@@ -746,7 +880,7 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
     setBusy('hotmail-import');
     try {
       const result = await grokRegistrationApi.importHotmail(hotmailImportText, config.hotmail_local_base_url);
-      setHotmailPool(await grokRegistrationApi.hotmailAccounts(config.hotmail_account_source) as HotmailPool);
+      setHotmailPool(await grokRegistrationApi.hotmailAccounts(config.hotmail_account_source, config.registration_target) as HotmailPool);
       setHotmailImportText('');
       setNotice({ tone: 'ok', text: `邮箱导入完成：新增 ${result.added || 0}，更新 ${result.updated || 0}，无效 ${result.invalid || 0}。` });
     } catch (error) {
@@ -821,8 +955,10 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
         ? await grokRegistrationApi.probeHotmailOne(id, config.hotmail_local_base_url)
         : action === 'delete'
           ? await grokRegistrationApi.deleteHotmail(id)
-          : await grokRegistrationApi.updateHotmail(id, action === 'prefer' ? { preferred_for_next_use: true } : { used: false });
-      setHotmailPool(await grokRegistrationApi.hotmailAccounts(config.hotmail_account_source) as HotmailPool);
+          : await grokRegistrationApi.updateHotmail(id, action === 'prefer'
+            ? { preferred_for_next_use: true, registration_target: config.registration_target }
+            : { used: false, registration_target: config.registration_target });
+      setHotmailPool(await grokRegistrationApi.hotmailAccounts(config.hotmail_account_source, config.registration_target) as HotmailPool);
       if (action === 'delete') setHotmailSelected((previous) => previous.filter((item) => item !== id));
       const message = action === 'delete'
         ? '邮箱已从账户池删除。'
@@ -848,7 +984,7 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
     try {
       const nextConfig = {
         ...normalizedConfig(),
-        grok_headless: false,
+        ...(config.registration_target === 'chatgpt' ? { chatgpt_headless: false } : { grok_headless: false }),
         count: 1,
         concurrency: 1,
       };
@@ -867,6 +1003,79 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
     }
   };
 
+  const copyChatgptAccessToken = async (sessionId: string) => {
+    if (!sessionId) return;
+    setBusy(`copy-at-${sessionId}`);
+    try {
+      const result = await grokRegistrationApi.chatgptAccessToken(sessionId);
+      const token = String(result.access_token || '').trim();
+      if (!token) throw new Error('该账号尚未生成 Access Token');
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(token);
+      } else {
+        const input = document.createElement('textarea');
+        input.value = token;
+        input.style.position = 'fixed';
+        input.style.opacity = '0';
+        document.body.appendChild(input);
+        input.select();
+        document.execCommand('copy');
+        input.remove();
+      }
+      setNotice({ tone: 'ok', text: `已复制 ${result.email || 'ChatGPT 账号'} 的 AT。` });
+    } catch (error) {
+      showError(error);
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const loadChatgptAccounts = async (silent = false) => {
+    if (!silent) setChatgptAccountsLoading(true);
+    try {
+      const result = await grokRegistrationApi.chatgptAccounts();
+      const accounts = result.accounts || [];
+      setChatgptAccounts(accounts);
+      const ids = new Set(accounts.map((item) => item.id));
+      setChatgptAccountSelected((previous) => previous.filter((id) => ids.has(id)));
+      setVisibleChatgptPasswords((previous) => new Set([...previous].filter((id) => ids.has(id))));
+    } catch (error) {
+      if (!silent) showError(error);
+    } finally {
+      if (!silent) setChatgptAccountsLoading(false);
+    }
+  };
+
+  const copyChatgptAccountTokens = async (ids: string[], allAccounts = false) => {
+    if (!allAccounts && !ids.length) return;
+    setBusy(allAccounts ? 'copy-all-at' : 'copy-selected-at');
+    try {
+      const result = await grokRegistrationApi.chatgptAccountTokens(ids, allAccounts);
+      const text = (result.tokens || [])
+        .map((item) => String(item.access_token || '').trim())
+        .filter(Boolean)
+        .join('\n');
+      if (!text) throw new Error('所选账号尚未生成 Access Token');
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const input = document.createElement('textarea');
+        input.value = text;
+        input.style.position = 'fixed';
+        input.style.opacity = '0';
+        document.body.appendChild(input);
+        input.select();
+        document.execCommand('copy');
+        input.remove();
+      }
+      setNotice({ tone: 'ok', text: `已复制 ${result.total || 0} 个 OpenAI 账号的 AT，每行一个。` });
+    } catch (error) {
+      showError(error);
+    } finally {
+      setBusy('');
+    }
+  };
+
   const deleteHotmailAccounts = async (kind: 'selected' | 'used' | 'unhealthy', ids: string[] = []) => {
     if (kind === 'selected' && !ids.length) return;
     setBusy(`hotmail-delete-${kind}`);
@@ -874,9 +1083,9 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
       const result = kind === 'selected'
         ? await grokRegistrationApi.deleteHotmailSelected(ids)
         : kind === 'used'
-          ? await grokRegistrationApi.deleteHotmailUsed()
+          ? await grokRegistrationApi.deleteHotmailUsed(config.registration_target)
           : await grokRegistrationApi.deleteHotmailUnhealthy();
-      const selectedPool = await grokRegistrationApi.hotmailAccounts(config.hotmail_account_source) as HotmailPool;
+      const selectedPool = await grokRegistrationApi.hotmailAccounts(config.hotmail_account_source, config.registration_target) as HotmailPool;
       setHotmailPool(selectedPool);
       const remainingIds = new Set((selectedPool.accounts || []).map((item: HotmailAccount) => String(item.id || '')));
       setHotmailSelected((previous) => previous.filter((id) => remainingIds.has(id)));
@@ -898,8 +1107,8 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
     if (!pending || !id) return;
     setBusy(`hotmail-restore-uses-${id}`);
     try {
-      const result = await grokRegistrationApi.restoreHotmailUses(id, pending.count);
-      setHotmailPool(await grokRegistrationApi.hotmailAccounts(config.hotmail_account_source) as HotmailPool);
+      const result = await grokRegistrationApi.restoreHotmailUses(id, pending.count, config.registration_target);
+      setHotmailPool(await grokRegistrationApi.hotmailAccounts(config.hotmail_account_source, config.registration_target) as HotmailPool);
       setRestoreUsesDialog(null);
       setNotice({ tone: 'ok', text: `已为该邮箱恢复 ${Number(result.restored || 0)} 次注册使用机会。` });
     } catch (error) {
@@ -971,18 +1180,25 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
   };
 
   useEffect(() => {
-    if (tab !== 'rotation') return;
+    if (tab !== 'rotation' || config.registration_target === 'chatgpt') return;
     void loadRotation(1);
     const timer = window.setInterval(() => void loadRotation(rotationPageRef.current, true), 3000);
     return () => window.clearInterval(timer);
-  }, [tab, rotationStatus, rotationQuery, rotationPageSize]);
+  }, [tab, rotationStatus, rotationQuery, rotationPageSize, config.registration_target]);
+
+  useEffect(() => {
+    if (tab !== 'rotation' || config.registration_target !== 'chatgpt') return;
+    void loadChatgptAccounts();
+    const timer = window.setInterval(() => void loadChatgptAccounts(true), 3000);
+    return () => window.clearInterval(timer);
+  }, [tab, config.registration_target]);
 
   const tabs: Array<{ id: ConfigTab; label: string; icon: React.ReactNode }> = [
     { id: 'registration', label: '注册配置', icon: <Settings2 className="w-4 h-4" /> },
     { id: 'mail', label: '邮箱配置', icon: <Mail className="w-4 h-4" /> },
     { id: 'proxy', label: '代理配置', icon: <Globe2 className="w-4 h-4" /> },
-    { id: 'import', label: '自动导入配置', icon: <UploadCloud className="w-4 h-4" /> },
-    { id: 'rotation', label: '账号轮询', icon: <RefreshCw className="w-4 h-4" /> },
+    { id: 'import', label: config.registration_target === 'chatgpt' ? '自动导入（暂不启用）' : '自动导入配置', icon: <UploadCloud className="w-4 h-4" /> },
+    { id: 'rotation', label: config.registration_target === 'chatgpt' ? '账号管理' : '账号轮询', icon: <RefreshCw className="w-4 h-4" /> },
   ];
 
   const Field = useCallback(({ label, children, wide = false, hint }: { label: string; children: React.ReactNode; wide?: boolean; hint?: string }) => (
@@ -1000,14 +1216,20 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
     </label>
   );
 
-  const focusedSession = useMemo(() => [...monitor.sessions].sort((a, b) => {
+  const focusedSession = useMemo(() => monitor.sessions.filter((session) => registrationTargetOf(session) === config.registration_target).sort((a, b) => {
     const aActive = !FINISHED.has(String(a.status || '').toLowerCase());
     const bActive = !FINISHED.has(String(b.status || '').toLowerCase());
     if (aActive !== bActive) return aActive ? -1 : 1;
     return sessionTimestamp(b) - sessionTimestamp(a);
-  })[0], [monitor.sessions]);
-  const flowSteps = useMemo(() => buildRegistrationFlow(focusedSession), [focusedSession]);
+  })[0], [monitor.sessions, config.registration_target]);
+  const flowSteps = useMemo(() => buildRegistrationFlow(focusedSession, config.registration_target), [focusedSession, config.registration_target]);
   const completedFlowSteps = flowSteps.filter((step) => step.state === 'done').length;
+  const chatgptTokenSessions = useMemo(() => monitor.sessions
+    .filter((session) => currentChatgptBatchId
+      && registrationTargetOf(session) === 'chatgpt'
+      && String(session.batch_id || '') === currentChatgptBatchId
+      && session.access_token_available)
+    .sort((a, b) => sessionTimestamp(b) - sessionTimestamp(a)), [monitor.sessions, currentChatgptBatchId]);
   const logs = useMemo<RegistrationLog[]>(() => {
     const entries: RegistrationLog[] = [];
     monitor.batches.forEach((batch) => {
@@ -1044,6 +1266,7 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
       });
     });
     monitor.sessions.forEach((session) => {
+      const sessionTarget = registrationTargetOf(session);
       (session.events || []).forEach((event, index) => {
         const message = translateLogMessage(event.message || event.status);
         const at = Number(event.at || session.updated_at || session.created_at || 0);
@@ -1052,15 +1275,18 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
           at,
           status: String(event.status || session.status || ''),
           message,
-          source: `Grok${session.batch_index ? ` #${session.batch_index}` : ''}${session.email ? ` · ${session.email}` : ''}`,
-          step: registrationStepNumber(event.message || message, event.status),
+          source: `${sessionTarget === 'chatgpt' ? 'ChatGPT' : 'Grok'}${session.batch_index ? ` #${session.batch_index}` : ''}${session.email ? ` · ${session.email}` : ''}`,
+          step: registrationStepNumber(event.message || message, event.status, sessionTarget),
           tone: logTone(event.status || session.status, message),
           requiresVisibleBrowser: requiresVisibleBrowserAction(event.message, message),
         });
       });
     });
-    return entries.sort((a, b) => a.at - b.at).slice(-300);
-  }, [monitor]);
+    return entries
+      .filter((entry) => entry.at > logClearBefore)
+      .sort((a, b) => a.at - b.at)
+      .slice(-300);
+  }, [monitor, logClearBefore]);
   const filteredHotmailAccounts = useMemo(() => (hotmailPool?.accounts || []).filter((account) => {
     const matchesStatus = !hotmailStatus || hotmailStatusKey(account) === hotmailStatus;
     const keyword = hotmailKeyword.trim().toLowerCase();
@@ -1092,7 +1318,10 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
   const mailReady = config.mail_provider === 'hotmail_local'
     ? Boolean(config.hotmail_local_base_url.trim() && hotmailAvailableSlots > 0)
     : Boolean(config.mail_base_url.trim() && config.mail_api_key.trim());
-  const captchaReady = config.captcha_provider === 'local' ? solverState === '在线' : Boolean(config.yescaptcha_key.trim());
+  const checkoutProbeReady = config.registration_target !== 'chatgpt'
+    || !config.chatgpt_checkout_probe_enabled
+    || Boolean(config.chatgpt_checkout_proxy.trim());
+  const captchaReady = config.registration_target === 'chatgpt' || (config.captcha_provider === 'local' ? solverState === '在线' : Boolean(config.yescaptcha_key.trim()));
   const importReady = !config.auto_import_enabled || (config.auto_import_target === 'cpa'
     ? Boolean(config.cpa_base_url.trim() && config.cpa_management_key.trim())
     : Boolean(config.sub2api_base_url.trim() && (config.sub2api_auth_mode === 'api_key'
@@ -1100,9 +1329,18 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
       : config.sub2api_admin_email.trim() && config.sub2api_admin_password.trim())));
   const launchChecks = [
     { label: '内置注册引擎', detail: serviceOnline ? '服务在线，可以创建任务' : serviceOnline === false ? '服务尚未就绪' : '正在检测服务状态', ready: serviceOnline === true },
-    { label: '验证码服务', detail: config.captcha_provider === 'local' ? `本地 Solver：${solverState}` : captchaReady ? 'YesCaptcha 密钥已填写' : '等待填写 YesCaptcha 密钥', ready: captchaReady },
+    config.registration_target === 'chatgpt'
+      ? { label: 'OpenAI 浏览器环境', detail: '使用独立 Camoufox 指纹与全新隐私上下文', ready: serviceOnline === true }
+      : { label: '验证码服务', detail: config.captcha_provider === 'local' ? `本地 Solver：${solverState}` : captchaReady ? 'YesCaptcha 密钥已填写' : '等待填写 YesCaptcha 密钥', ready: captchaReady },
     { label: '注册邮箱', detail: mailReady ? (config.mail_provider === 'hotmail_local' ? '微软邮箱账户池已配置' : '自定义邮箱 API 已配置') : '请先完成邮箱配置', ready: mailReady },
-    { label: '注册后导入', detail: !config.auto_import_enabled ? '当前关闭，仅保存到本地' : importReady ? `将自动导入 ${config.auto_import_target.toUpperCase()}` : '自动导入参数尚未完整', ready: importReady },
+    ...(config.registration_target === 'chatgpt' ? [{
+      label: 'Checkout 类型检测',
+      detail: !config.chatgpt_checkout_probe_enabled ? '当前关闭，注册后跳过 oaics / cs_live 查询' : checkoutProbeReady ? '将通过专用德国代理查询（DE / EUR）' : '已开启，请填写一条专用德国代理',
+      ready: checkoutProbeReady,
+    }] : []),
+    config.registration_target === 'chatgpt'
+      ? { label: '注册结果', detail: '保存 Session / AT 后即完成，不执行 Agent Identity 或站点导入', ready: true }
+      : { label: '注册后导入', detail: !config.auto_import_enabled ? '当前关闭，仅保存到本地' : importReady ? `将自动导入 ${config.auto_import_target.toUpperCase()}` : '自动导入参数尚未完整', ready: importReady },
   ];
   const confirmationContent = pendingConfirmation?.kind === 'reset-monitor'
     ? {
@@ -1166,10 +1404,10 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div>
             <div className="flex items-center gap-2.5">
-              <div className="w-9 h-9 rounded-xl bg-blue-600 text-white flex items-center justify-center font-black text-lg">G</div>
+              <div className="w-9 h-9 rounded-xl bg-blue-600 text-white flex items-center justify-center font-black text-lg">{config.registration_target === 'chatgpt' ? 'O' : 'G'}</div>
               <div>
-                <h2 className={`text-lg font-extrabold ${theme.textPrimary}`}>Grok 注册中心</h2>
-                <p className={`text-xs ${theme.textSecondary}`}>配置 xAI 浏览器注册、接码邮箱、代理池与注册后自动导入</p>
+                <h2 className={`text-lg font-extrabold ${theme.textPrimary}`}>账号注册中心</h2>
+                <p className={`text-xs ${theme.textSecondary}`}>隔离配置 Grok 与 ChatGPT 浏览器注册，共用邮箱管理、代理池与注册后处理</p>
               </div>
             </div>
           </div>
@@ -1201,10 +1439,14 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
           <div className={`px-4 py-3 border-b ${theme.border} flex flex-col sm:flex-row sm:items-center justify-between gap-3`}>
             <div>
               <h3 className={`text-sm font-bold ${theme.textPrimary}`}>{tabs.find((item) => item.id === tab)?.label}</h3>
-              <p className={`text-[11px] ${theme.textSecondary}`}>{tab === 'rotation' ? '持续维护已注册账号状态，每 30 分钟自动执行全量探活。' : '当前仅启用 Grok（xAI），OpenAI 注册保持关闭。'}</p>
+              <p className={`text-[11px] ${theme.textSecondary}`}>{tab === 'rotation' ? (config.registration_target === 'chatgpt' ? '管理已注册 OpenAI 账号，并复制本地保存的 Access Token。' : '持续维护已注册账号状态，每 30 分钟自动执行全量探活。') : `当前注册目标：${config.registration_target === 'chatgpt' ? 'ChatGPT（OpenAI）' : 'Grok（xAI）'}。`}</p>
             </div>
             <div className="flex items-center gap-2">
-              {tab === 'rotation' ? <>
+              {tab === 'rotation' ? config.registration_target === 'chatgpt' ? <>
+                <button onClick={() => void loadChatgptAccounts()} disabled={chatgptAccountsLoading} className={`px-3 py-2 rounded-lg border text-xs font-bold flex items-center gap-1.5 ${theme.border} ${theme.textPrimary}`}><RefreshCw className={`w-3.5 h-3.5 ${chatgptAccountsLoading ? 'animate-spin' : ''}`} />刷新</button>
+                <button onClick={() => void copyChatgptAccountTokens(chatgptAccountSelected)} disabled={!!busy || !chatgptAccountSelected.length} className="px-3 py-2 rounded-lg bg-blue-600 text-white text-xs font-bold flex items-center gap-1.5 disabled:opacity-40">{busy === 'copy-selected-at' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Copy className="w-3.5 h-3.5" />}复制所选 AT</button>
+                <button onClick={() => void copyChatgptAccountTokens([], true)} disabled={!!busy || !chatgptAccounts.length} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-xs font-bold flex items-center gap-1.5 disabled:opacity-40">{busy === 'copy-all-at' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Copy className="w-3.5 h-3.5" />}复制全部 AT</button>
+              </> : <>
                 <button onClick={() => void loadRotation(rotation.page)} disabled={rotationLoading} className={`px-3 py-2 rounded-lg border text-xs font-bold flex items-center gap-1.5 ${theme.border} ${theme.textPrimary}`}><RefreshCw className={`w-3.5 h-3.5 ${rotationLoading ? 'animate-spin' : ''}`} />刷新</button>
                 <button onClick={() => void probeRotation(rotationSelected)} disabled={!!busy || !rotationSelected.length} className="px-3 py-2 rounded-lg bg-blue-600 text-white text-xs font-bold flex items-center gap-1.5 disabled:opacity-40">{busy === 'rotation-probe' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}激活所选</button>
                 <button onClick={() => setPendingConfirmation({ kind: 'delete-rotation', ids: [...rotationSelected] })} disabled={!!busy || !rotationSelected.length} className="px-3 py-2 rounded-lg bg-rose-600 text-white text-xs font-bold flex items-center gap-1.5 disabled:opacity-40">{busy === 'rotation-delete' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}删除所选</button>
@@ -1212,29 +1454,56 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
               </> : <>
                 <button onClick={() => void save()} disabled={!!busy || !serviceOnline} className={`px-3 py-2 rounded-lg border text-xs font-bold flex items-center gap-1.5 ${theme.border} ${theme.textPrimary} disabled:opacity-50`}>{busy === 'save' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}保存配置</button>
                 <button onClick={() => void togglePause()} disabled={!!busy || !activeBatches.length} className="px-3 py-2 rounded-lg bg-amber-500 text-white text-xs font-bold flex items-center gap-1.5 disabled:opacity-40">{busy === 'pause' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : pausedBatches.length ? <Play className="w-3.5 h-3.5" /> : <Pause className="w-3.5 h-3.5" />}{pausedBatches.length ? '继续注册' : '暂停注册'}</button>
-                <button onClick={() => void start()} disabled={!!busy || !serviceOnline || !mailReady} className="px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold flex items-center gap-1.5 disabled:opacity-50">{busy === 'start' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}开始注册</button>
+                <button onClick={() => void start()} disabled={!!busy || !serviceOnline || !mailReady || !checkoutProbeReady} className="px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold flex items-center gap-1.5 disabled:opacity-50">{busy === 'start' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}开始注册</button>
               </>}
             </div>
           </div>
 
           <div className="p-4 sm:p-5 flex-1">
-            {loading ? <div className={`py-16 flex items-center justify-center gap-2 text-xs ${theme.textSecondary}`}><Loader2 className="w-4 h-4 animate-spin" />正在读取内置 Grok 引擎配置…</div> : (
+            {loading ? <div className={`py-16 flex items-center justify-center gap-2 text-xs ${theme.textSecondary}`}><Loader2 className="w-4 h-4 animate-spin" />正在读取内置注册引擎配置…</div> : (
               <>
                 {tab === 'registration' && <div className="h-full flex flex-col gap-5">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <Field label="注册目标"><input value="Grok (xAI)" disabled className={`${fieldClass} opacity-70`} /></Field>
+                    <Field label="注册目标"><StyledSelect ariaLabel="注册目标" value={config.registration_target} onChange={(value) => setField('registration_target', value as GrokConfig['registration_target'])} options={REGISTRATION_TARGET_OPTIONS} isDark={isDark} /></Field>
                     <Field label="注册方式"><input value="浏览器注册" disabled className={`${fieldClass} opacity-70`} /></Field>
                     <Field label={config.mail_provider === 'hotmail_local' ? `注册数量（可用槽位 ${hotmailAvailableSlots}）` : '注册数量'}><input type="number" min={1} max={config.mail_provider === 'hotmail_local' ? Math.max(1, hotmailAvailableSlots) : 10000} value={config.count} onChange={(e) => setField('count', Number(e.target.value))} className={fieldClass} /></Field>
                     <Field label={`并发数（推荐最大为 ${recommendedConcurrency || '--'}）`}><input type="number" min={1} value={config.concurrency} onChange={(e) => setField('concurrency', Number(e.target.value))} className={fieldClass} /></Field>
                     <Field label="错峰毫秒"><input type="number" min={0} max={60000} value={config.stagger_ms} onChange={(e) => setField('stagger_ms', Number(e.target.value))} className={fieldClass} /></Field>
-                    <Field label="Captcha 服务"><StyledSelect ariaLabel="Captcha 服务" value={config.captcha_provider} onChange={(value) => setField('captcha_provider', value as GrokConfig['captcha_provider'])} options={CAPTCHA_PROVIDER_OPTIONS} isDark={isDark} /></Field>
-                    {config.captcha_provider === 'local' ? <Field label={`本地 Solver（${solverState}）`} wide><div className="flex gap-2"><input value={config.local_solver_url} onChange={(e) => setField('local_solver_url', e.target.value)} className={fieldClass} /><button onClick={() => void detectSolver()} disabled={!!busy} className="px-3 rounded-lg bg-slate-600 text-white text-xs font-bold min-w-max flex items-center gap-1.5 disabled:opacity-50">{busy === 'solver' && <Loader2 className="w-3.5 h-3.5 animate-spin" />}重新检测</button></div></Field> : <Field label="YesCaptcha Key" wide><input type="password" value={config.yescaptcha_key} onChange={(e) => setField('yescaptcha_key', e.target.value)} className={fieldClass} /></Field>}
+                    {config.registration_target === 'chatgpt' && <Field label="页面操作间隔（毫秒）" hint="适当放慢填写和点击，减少页面状态未稳定导致的失败。"><input type="number" min={0} max={30000} value={config.chatgpt_step_delay_ms} onChange={(e) => setField('chatgpt_step_delay_ms', Number(e.target.value))} className={fieldClass} /></Field>}
+                    {config.registration_target === 'grok' ? <>
+                      <Field label="Captcha 服务"><StyledSelect ariaLabel="Captcha 服务" value={config.captcha_provider} onChange={(value) => setField('captcha_provider', value as GrokConfig['captcha_provider'])} options={CAPTCHA_PROVIDER_OPTIONS} isDark={isDark} /></Field>
+                      {config.captcha_provider === 'local' ? <Field label={`本地 Solver（${solverState}）`} wide><div className="flex gap-2"><input value={config.local_solver_url} onChange={(e) => setField('local_solver_url', e.target.value)} className={fieldClass} /><button onClick={() => void detectSolver()} disabled={!!busy} className="px-3 rounded-lg bg-slate-600 text-white text-xs font-bold min-w-max flex items-center gap-1.5 disabled:opacity-50">{busy === 'solver' && <Loader2 className="w-3.5 h-3.5 animate-spin" />}重新检测</button></div></Field> : <Field label="YesCaptcha Key" wide><input type="password" value={config.yescaptcha_key} onChange={(e) => setField('yescaptcha_key', e.target.value)} className={fieldClass} /></Field>}
+                    </> : <Field label="OpenAI 注册策略" wide hint="该流程与 Grok 完全隔离，不使用 Grok 的 Turnstile Solver。"><input value="openai-free 风格：独立 Camoufox 指纹、全新隐私上下文、邮箱验证码、自动提取 AT" disabled className={`${fieldClass} opacity-75`} /></Field>}
                   </div>
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                     <Toggle label="自动调优错峰" checked={config.auto_tune_enabled} onChange={(value) => setField('auto_tune_enabled', value)} />
                     <Toggle label="导入前测活" checked={config.pre_import_probe_enabled} onChange={(value) => setField('pre_import_probe_enabled', value)} />
-                    <Toggle label="显示注册浏览器" hint="仅建议调试时开启" checked={!config.grok_headless} onChange={(value) => setField('grok_headless', !value)} />
+                    <Toggle label="显示注册浏览器" hint="仅建议调试时开启" checked={config.registration_target === 'chatgpt' ? !config.chatgpt_headless : !config.grok_headless} onChange={(value) => config.registration_target === 'chatgpt' ? setField('chatgpt_headless', !value) : setField('grok_headless', !value)} />
                   </div>
+
+                  {config.registration_target === 'chatgpt' && <div className={`rounded-xl border p-4 space-y-3 ${theme.border} ${isDark ? 'bg-slate-900/45' : 'bg-slate-50/70'}`}>
+                    <Toggle label="检测 Checkout 类型（oaics / cs_live）" hint="默认关闭；开启后才会发起查询。" checked={config.chatgpt_checkout_probe_enabled} onChange={(value) => setField('chatgpt_checkout_probe_enabled', value)} />
+                    {config.chatgpt_checkout_probe_enabled && <Field label="专用德国代理" wide hint="仅用于 Checkout 类型查询，固定按 DE / EUR 请求；不会替换注册代理或 Plus 试用检测所用网络。">
+                      <input type="password" value={config.chatgpt_checkout_proxy} onChange={(e) => setField('chatgpt_checkout_proxy', e.target.value)} placeholder="us.1024proxy.io:3000:用户名-region-DE-sid-随机ID-t-5:密码" className={`${fieldClass} font-mono`} />
+                    </Field>}
+                    {config.chatgpt_checkout_probe_enabled && !config.chatgpt_checkout_proxy.trim() && <p className="text-[10px] font-bold text-rose-600">开启后必须填写一条有效的德国代理，才能开始注册。</p>}
+                  </div>}
+
+                  {config.registration_target === 'chatgpt' && <div className={`rounded-xl border overflow-hidden ${theme.border} ${isDark ? 'bg-slate-900/45' : 'bg-slate-50/70'}`}>
+                    <div className={`px-4 py-3 border-b flex items-center justify-between gap-3 ${theme.border}`}>
+                      <div><h4 className={`text-xs font-bold ${theme.textPrimary}`}>ChatGPT 注册结果</h4><p className={`text-[10px] mt-1 ${theme.textSecondary}`}>仅显示本次启动批次；AT 仅在点击复制时从后端安全读取。</p></div>
+                      <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-[10px] font-bold text-emerald-600">可复制 {chatgptTokenSessions.length}</span>
+                    </div>
+                    {chatgptTokenSessions.length ? <div className="divide-y divide-slate-500/10">
+                      {chatgptTokenSessions.slice(0, 10).map((session) => {
+                        const sessionId = String(session.id || '');
+                        return <div key={sessionId} className="px-4 py-3 flex items-center justify-between gap-3">
+                          <div className="min-w-0"><strong className={`block truncate text-[11px] ${theme.textPrimary}`}>{session.email || '未记录邮箱'}</strong><div className="mt-1 flex flex-wrap items-center gap-1.5"><span className={`text-[9px] ${theme.textSecondary}`}>AT 已生成并保存在本地</span><span title={session.plus_trial?.reason || '尚未检测'} className={`px-1.5 py-0.5 rounded-full text-[9px] font-bold ${session.plus_trial?.status === 'eligible' ? 'bg-violet-500/15 text-violet-500' : session.plus_trial?.status === 'ineligible' ? 'bg-rose-500/15 text-rose-600 dark:text-rose-400 ring-1 ring-inset ring-rose-500/30' : 'bg-amber-500/15 text-amber-500'}`}>Plus：{session.plus_trial?.status === 'eligible' ? '有资格' : session.plus_trial?.status === 'ineligible' ? '无资格' : '未知'}</span><span title={session.checkout_probe?.reason || '尚未检测'} className={`px-1.5 py-0.5 rounded-full text-[9px] font-bold ${session.checkout_probe?.kind === 'oaics' ? 'bg-cyan-500/15 text-cyan-500' : session.checkout_probe?.kind === 'cs_live' ? 'bg-emerald-500/15 text-emerald-500' : session.checkout_probe?.status === 'disabled' ? 'bg-slate-500/10 text-slate-500' : 'bg-amber-500/15 text-amber-500'}`}>Checkout：{session.checkout_probe?.kind === 'oaics' ? 'oaics' : session.checkout_probe?.kind === 'cs_live' ? 'cs_live' : session.checkout_probe?.status === 'disabled' ? '未开启' : '未知'}</span></div></div>
+                          <button type="button" onClick={() => void copyChatgptAccessToken(sessionId)} disabled={!!busy || !sessionId} className="shrink-0 inline-flex items-center gap-1.5 rounded-lg border border-blue-500/30 px-3 py-2 text-[10px] font-bold text-blue-600 hover:bg-blue-500/10 disabled:opacity-40">{busy === `copy-at-${sessionId}` ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Copy className="w-3.5 h-3.5" />}复制 AT</button>
+                        </div>;
+                      })}
+                    </div> : <div className={`px-4 py-6 text-center text-[10px] ${theme.textSecondary}`}>{currentChatgptBatchId ? '本次注册成功并获取 Session 后，这里会出现检测结果和“复制 AT”。' : '启动新的 ChatGPT 注册任务后，这里只显示该批次的注册结果。'}</div>}
+                  </div>}
 
                   <div className={`rounded-xl border px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${theme.border} ${isDark ? 'bg-blue-500/[0.055]' : 'bg-blue-50/70'}`}>
                     <div className="flex items-start gap-2.5 min-w-0">
@@ -1295,7 +1564,7 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
                       <Field label="API 地址"><input value={config.mail_base_url} onChange={(e) => setField('mail_base_url', e.target.value)} placeholder="YYDS 或自建邮箱 API 地址" className={fieldClass} /></Field>
                       <Field label="API Key / 管理员密钥"><input type="password" value={config.mail_api_key} onChange={(e) => setField('mail_api_key', e.target.value)} className={fieldClass} /></Field>
                     </> : <>
-                      <div className="space-y-1.5"><span className={`block text-xs font-bold ${theme.textPrimary}`}>账号来源</span><StyledSelect ariaLabel="微软邮箱账号来源" value={config.hotmail_account_source} onChange={(value) => setField('hotmail_account_source', value as GrokConfig['hotmail_account_source'])} options={HOTMAIL_ACCOUNT_SOURCE_OPTIONS} isDark={isDark} /></div>
+                      <div className="space-y-1.5"><span className={`block text-xs font-bold ${theme.textPrimary}`}>账号来源</span><StyledSelect ariaLabel="微软邮箱账号来源" value={config.hotmail_account_source} onChange={(value) => setField('hotmail_account_source', value as GrokConfig['hotmail_account_source'])} options={HOTMAIL_ACCOUNT_SOURCE_OPTIONS.map((option) => option.value === 'mail_management' ? { ...option, description: config.registration_target === 'chatgpt' ? '仅使用邮箱管理中 OpenAI 状态为 0/1 的账号' : '仅使用邮箱管理中 Grok 状态为 0/3、1/3、2/3 的账号' } : option)} isDark={isDark} /></div>
                       <Field label="本地助手地址"><div className="flex gap-2"><input value={config.hotmail_local_base_url} onChange={(e) => setField('hotmail_local_base_url', e.target.value)} className={fieldClass} /><button onClick={() => void testHotmail()} disabled={!!busy} className="px-3 rounded-lg bg-slate-600 text-white text-xs font-bold min-w-max flex items-center gap-1.5 disabled:opacity-50">{busy === 'hotmail-test' && <Loader2 className="w-3.5 h-3.5 animate-spin" />}检测助手</button></div></Field>
                       {config.hotmail_account_source === 'manual' && <Field label="批量导入微软邮箱账号" wide hint="每行：email----password----refresh-token----client-id"><textarea rows={5} value={hotmailImportText} onChange={(e) => setHotmailImportText(e.target.value)} className={fieldClass} /></Field>}
                     </>}
@@ -1306,7 +1575,7 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
                         <div className="min-w-0">
                           <strong className={`text-xs ${theme.textPrimary}`}>微软邮箱账户池</strong>
                           <p className={`text-[10px] mt-1 leading-5 ${theme.textSecondary}`}>
-                            {hotmailPool ? `账户池：共 ${hotmailPool.total || 0} · 可用槽位 ${hotmailPool.available || 0}（每号 ${hotmailPool.alias_uses || 3} 次含 +别名） · 账号 ${hotmailPool.available_accounts || 0} · 测活通过 ${hotmailPool.healthy || 0} · 测活失败 ${hotmailPool.unhealthy || 0} · 未测活 ${hotmailPool.unchecked || 0} · 注册失败 ${hotmailPool.failed || 0} · 已用尽 ${hotmailPool.used || 0}` : '正在等待读取账户池'}
+                            {hotmailPool ? `当前查看：${config.registration_target === 'chatgpt' ? 'OpenAI（每邮箱仅 1 次）' : 'Grok（每邮箱 3 次，含 +别名）'} · 账户池共 ${hotmailPool.total || 0} · 可用 ${hotmailPool.available || 0} · 可用账号 ${hotmailPool.available_accounts || 0} · 测活通过 ${hotmailPool.healthy || 0} · 测活失败 ${hotmailPool.unhealthy || 0} · 未测活 ${hotmailPool.unchecked || 0} · 注册失败 ${hotmailPool.failed || 0} · 已用尽 ${hotmailPool.used || 0}` : '正在等待读取账户池'}
                           </p>
                         </div>
                         <div className="flex flex-wrap gap-2 shrink-0">
@@ -1344,7 +1613,7 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
                             const operationBusy = busy.endsWith(`-${accountId}`);
                             return <tr key={account.id} className={selected ? 'bg-blue-500/[0.07]' : isDark ? 'hover:bg-white/[0.025]' : 'hover:bg-black/[0.025]'}>
                               <td className="px-3 py-3 text-center"><input type="checkbox" aria-label={`选择 ${account.email || '邮箱'}`} checked={selected} onChange={(event) => setHotmailSelected((previous) => event.target.checked ? Array.from(new Set([...previous, accountId])) : previous.filter((id) => id !== accountId))} className="accent-blue-600" /></td>
-                              <td className="px-4 py-3 max-w-[260px]"><div className="flex items-center gap-2 min-w-0"><span className={`w-2 h-2 rounded-full shrink-0 ${account.mail_healthy === false ? 'bg-rose-500' : account.mail_healthy === true ? 'bg-emerald-400' : 'bg-amber-400'}`} /><strong className={`truncate text-[11px] ${theme.textPrimary}`} title={account.email}>{account.email || '未记录邮箱'}</strong></div><p className={`mt-1 ml-4 truncate ${account.failure_reason || account.mail_health_error ? 'text-rose-500' : theme.textSecondary}`} title={account.failure_reason || account.mail_health_error || account.next_alias_email}>{account.failure_reason ? `注册失败：${account.failure_reason}` : account.mail_health_error ? `测活失败：${account.mail_health_error}` : account.next_alias_email && remaining > 0 ? `下次注册：${account.next_alias_email}` : `已用 ${useCount}/${useLimit} 次（含 +别名）`}</p></td>
+                              <td className="px-4 py-3 max-w-[260px]"><div className="flex items-center gap-2 min-w-0"><span className={`w-2 h-2 rounded-full shrink-0 ${account.mail_healthy === false ? 'bg-rose-500' : account.mail_healthy === true ? 'bg-emerald-400' : 'bg-amber-400'}`} /><strong className={`truncate text-[11px] ${theme.textPrimary}`} title={account.email}>{account.email || '未记录邮箱'}</strong></div><p className={`mt-1 ml-4 truncate ${account.failure_reason || account.mail_health_error ? 'text-rose-500' : theme.textSecondary}`} title={account.failure_reason || account.mail_health_error || account.next_alias_email}>{account.failure_reason ? `注册失败：${account.failure_reason}` : account.mail_health_error ? `测活失败：${account.mail_health_error}` : account.next_alias_email && remaining > 0 ? `下次注册：${account.next_alias_email}` : `已用 ${useCount}/${useLimit} 次${config.registration_target === 'grok' ? '（含 +别名）' : ''}`}</p></td>
                               <td className="px-3 py-3 text-center"><span className={`inline-flex px-2 py-1 rounded-md border font-bold ${statusStyle}`}>{statusLabel}</span></td>
                               <td className="px-3 py-3 text-center"><strong className={latestCode?.status === 'received' ? 'text-emerald-500 text-xs' : latestCode?.status === 'waiting' ? 'text-amber-500' : latestCode ? 'text-rose-500' : theme.textSecondary}>{latestCode?.status === 'received' ? latestCode.code || '--' : latestCode?.status === 'waiting' ? '读取中…' : latestCode ? '读取失败' : '--'}</strong>{latestCode?.email && <p className={`mx-auto mt-1 max-w-[150px] truncate ${theme.textSecondary}`} title={latestCode.email}>{latestCode.email}</p>}</td>
                               <td className="px-3 py-3"><div className="flex justify-center gap-1.5">{account.failed && <button onClick={() => void handleHotmailAction(account, 'restore')} disabled={!!busy || account.reserved} className="px-2 py-1.5 rounded-md border border-emerald-500/30 text-emerald-600 font-bold disabled:opacity-40">允许复用</button>}{restorableUses > 0 && <button onClick={() => setRestoreUsesDialog({ account, count: 1 })} disabled={!!busy || account.reserved} className="px-2 py-1.5 rounded-md border border-amber-500/30 text-amber-600 font-bold disabled:opacity-40">恢复次数</button>}{canUse && <button onClick={() => void handleHotmailAction(account, 'prefer')} disabled={!!busy || account.preferred_for_next_use} className="px-2 py-1.5 rounded-md border border-cyan-500/30 text-cyan-600 font-bold disabled:opacity-40">{account.preferred_for_next_use ? '已指定' : '指定使用'}</button>}<button onClick={() => void handleHotmailAction(account, 'probe')} disabled={!!busy} className={`px-2 py-1.5 rounded-md border font-bold disabled:opacity-40 ${theme.border} ${theme.textPrimary}`}>{operationBusy && busy.startsWith('hotmail-probe-') ? <Loader2 className="w-3 h-3 animate-spin" /> : '重新测活'}</button>{config.hotmail_account_source === 'manual' && <button onClick={() => setPendingConfirmation({ kind: 'delete-hotmail', account })} disabled={!!busy} className="px-2 py-1.5 rounded-md border border-rose-500/30 text-rose-600 font-bold disabled:opacity-40">删除</button>}</div></td>
@@ -1354,7 +1623,7 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
                         </tbody>
                       </table>
                     </div>
-                    <div className={`px-4 py-2 border-t text-[10px] ${theme.border} ${theme.textSecondary}`}>显示 {filteredHotmailAccounts.length} / {hotmailPool?.total || 0} 个物理邮箱 · 已选 {hotmailSelected.length} 个；每个邮箱依次使用本体、+1、+2 三个注册地址。</div>
+                    <div className={`px-4 py-2 border-t text-[10px] ${theme.border} ${theme.textSecondary}`}>显示 {filteredHotmailAccounts.length} / {hotmailPool?.total || 0} 个物理邮箱 · 已选 {hotmailSelected.length} 个；{config.registration_target === 'chatgpt' ? '这里只显示 OpenAI 独立的 0/1 使用状态。' : '这里只显示 Grok 独立的 0/3 使用状态，并依次使用本体、+1、+2。'}</div>
                   </div>}
                 </div>}
 
@@ -1391,7 +1660,9 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
                   </div>}
                 </div>}
 
-                {tab === 'import' && <div className="space-y-5">
+                {tab === 'import' && (config.registration_target === 'chatgpt' ? <div className={`p-5 rounded-xl border ${theme.border} ${isDark ? 'bg-slate-900/50' : 'bg-slate-50'}`}>
+                  <div className="flex items-start gap-3"><ShieldCheck className="w-5 h-5 mt-0.5 text-emerald-500 shrink-0" /><div><strong className={`text-sm ${theme.textPrimary}`}>OpenAI 自动导入暂不启用</strong><p className={`mt-1 text-xs leading-5 ${theme.textSecondary}`}>当前 OpenAI 注册在获取并保存 Session / Access Token 后直接完成，不执行 Codex Agent Identity，也不会导入 Sub2API 或 CPA。已保存的 AT 可在“账号管理”中复制。</p></div></div>
+                </div> : <div className="space-y-5">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="space-y-1.5"><span className={`block text-xs font-bold ${theme.textPrimary}`}>自动导入</span><StyledSelect ariaLabel="自动导入" value={String(config.auto_import_enabled)} onChange={(value) => setField('auto_import_enabled', value === 'true')} options={AUTO_IMPORT_OPTIONS} isDark={isDark} /></div>
                     <div className="space-y-1.5"><span className={`block text-xs font-bold ${theme.textPrimary}`}>导入对象</span><StyledSelect ariaLabel="导入对象" value={config.auto_import_target} onChange={(value) => setField('auto_import_target', value as GrokConfig['auto_import_target'])} options={IMPORT_TARGET_OPTIONS} isDark={isDark} /></div>
@@ -1405,9 +1676,46 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
                     </> : <><Field label="CPA 地址"><input value={config.cpa_base_url} onChange={(e) => setField('cpa_base_url', e.target.value)} placeholder="https://cpa.example.com" className={fieldClass} /></Field><Field label="CPA 管理密钥"><input type="password" value={config.cpa_management_key} onChange={(e) => setField('cpa_management_key', e.target.value)} className={fieldClass} /></Field></>}
                   </div>
                   <div className={`p-3 rounded-lg border text-[11px] ${theme.border} ${theme.textSecondary}`}><ShieldCheck className="inline w-4 h-4 mr-1 text-blue-500" />开启后，注册完成的 Grok 凭据会在测活通过后自动导入所选站点；关闭时仅保存在 MercuryPro 本地。</div>
-                </div>}
+                </div>)}
 
-                {tab === 'rotation' && <div className="space-y-4">
+                {tab === 'rotation' && (config.registration_target === 'chatgpt' ? <div className="space-y-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+                    <div className={`p-4 rounded-xl border ${theme.border} ${isDark ? 'bg-slate-900/50' : 'bg-slate-50'}`}><span className={`text-[11px] ${theme.textSecondary}`}>OpenAI 账号总数</span><strong className={`block text-2xl mt-1 ${theme.textPrimary}`}>{chatgptAccounts.length}</strong></div>
+                    <div className="p-4 rounded-xl border border-emerald-500/20 bg-emerald-500/10"><span className="text-[11px] text-emerald-600 dark:text-emerald-300">可复制 AT</span><strong className="block text-2xl mt-1 text-emerald-600 dark:text-emerald-300">{chatgptAccounts.filter((item) => item.access_token_available).length}</strong></div>
+                    <div className="p-4 rounded-xl border border-blue-500/20 bg-blue-500/10"><span className="text-[11px] text-blue-600 dark:text-blue-300">已选择</span><strong className="block text-2xl mt-1 text-blue-600 dark:text-blue-300">{chatgptAccountSelected.length}</strong></div>
+                    <div className="p-4 rounded-xl border border-violet-500/20 bg-violet-500/10"><span className="text-[11px] text-violet-600 dark:text-violet-300">Plus 试用资格</span><strong className="block text-2xl mt-1 text-violet-600 dark:text-violet-300">{chatgptAccounts.filter((item) => item.plus_trial?.status === 'eligible').length}</strong></div>
+                  </div>
+
+                  <div className={`overflow-x-auto rounded-xl border ${theme.border}`}>
+                    <table className="w-full min-w-[1020px] text-left text-[11px]">
+                      <thead className={isDark ? 'bg-slate-900 text-slate-400' : 'bg-slate-100 text-slate-500'}>
+                        <tr>
+                          <th className="p-3 w-10"><input type="checkbox" aria-label="选择全部 OpenAI 账号" checked={chatgptAccounts.length > 0 && chatgptAccounts.every((item) => chatgptAccountSelected.includes(item.id))} ref={(input) => { if (input) input.indeterminate = chatgptAccounts.some((item) => chatgptAccountSelected.includes(item.id)) && !chatgptAccounts.every((item) => chatgptAccountSelected.includes(item.id)); }} onChange={(event) => setChatgptAccountSelected(event.target.checked ? chatgptAccounts.map((item) => item.id) : [])} className="accent-blue-600" /></th>
+                          <th className="p-3 text-center">邮箱</th><th className="p-3 text-center">密码</th><th className="p-3 text-center">AT 状态</th><th className="p-3 text-center">Plus 试用</th><th className="p-3 text-center">Checkout 类型</th><th className="p-3 text-center">保存时间</th><th className="p-3 text-center">操作</th>
+                        </tr>
+                      </thead>
+                      <tbody className={`divide-y ${isDark ? 'divide-slate-800' : 'divide-slate-200'}`}>
+                        {chatgptAccounts.map((item) => {
+                          const selected = chatgptAccountSelected.includes(item.id);
+                          const passwordVisible = visibleChatgptPasswords.has(item.id);
+                          const registrationPassword = String(item.password || '');
+                          return <tr key={item.id} className={selected ? 'bg-blue-500/5' : ''}>
+                            <td className="p-3"><input type="checkbox" aria-label={`选择 ${item.email || 'OpenAI 账号'}`} checked={selected} onChange={(event) => setChatgptAccountSelected((previous) => event.target.checked ? [...new Set([...previous, item.id])] : previous.filter((id) => id !== item.id))} className="accent-blue-600" /></td>
+                            <td className={`p-3 text-center font-bold ${theme.textPrimary}`}>{item.email || '未记录邮箱'}</td>
+                            <td className="p-3"><div className="flex items-center justify-center gap-1.5">{registrationPassword ? <><span className={`font-mono ${theme.textPrimary}`}>{passwordVisible ? registrationPassword : '••••••••••••'}</span><button type="button" aria-label={passwordVisible ? `隐藏 ${item.email} 的密码` : `显示 ${item.email} 的密码`} title={passwordVisible ? '隐藏密码' : '显示密码'} onClick={() => setVisibleChatgptPasswords((previous) => { const next = new Set(previous); if (next.has(item.id)) next.delete(item.id); else next.add(item.id); return next; })} className={`p-1 rounded transition hover:bg-blue-500/10 ${theme.textSecondary}`}>{passwordVisible ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}</button></> : <span className={theme.textSecondary}>-</span>}</div></td>
+                            <td className="p-3 text-center"><span className="inline-flex px-2 py-1 rounded-full bg-emerald-500/10 text-emerald-600 font-bold">已保存</span></td>
+                            <td className="p-3 text-center">{item.plus_trial?.status === 'eligible' ? <span title={item.plus_trial.reason || ''} className="inline-flex px-2 py-1 rounded-full bg-violet-500/10 text-violet-600 font-bold">有资格</span> : item.plus_trial?.status === 'ineligible' ? <span title={item.plus_trial.reason || ''} className="inline-flex px-2 py-1 rounded-full border border-rose-500/40 bg-rose-500/15 text-rose-600 dark:text-rose-400 font-extrabold shadow-sm">无资格</span> : <span title={item.plus_trial?.reason || '尚未检测'} className="inline-flex px-2 py-1 rounded-full bg-amber-500/10 text-amber-600 font-bold">未知</span>}</td>
+                            <td className="p-3 text-center">{item.checkout_probe?.kind === 'oaics' ? <span title={item.checkout_probe.reason || ''} className="inline-flex px-2 py-1 rounded-full bg-cyan-500/10 text-cyan-600 font-bold">oaics</span> : item.checkout_probe?.kind === 'cs_live' ? <span title={item.checkout_probe.reason || ''} className="inline-flex px-2 py-1 rounded-full bg-emerald-500/10 text-emerald-600 font-bold">cs_live</span> : item.checkout_probe?.status === 'disabled' ? <span title={item.checkout_probe.reason || ''} className="inline-flex px-2 py-1 rounded-full bg-slate-500/10 text-slate-500 font-bold">未开启</span> : <span title={item.checkout_probe?.reason || '尚未检测'} className="inline-flex px-2 py-1 rounded-full bg-amber-500/10 text-amber-600 font-bold">未知</span>}</td>
+                            <td className={`p-3 text-center ${theme.textSecondary}`}>{rotationDate(item.created_at)}</td>
+                            <td className="p-3 text-center"><button onClick={() => void copyChatgptAccountTokens([item.id])} disabled={!!busy} className="px-3 py-1.5 rounded-md bg-blue-600 text-white font-bold disabled:opacity-40 inline-flex items-center gap-1">{busy === 'copy-selected-at' ? <Loader2 className="w-3 h-3 animate-spin" /> : <Copy className="w-3 h-3" />}复制 AT</button></td>
+                          </tr>;
+                        })}
+                        {!chatgptAccounts.length && <tr><td colSpan={8} className={`p-12 text-center ${theme.textSecondary}`}>{chatgptAccountsLoading ? '正在读取本地 OpenAI 账号…' : '尚未保存包含 AT 的 OpenAI 账号'}</td></tr>}
+                      </tbody>
+                    </table>
+                  </div>
+                  <p className={`text-[11px] ${theme.textSecondary}`}>AT 来自注册成功后保存在本地的原始 ChatGPT Session；“复制所选”和“复制全部”均按每行一个 AT 写入剪贴板。</p>
+                </div> : <div className="space-y-4">
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     <div className={`p-4 rounded-xl border ${theme.border} ${isDark ? 'bg-slate-900/50' : 'bg-slate-50'}`}><span className={`text-[11px] ${theme.textSecondary}`}>账号总数</span><strong className={`block text-2xl mt-1 ${theme.textPrimary}`}>{rotation.summary.total}</strong></div>
                     <div className="p-4 rounded-xl border border-emerald-500/20 bg-emerald-500/10"><span className="text-[11px] text-emerald-600 dark:text-emerald-300">状态正常</span><strong className="block text-2xl mt-1 text-emerald-600 dark:text-emerald-300">{rotation.summary.normal}</strong></div>
@@ -1462,14 +1770,14 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
                     <span className={theme.textSecondary}>共 {rotation.total} 条</span>
                     <div className="flex items-center gap-2"><button onClick={() => void loadRotation(Math.max(1, rotation.page - 1))} disabled={rotationLoading || rotation.page <= 1} className={`px-3 py-1.5 rounded-lg border font-bold disabled:opacity-40 ${theme.border} ${theme.textPrimary}`}>上一页</button><span className={theme.textSecondary}>{rotation.page} / {rotation.pages}</span><button onClick={() => void loadRotation(Math.min(rotation.pages, rotation.page + 1))} disabled={rotationLoading || rotation.page >= rotation.pages} className={`px-3 py-1.5 rounded-lg border font-bold disabled:opacity-40 ${theme.border} ${theme.textPrimary}`}>下一页</button></div>
                   </div>
-                </div>}
+                </div>)}
               </>
             )}
           </div>
         </section>
 
-        {tab !== 'rotation' && <aside className="min-w-0 space-y-4 xl:space-y-0 xl:absolute xl:inset-y-0 xl:right-0 xl:w-[360px] xl:grid xl:grid-rows-[minmax(0,1.15fr)_minmax(0,1fr)] xl:gap-4">
-          <section className={`${cardClass} min-h-0 overflow-hidden flex flex-col`}>
+        {tab !== 'rotation' && <aside className="min-w-0 flex flex-col gap-4 xl:absolute xl:inset-y-0 xl:right-0 xl:w-[360px] xl:grid xl:grid-rows-[minmax(0,1fr)_minmax(0,1.15fr)]">
+          <section className={`${cardClass} order-2 min-h-0 overflow-hidden flex flex-col`}>
             <div className={`px-3 py-2.5 border-b ${theme.border}`}>
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-2 min-w-0">
@@ -1487,7 +1795,7 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
             </div>
             <div className="p-3 flex-1 min-h-0 xl:overflow-y-auto">
               <div className="flex items-start justify-between gap-3 mb-2.5">
-                <div className="min-w-0"><strong className={`block text-xs ${theme.textPrimary}`}>流程</strong><p className={`text-[10px] mt-1 truncate ${theme.textSecondary}`}>{focusedSession?.email || '尚未创建账号任务'}</p></div>
+                <div className="min-w-0"><strong className={`block text-xs ${theme.textPrimary}`}>流程</strong><div className="mt-1 flex flex-wrap items-center gap-2 min-w-0"><p className={`text-[10px] truncate ${theme.textSecondary}`}>{focusedSession?.email || '尚未创建账号任务'}</p>{config.registration_target === 'chatgpt' && focusedSession?.plus_trial && <span title={focusedSession.plus_trial.reason || ''} className={`shrink-0 px-1.5 py-0.5 rounded-full text-[9px] font-bold ${focusedSession.plus_trial.status === 'eligible' ? 'bg-violet-500/15 text-violet-500' : focusedSession.plus_trial.status === 'ineligible' ? 'bg-rose-500/15 text-rose-600 dark:text-rose-400 ring-1 ring-inset ring-rose-500/30' : 'bg-amber-500/15 text-amber-500'}`}>Plus 试用：{focusedSession.plus_trial.status === 'eligible' ? '有资格' : focusedSession.plus_trial.status === 'ineligible' ? '无资格' : '未知'}</span>}{config.registration_target === 'chatgpt' && focusedSession?.checkout_probe && <span title={focusedSession.checkout_probe.reason || ''} className={`shrink-0 px-1.5 py-0.5 rounded-full text-[9px] font-bold ${focusedSession.checkout_probe.kind === 'oaics' ? 'bg-cyan-500/15 text-cyan-500' : focusedSession.checkout_probe.kind === 'cs_live' ? 'bg-emerald-500/15 text-emerald-500' : focusedSession.checkout_probe.status === 'disabled' ? 'bg-slate-500/10 text-slate-500' : 'bg-amber-500/15 text-amber-500'}`}>Checkout：{focusedSession.checkout_probe.kind === 'oaics' ? 'oaics' : focusedSession.checkout_probe.kind === 'cs_live' ? 'cs_live' : focusedSession.checkout_probe.status === 'disabled' ? '未开启' : '未知'}</span>}</div></div>
                 <span className={`shrink-0 px-2 py-1 rounded-full border text-[10px] font-bold ${theme.border} ${theme.textSecondary}`}>当前账号步骤 {completedFlowSteps} / {flowSteps.length}</span>
               </div>
               <div className={`rounded-lg border px-3 py-2.5 ${theme.border} ${isDark ? 'bg-slate-950/35' : 'bg-slate-50/70'}`}>
@@ -1502,13 +1810,16 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
             </div>
           </section>
 
-          <section className="min-h-0 overflow-hidden flex flex-col rounded-xl border border-slate-700/80 bg-[#0d1117] shadow-[0_10px_30px_rgba(15,23,42,0.12)]">
+          <section className="order-1 min-h-0 overflow-hidden flex flex-col rounded-xl border border-slate-700/80 bg-[#0d1117] shadow-[0_10px_30px_rgba(15,23,42,0.12)]">
             <div className="px-4 py-3 border-b border-[#30363d] bg-[#161b22] flex items-center justify-between">
               <div className="flex items-center gap-2.5">
                 <span className="flex items-center gap-1.5" aria-hidden="true"><i className="w-2 h-2 rounded-full bg-rose-500/90" /><i className="w-2 h-2 rounded-full bg-amber-400/90" /><i className="w-2 h-2 rounded-full bg-emerald-500/90" /></span>
                 <FileText className="w-3.5 h-3.5 text-slate-400" /><h3 className="text-xs font-semibold font-mono tracking-wide text-slate-200">日志</h3>
               </div>
-              <span className="px-2 py-0.5 rounded-md border border-slate-700 bg-slate-800/80 font-mono text-[10px] text-slate-400">{logs.length} 条</span>
+              <div className="flex items-center gap-1.5">
+                <span className="px-2 py-0.5 rounded-md border border-slate-700 bg-slate-800/80 font-mono text-[10px] text-slate-400">{logs.length} 条</span>
+                <button type="button" onClick={() => setLogClearBefore(Math.max(Date.now() / 1000, ...logs.map((log) => log.at)))} disabled={!logs.length} className="inline-flex items-center gap-1 rounded-md border border-rose-500/30 bg-rose-500/10 px-2 py-1 text-[10px] font-bold text-rose-400 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-40"><Trash2 className="h-3 w-3" />清理日志</button>
+              </div>
             </div>
             <div ref={logContainerRef} className="p-3 flex-1 min-h-0 max-h-[420px] xl:max-h-none overflow-y-auto bg-[#0d1117] font-mono [scrollbar-color:#475569_#0d1117] [scrollbar-width:thin]">
               {logs.length ? <div className="space-y-1">{logs.map((log) => {

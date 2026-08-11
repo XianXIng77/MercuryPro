@@ -11,6 +11,11 @@ export interface MicrosoftMailAccountDto {
   status?: string;
   registrationUseCount?: number;
   registrationUseLimit?: number;
+  openaiRegistrationUseCount?: number;
+  openaiRegistrationUseLimit?: number;
+  openaiRegistrationUsed?: boolean;
+  openaiRegistrationFailed?: boolean;
+  openaiRegistrationFailureReason?: string;
   createTime?: string;
   updateTime?: string;
 }
@@ -92,6 +97,15 @@ export function mapAccount(dto: MicrosoftMailAccountDto): MailAccount {
     usageStatus: backendStatus === '1' ? '已用' : backendStatus === '2' ? '使用中' : '未用',
     registrationUseCount: useCount,
     registrationUseLimit: useLimit,
+    grokRegistrationUseCount: useCount,
+    grokRegistrationUseLimit: useLimit,
+    openaiRegistrationUseCount: Math.max(0, Math.min(1, Number(
+      dto.openaiRegistrationUseCount ?? (dto.openaiRegistrationUsed ? 1 : 0),
+    ))),
+    openaiRegistrationUseLimit: 1,
+    openaiRegistrationUsed: dto.openaiRegistrationUsed === true,
+    openaiRegistrationFailed: dto.openaiRegistrationFailed === true,
+    openaiRegistrationFailureReason: dto.openaiRegistrationFailureReason || '',
     createdTime: dto.createTime || '',
     refreshResult: '未刷新',
     protocol: 'Exchange',

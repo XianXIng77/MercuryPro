@@ -29,6 +29,7 @@ def _prepare_registration_session(
     expiry_ms=None,
     mail_provider=None,
     hotmail_local_base_url=None,
+    hotmail_account_source=None,
     batch_id=None,
     batch_index=None,
     batch_total=None,
@@ -47,7 +48,7 @@ def _prepare_registration_session(
             expiry_ms=expiry_ms,
             mail_provider=mail_provider,
             hotmail_local_base_url=hotmail_local_base_url,
-            should_cancel=should_cancel,
+            hotmail_account_source=hotmail_account_source,
         )
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -57,6 +58,7 @@ def _prepare_registration_session(
     msg = f"queued; email={email}"
     sess = {
         "id": sid,
+        "registration_target": "chatgpt",
         "status": "queued",
         "created_at": created_at,
         "updated_at": created_at,
@@ -96,6 +98,7 @@ def _start_one_registration(
     expiry_ms=None,
     mail_provider=None,
     hotmail_local_base_url=None,
+    hotmail_account_source=None,
     batch_id=None,
     batch_index=None,
     batch_total=None,
@@ -112,6 +115,7 @@ def _start_one_registration(
         expiry_ms=expiry_ms,
         mail_provider=mail_provider,
         hotmail_local_base_url=hotmail_local_base_url,
+        hotmail_account_source=hotmail_account_source,
         batch_id=batch_id,
         batch_index=batch_index,
         batch_total=batch_total,
@@ -157,6 +161,7 @@ def _snapshot_reg_config(
     expiry_ms,
     mail_provider,
     hotmail_local_base_url,
+    hotmail_account_source,
     concurrency,
     stagger_ms,
     post_registration=None,
@@ -170,6 +175,7 @@ def _snapshot_reg_config(
         "expiry_ms": expiry_ms,
         "mail_provider": (mail_provider or "moemail").strip().lower(),
         "hotmail_local_base_url": hotmail_local_base_url or "http://127.0.0.1:17373",
+        "hotmail_account_source": hotmail_account_source or "mail_management",
         "concurrency": concurrency,
         "stagger_ms": stagger_ms,
         "post_registration": dict(post_registration or {}),
@@ -190,6 +196,7 @@ def start_registration(
     expiry_ms=None,
     mail_provider=None,
     hotmail_local_base_url=None,
+    hotmail_account_source=None,
     count=None,
     concurrency=None,
     stagger_ms=None,
@@ -220,7 +227,9 @@ def start_registration(
     if requested_provider == "hotmail_local":
         from hotmail_local import list_accounts
 
-        available = int(list_accounts().get("available") or 0)
+        available = int(
+            list_accounts(hotmail_account_source, "chatgpt").get("available") or 0
+        )
         if available < n:
             return {
                 "ok": False,
@@ -253,6 +262,7 @@ def start_registration(
             expiry_ms=expiry_ms,
             mail_provider=mail_prov,
             hotmail_local_base_url=hotmail_local_base_url,
+            hotmail_account_source=hotmail_account_source,
             post_registration=post_registration,
             headless=headless,
         )
@@ -260,6 +270,7 @@ def start_registration(
     proxy_snapshot = (proxy or "\n".join(proxy_pool) or proxy_val or "").strip()
     batch = {
         "id": batch_id,
+        "registration_target": "chatgpt",
         "status": "running",
         "created_at": ctx._now(),
         "updated_at": ctx._now(),
@@ -284,6 +295,7 @@ def start_registration(
             expiry_ms=expiry_ms,
             mail_provider=mail_prov,
             hotmail_local_base_url=hotmail_local_base_url,
+            hotmail_account_source=hotmail_account_source,
             concurrency=workers,
             stagger_ms=stagger,
             post_registration=post_registration,
@@ -322,6 +334,7 @@ def start_registration(
             expiry_ms,
             mail_prov,
             hotmail_local_base_url,
+            hotmail_account_source,
             post_registration,
             headless,
         ),
@@ -363,6 +376,7 @@ def _batch_spawner(
     expiry_ms,
     mail_provider,
     hotmail_local_base_url,
+    hotmail_account_source,
     post_registration,
     headless,
 ):
@@ -406,6 +420,7 @@ def _batch_spawner(
             expiry_ms=expiry_ms,
             mail_provider=mail_provider,
             hotmail_local_base_url=hotmail_local_base_url,
+            hotmail_account_source=hotmail_account_source,
             batch_id=batch_id,
             batch_index=i,
             batch_total=total,
@@ -443,10 +458,15 @@ def _batch_spawner(
         with ctx._lock:
             final = ctx._sessions.get(sid) or {}
         st = str(final.get("status") or "")
-        ok = bool(final.get("imported_account_ids")) and st not in (
-            "error",
-            "failed",
+        # ChatGPT registration itself is complete once a durable Session/AT
+        # exists. Optional Agent Identity conversion or site import failures
+        # must not turn a successfully registered OpenAI account into a batch
+        # registration failure.
+        has_access_token = bool(ctx._session_data_for(final).get("accessToken"))
+        ok = has_access_token and st not in (
+            "account_error",
             "cancelled",
+            "stopped",
         )
         return {
             "ok": ok,

@@ -5,6 +5,22 @@ from __future__ import annotations
 from typing import Any
 
 
+def _wait_for_password_transition(ctx, page, check_cancel, timeout=12.0):
+    """Wait until React has replaced the submitted password form.
+
+    ChatGPT can leave the old password input visible for several seconds after
+    accepting the password. Treating that transient DOM as a failed submit
+    causes a second password attempt just as the OTP form appears.
+    """
+    deadline = ctx.time.time() + max(0.0, float(timeout))
+    state = ctx._signup_state(page)
+    while state in {"new_password", "unknown"} and ctx.time.time() < deadline:
+        check_cancel()
+        page.wait_for_timeout(200)
+        state = ctx._signup_state(page)
+    return state
+
+
 
 def register_chatgpt_account(
     ctx,
@@ -19,6 +35,8 @@ def register_chatgpt_account(
     on_progress=None,
     browser_data_dir=None,
     operation_delay_ms=3000,
+    checkout_probe_enabled=False,
+    checkout_proxy="",
     browser_runtime=None,
 ):
     """Register a new ChatGPT account via browser automation.
@@ -109,6 +127,146 @@ def register_chatgpt_account(
         except Exception:
             pass
 
+    def _accept_cookie_consent(timeout_sec: float = 3.0) -> bool:
+        """Accept ChatGPT's cookie dialog before it can block signup controls."""
+        if page is None:
+            return False
+        _step("cookie_consent", "checking")
+        consent_pattern = ctx.action_pattern("cookie_accept_all")
+        selectors = (
+            '[data-testid="cookie-policy-manage-dialog-accept-button"]',
+            '#onetrust-accept-btn-handler',
+        )
+
+        def _language_for_text(value: str) -> str:
+            text = str(value or "").lower()
+            if ctx.re.search(r"tout\s+accepter|nous\s+utilisons\s+des\s+cookies", text):
+                return "fr"
+            if ctx.re.search(
+                r"すべて|全て|クッキー|cookie\s*(?:を|の).*(?:許可|同意|受け入れ)",
+                text,
+                ctx.re.I,
+            ):
+                return "ja"
+            if ctx.re.search(r"接受全部|全部接受|同意全部|允許全部", text):
+                return "zh"
+            if ctx.re.search(r"accept\s+all|allow\s+all|we\s+use\s+cookies", text):
+                return "en"
+            if ctx.re.search(r"alle?s?\s+akzeptieren", text):
+                return "de"
+            if ctx.re.search(r"aceptar\s+tod|aceitar\s+tod", text):
+                return "es"
+            return "unknown"
+
+        def _visible_prompt_language(frame: Any) -> str:
+            prompt_pattern = ctx.re.compile(
+                r"we\s+use\s+cookies|cookie\s+preferences|"
+                r"nous\s+utilisons\s+des\s+cookies|préférences.*cookies|"
+                r"cookie.*(?:を使用|の使用|設定)|クッキー.*(?:使用|設定)|"
+                r"我们使用.*cookie|我們使用.*cookie|cookie.*偏好",
+                ctx.re.I,
+            )
+            for selector in (
+                '[role="dialog"]',
+                '[aria-modal="true"]',
+                '[data-testid*="cookie" i]',
+                '#onetrust-banner-sdk',
+            ):
+                try:
+                    dialogs = frame.locator(selector)
+                    for index in range(dialogs.count()):
+                        dialog = dialogs.nth(index)
+                        if not dialog.is_visible():
+                            continue
+                        text = str(dialog.inner_text() or "")
+                        if prompt_pattern.search(text):
+                            return _language_for_text(text)
+                except Exception:
+                    continue
+            try:
+                body_text = str(frame.locator("body").inner_text() or "")[:4000]
+                if prompt_pattern.search(body_text):
+                    return _language_for_text(body_text)
+            except Exception:
+                pass
+            return ""
+
+        consent_deadline = min(deadline, ctx.time.time() + timeout_sec)
+        detected_language = ""
+        while ctx.time.time() < consent_deadline:
+            _cancel_check()
+            for frame in list(page.frames):
+                language = _visible_prompt_language(frame)
+                if language and not detected_language:
+                    detected_language = language
+                    _step("cookie_consent", "detected", language=language)
+                candidates = []
+                for selector in selectors:
+                    try:
+                        candidates.append(frame.locator(selector))
+                    except Exception:
+                        pass
+                try:
+                    action = ctx._find_action(frame, consent_pattern)
+                    if action:
+                        candidates.append(action)
+                except Exception:
+                    pass
+                for locator in candidates:
+                    try:
+                        count = locator.count() if hasattr(locator, "count") else 1
+                        for index in range(count):
+                            candidate = locator.nth(index) if hasattr(locator, "nth") else locator
+                            if not candidate.is_visible() or not candidate.is_enabled():
+                                continue
+                            label = str(candidate.text_content() or "").strip()[:80]
+                            button_language = _language_for_text(label)
+                            language = detected_language or button_language
+                            _step(
+                                "cookie_consent",
+                                "clicking",
+                                language=language,
+                                label=label,
+                            )
+                            candidate.click(timeout=1500)
+                            disappearance_deadline = min(
+                                deadline, ctx.time.time() + 2.0
+                            )
+                            while ctx.time.time() < disappearance_deadline:
+                                _cancel_check()
+                                if not any(
+                                    _visible_prompt_language(current_frame)
+                                    for current_frame in list(page.frames)
+                                ):
+                                    break
+                                page.wait_for_timeout(100)
+                            if any(
+                                _visible_prompt_language(current_frame)
+                                for current_frame in list(page.frames)
+                            ):
+                                _step(
+                                    "cookie_consent",
+                                    "click_not_applied",
+                                    language=language,
+                                )
+                                continue
+                            _step("cookie_consent", "accepted", language=language)
+                            return True
+                    except Exception:
+                        continue
+            page.wait_for_timeout(150)
+        if detected_language:
+            _step(
+                "cookie_consent",
+                "unsupported",
+                language=detected_language,
+            )
+            raise ctx.ChatGPTRegistrationError(
+                f"检测到 {detected_language} Cookie 弹窗，但未能点击全部接受按钮"
+            )
+        _step("cookie_consent", "not_present")
+        return False
+
     owned_runtime = browser_runtime is None
     runtime = browser_runtime or ctx.ChatGPTBrowserRuntime()
     browser = None
@@ -156,6 +314,7 @@ def register_chatgpt_account(
         )
         page.wait_for_timeout(2000)
         _enforce_visible_window()
+        _accept_cookie_consent()
         _step("signup_page", "finding_signup")
         _cancel_check()
         signup_selectors = [
@@ -201,12 +360,15 @@ def register_chatgpt_account(
         profile_filled = False
         password_submit_attempts = 0
 
-        def _fill_and_submit_password() -> None:
+        def _fill_and_submit_password() -> str:
             nonlocal password_submit_attempts
             if not password:
                 raise ctx.ChatGPTRegistrationError(
                     "ChatGPT 要求设置密码，但注册密码为空"
                 )
+            current_state = ctx._signup_state(page)
+            if current_state != "new_password":
+                return current_state
             if password_submit_attempts >= 3:
                 raise ctx.ChatGPTRegistrationError(
                     f"密码页连续提交失败: {ctx._safe_page_text(page)[:250]}"
@@ -214,11 +376,24 @@ def register_chatgpt_account(
             password_submit_attempts += 1
             _step("password", "filling", attempt=password_submit_attempts)
             _action_delay()
+            # A previous password submission can finish during the human-like
+            # delay. Re-check the live page before touching the old form.
+            current_state = ctx._signup_state(page)
+            if current_state != "new_password":
+                return current_state
             if not ctx._find_and_fill_input(
                 page, new_password_selectors, password, timeout=10
             ):
+                current_state = ctx._signup_state(page)
+                if current_state != "new_password":
+                    return current_state
                 raise ctx.ChatGPTRegistrationError("找不到新账号密码输入框")
             password_input = ctx._first_visible(page, new_password_selectors)
+            if not password_input:
+                current_state = ctx._signup_state(page)
+                if current_state != "new_password":
+                    return current_state
+                raise ctx.ChatGPTRegistrationError("找不到新账号密码输入框")
             _step("password", "filled")
             _cancel_check()
             _action_delay()
@@ -230,6 +405,7 @@ def register_chatgpt_account(
                 password_input.press("Enter")
             _step("password", "submitted", attempt=password_submit_attempts)
             page.wait_for_timeout(1200)
+            return _wait_for_password_transition(ctx, page, _cancel_check)
 
         state = ctx._wait_for_signup_state(page, _cancel_check, 20)
         while state in {"new_password", "retry"}:
@@ -240,7 +416,9 @@ def register_chatgpt_account(
                         f"认证重试页自动恢复失败: {page.url}"
                     )
             else:
-                _fill_and_submit_password()
+                state = _fill_and_submit_password()
+                if state not in {"new_password", "unknown"}:
+                    continue
             state = ctx._wait_for_signup_state(page, _cancel_check, 12)
         if state == "security_blocked":
             raise ctx.ChatGPTRegistrationError(
@@ -358,7 +536,8 @@ def register_chatgpt_account(
                     next_state = ctx._signup_state(page)
                     text = ctx._safe_page_text(page)
                     if ctx.re.search(
-                        "invalid\\s+code|incorrect\\s+code|code.*incorrect|验证码.*(?:错误|不正确)",
+                        "invalid\\s+code|incorrect\\s+code|code.*incorrect|"
+                        "验证码.*(?:错误|不正确)|コード.*(?:正しくありません|無効|間違)",
                         text,
                         ctx.re.I,
                     ):
@@ -507,7 +686,8 @@ def register_chatgpt_account(
                         _step("profile", "submitted", attempt=profile_submit_attempts)
             text = ctx._safe_page_text(page)
             if ctx.re.search(
-                "unsupported_email|email you provided is not supported|不支持.*邮箱",
+                "unsupported_email|email you provided is not supported|不支持.*邮箱|"
+                "メール.*サポートされていません|このメール.*使用できません",
                 text,
                 ctx.re.I,
             ):
@@ -515,7 +695,8 @@ def register_chatgpt_account(
                     f"OpenAI 不支持当前邮箱地址或域名，账号未创建成功: {email}"
                 )
             if ctx.re.search(
-                "unable to create|couldn.t create|invalid birthday|无法.*创建|生日.*错误",
+                "unable to create|couldn.t create|invalid birthday|无法.*创建|生日.*错误|"
+                "作成できません|生年月日.*(?:無効|正しくありません)",
                 text,
                 ctx.re.I,
             ):
@@ -581,10 +762,50 @@ def register_chatgpt_account(
                 f"ChatGPT Session 中缺少 accessToken: {session_error or '请确认注册后已完成登录'}"
             )
         _step("session", "extracted")
+        _step("plus_trial", "checking")
+        plus_trial = ctx._check_plus_trial_eligibility(
+            page,
+            context,
+            str(session.get("accessToken") or ""),
+        )
+        plus_trial_status = str(plus_trial.get("status") or "unknown")
+        _step(
+            "plus_trial",
+            plus_trial_status,
+            amount=plus_trial.get("amount_text"),
+            reason=plus_trial.get("reason"),
+        )
+        if checkout_probe_enabled:
+            _step("checkout_kind", "checking")
+            checkout_probe = ctx._check_checkout_kind(
+                context,
+                str(session.get("accessToken") or ""),
+                country="DE",
+                currency="EUR",
+                locale="de-DE",
+                proxy=str(checkout_proxy or ""),
+            )
+            checkout_kind = str(checkout_probe.get("kind") or "unknown")
+        else:
+            checkout_probe = {
+                "status": "disabled",
+                "kind": "unknown",
+                "country": "DE",
+                "currency": "EUR",
+                "reason": "Checkout 类型检测未开启",
+            }
+            checkout_kind = "skipped"
+        _step(
+            "checkout_kind",
+            checkout_kind,
+            reason=checkout_probe.get("reason"),
+        )
         return {
             "ok": True,
             "email": email,
             "session": session,
+            "plus_trial": plus_trial,
+            "checkout_probe": checkout_probe,
             "name": f"{first_name} {last_name}",
             "steps": steps,
         }

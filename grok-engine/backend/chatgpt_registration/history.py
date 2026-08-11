@@ -152,6 +152,7 @@ def recover_saved_history(
         message = "从本地 Agent Identity 认证文件恢复注册成功记录"
         sessions[sid] = {
             "id": sid,
+            "registration_target": "chatgpt",
             "email": email,
             "status": "imported",
             "message": message,
@@ -185,6 +186,7 @@ def recover_saved_history(
         sessions[sid]["batch_total"] = len(session_ids)
     batch = {
         "id": batch_id,
+        "registration_target": "chatgpt",
         "batch_id": batch_id,
         "status": "done",
         "message": f"从本地认证文件恢复 {len(session_ids)} 个 ChatGPT 注册记录",

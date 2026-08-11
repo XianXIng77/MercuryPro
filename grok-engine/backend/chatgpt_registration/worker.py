@@ -53,14 +53,6 @@ def _run_registration(ctx, sid, proxy, receiver, browser_runtime=None):
         hotmail_alias_index = None
     hotmail_marked_used = False
 
-    def _pipeline_step_delay() -> None:
-        remaining = step_delay_ms
-        while remaining > 0:
-            _check_cancel()
-            chunk = min(200, remaining)
-            ctx.time.sleep(chunk / 1000.0)
-            remaining -= chunk
-
     if not email:
         update("error", "missing email for registration session", error="missing email")
         return
@@ -195,7 +187,9 @@ def _run_registration(ctx, sid, proxy, receiver, browser_runtime=None):
                     from hotmail_local import mark_used
 
                     if mark_used(
-                        hotmail_account_id, alias_index=hotmail_alias_index
+                        hotmail_account_id,
+                        alias_index=hotmail_alias_index,
+                        registration_target="chatgpt",
                     ):
                         hotmail_marked_used = True
             except ctx._RegCancelled:
@@ -215,6 +209,10 @@ def _run_registration(ctx, sid, proxy, receiver, browser_runtime=None):
             should_cancel=_should_cancel,
             on_progress=_on_progress,
             operation_delay_ms=step_delay_ms,
+            checkout_probe_enabled=bool(
+                pipeline_cfg.get("checkout_probe_enabled")
+            ),
+            checkout_proxy=str(pipeline_cfg.get("checkout_proxy") or ""),
             browser_runtime=browser_runtime,
         )
         if not result.get("ok"):
@@ -237,7 +235,9 @@ def _run_registration(ctx, sid, proxy, receiver, browser_runtime=None):
             from hotmail_local import mark_used
 
             hotmail_marked_used = mark_used(
-                hotmail_account_id, alias_index=hotmail_alias_index
+                hotmail_account_id,
+                alias_index=hotmail_alias_index,
+                registration_target="chatgpt",
             )
         session_data = result.get("session")
         if (
@@ -247,6 +247,37 @@ def _run_registration(ctx, sid, proxy, receiver, browser_runtime=None):
             error_msg = "ChatGPT Session 缺少 accessToken，已停止转换和导入"
             update("error", error_msg, error="session_missing_access_token")
             return
+        plus_trial = (
+            dict(result.get("plus_trial"))
+            if isinstance(result.get("plus_trial"), dict)
+            else {
+                "status": "unknown",
+                "eligible": None,
+                "reason": "注册流程未返回 Plus 试用资格结果",
+            }
+        )
+        checkout_probe = (
+            dict(result.get("checkout_probe"))
+            if isinstance(result.get("checkout_probe"), dict)
+            else {
+                "status": "unknown",
+                "kind": "unknown",
+                "reason": "注册流程未返回结账类型检测结果",
+            }
+        )
+        session_data = dict(session_data)
+        session_data["mercuryPlusTrialEligibility"] = plus_trial
+        session_data["mercuryCheckoutProbe"] = checkout_probe
+        password_was_set = any(
+            isinstance(step, dict)
+            and str(step.get("step") or "") == "password"
+            and str(step.get("status") or "") == "submitted"
+            for step in (result.get("steps") or [])
+        )
+        if password_was_set:
+            registration_password = str(sess.get("password") or "").strip()
+            if registration_password:
+                session_data["mercuryRegistrationPassword"] = registration_password
         try:
             session_file = ctx._save_original_chatgpt_session(
                 session_data, email=email, session_id=sid
@@ -255,177 +286,32 @@ def _run_registration(ctx, sid, proxy, receiver, browser_runtime=None):
             error_msg = "ChatGPT 原始 Session 保存失败，已停止转换和导入"
             update("error", error_msg, error="session_save_failed")
             return
+        trial_status = str(plus_trial.get("status") or "unknown").lower()
+        trial_label = {
+            "eligible": "有资格",
+            "ineligible": "无资格",
+        }.get(trial_status, "未知")
+        checkout_kind = str(checkout_probe.get("kind") or "unknown").lower()
+        checkout_status = str(checkout_probe.get("status") or "unknown").lower()
+        checkout_label = (
+            checkout_kind
+            if checkout_kind in {"oaics", "cs_live"}
+            else "未检测" if checkout_status == "disabled" else "未知"
+        )
         update(
-            "fetching_sso",
-            "ChatGPT Session 获取并已保存",
+            "completed",
+            f"OpenAI 注册完成，Session 与 Access Token 已保存到本地；Plus 试用资格：{trial_label}；结账类型：{checkout_label}",
             session_data=session_data,
             session_file=session_file,
-        )
-        _pipeline_step_delay()
-        update("converting", "正在注册 Codex Agent Identity")
-        import chatgpt_session_to_auth as cs2a
-
-        try:
-            auth_dict = cs2a.session_to_auth_entry(
-                session_data, proxy=proxy, verify_task=True
-            )
-        except cs2a.AgentIdentityUpstreamError as exc:
-            error_msg = str(exc)[:500]
-            if exc.error_code == "token_revoked":
-                update(
-                    "account_error",
-                    "Agent Identity 注册失败：ChatGPT Session 已被上游撤销，账号已标记异常",
-                    error=error_msg,
-                    error_type="session_token_revoked",
-                    session_file=session_file,
-                )
-            else:
-                update("error", error_msg, error=error_msg, session_file=session_file)
-            return
-        first_entry = next(iter(auth_dict.values()), {})
-        agent_id = first_entry.get("agent_identity", {})
-        if (
-            not isinstance(agent_id, dict)
-            or not str(agent_id.get("task_id") or "").strip()
-        ):
-            error_msg = "Agent Identity 任务注册未返回 task_id，已阻止保存和导入"
-            update("error", error_msg, error=error_msg)
-            return
-        update("converting", "Codex Agent Identity 注册完成，正在转换 auth.json")
-        _pipeline_step_delay()
-        auth_payload = {
-            "key": agent_id.get("agent_runtime_id", ""),
-            "access_token": session_data.get("accessToken", ""),
-            "auth_mode": "agent_identity",
-            "email": agent_id.get("email") or email,
-            "refresh_token": "",
-            "id_token": "",
-            "token_type": "Bearer",
-            "expires_at": agent_id.get("expires_at"),
-            "oidc_issuer": "https://auth.openai.com",
-            "oidc_client_id": ctx.CHATGPT_ADAPTER_BUILD,
-            "sso": ctx.json.dumps(session_data) if session_data else "",
-            "password": sess.get("password", ""),
-            "agent_identity": agent_id,
-        }
-        output_target = str(
-            pipeline_cfg.get("output_format") or pipeline_cfg.get("target") or "cpa"
-        ).lower()
-        output_format = "sub2api" if output_target == "sub2api" else "cpa"
-        import accounts
-
-        import_result = accounts.import_auth_payload(
-            auth_payload, merge=True, output_format=output_format
-        )
-        if not import_result.get("ok"):
-            update(
-                "error",
-                f"account save failed: {import_result.get('error')}",
-                error=import_result.get("error"),
-            )
-            return
-        imported_rows = import_result.get("imported") or []
-        imported_ids = [str(r.get("id") or "") for r in imported_rows if r.get("id")]
-        imported_accounts = [
-            {"id": r.get("id"), "email": r.get("email")}
-            for r in imported_rows
-            if r.get("id") or r.get("email")
-        ]
-        auto_enabled = bool(pipeline_cfg.get("auto_import_enabled"))
-        update(
-            "converted",
-            "Agent Identity auth.json 转换完成",
-            auth_json=import_result,
-            imported_account_ids=imported_ids,
-            imported_accounts=imported_accounts,
-            session_data=session_data,
-            session_file=session_file,
+            plus_trial=plus_trial,
+            checkout_probe=checkout_probe,
             auto_import={
-                "enabled": auto_enabled,
-                "target": pipeline_cfg.get("target", "sub2api"),
+                "enabled": False,
                 "ok": None,
+                "skipped": True,
+                "reason": "access_token_only",
             },
         )
-        if auto_enabled and imported_ids:
-            target_name = (
-                "Sub2API"
-                if str(pipeline_cfg.get("target") or "sub2api").lower() == "sub2api"
-                else "CPA"
-            )
-            update("auto_importing", f"正在导入 {target_name}；测活结果不影响导入")
-            _pipeline_step_delay()
-            from account_pipeline import import_account
-
-            site_result = import_account(auth_payload, pipeline_cfg)
-            auto_import = {
-                "enabled": True,
-                "target": pipeline_cfg.get("target", "sub2api"),
-                "ok": bool(site_result.get("ok")),
-                "imported": int(
-                    site_result.get("created")
-                    or site_result.get("updated")
-                    or (1 if site_result.get("ok") else 0)
-                ),
-                "failed": 0 if site_result.get("ok") else 1,
-                "result": site_result,
-            }
-            if not site_result.get("ok"):
-                error_text = str(site_result.get("error") or "站点导入失败")[:300]
-                update(
-                    "error",
-                    f"{target_name} 导入失败：{error_text}",
-                    error=error_text,
-                    auto_import=auto_import,
-                )
-                return
-            update(
-                "probing",
-                f"正在通过 {target_name} 使用 {pipeline_cfg.get('model') or ctx.CHATGPT_DEFAULT_PROBE_MODEL} 发送消息测活",
-            )
-            _pipeline_step_delay()
-            probe_result = ctx._probe_registration_session(sid, pipeline_cfg)
-            probe_note = ""
-            if not probe_result.get("ok"):
-                error_text = str(probe_result.get("error") or "ChatGPT 账号测活失败")[
-                    :300
-                ]
-                probe_note = f"；测活失败已独立记录：{error_text}"
-            update(
-                "imported",
-                f"{target_name} 导入成功，测活结果不影响导入{probe_note}",
-                auto_import=auto_import,
-            )
-            try:
-                from account_rotation import record_imported_session
-
-                with ctx._lock:
-                    rotation_session = dict(ctx._sessions.get(sid) or {})
-                record_imported_session("chatgpt", rotation_session)
-            except Exception:
-                pass
-        else:
-            update(
-                "probing",
-                f"正在使用 {pipeline_cfg.get('model') or ctx.CHATGPT_DEFAULT_PROBE_MODEL} 测活 ChatGPT 账号",
-            )
-            _pipeline_step_delay()
-            probe_result = ctx._probe_registration_session(sid, pipeline_cfg)
-            probe_note = ""
-            if not probe_result.get("ok"):
-                error_text = str(probe_result.get("error") or "ChatGPT 账号测活失败")[
-                    :300
-                ]
-                probe_note = f"；测活失败已独立记录：{error_text}"
-            update(
-                "imported",
-                f"注册及 Agent Identity JSON 转换完成（未启用站点导入）{probe_note}",
-                auto_import={
-                    "enabled": False,
-                    "target": pipeline_cfg.get("target", "sub2api"),
-                    "ok": None,
-                    "skipped": True,
-                },
-            )
     except ctx._RegCancelled:
         update("cancelled", "registration cancelled", error="cancelled")
     except Exception as e:
@@ -447,7 +333,9 @@ def _run_registration(ctx, sid, proxy, receiver, browser_runtime=None):
                     from hotmail_local import release_account
 
                     release_account(
-                        hotmail_account_id, alias_index=hotmail_alias_index
+                        hotmail_account_id,
+                        alias_index=hotmail_alias_index,
+                        registration_target="chatgpt",
                     )
                 else:
                     from hotmail_local import mark_failed
@@ -460,6 +348,7 @@ def _run_registration(ctx, sid, proxy, receiver, browser_runtime=None):
                             or "注册失败"
                         ),
                         alias_index=hotmail_alias_index,
+                        registration_target="chatgpt",
                     )
         with ctx._lock:
             if sid in ctx._sessions:

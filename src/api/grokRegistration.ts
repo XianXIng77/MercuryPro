@@ -1,5 +1,5 @@
 export interface GrokConfig {
-  registration_target: 'grok';
+  registration_target: 'grok' | 'chatgpt';
   registration_mode: 'browser';
   count: number;
   concurrency: number;
@@ -7,6 +7,10 @@ export interface GrokConfig {
   auto_tune_enabled: boolean;
   pre_import_probe_enabled: boolean;
   grok_headless: boolean;
+  chatgpt_headless: boolean;
+  chatgpt_step_delay_ms: number;
+  chatgpt_checkout_probe_enabled: boolean;
+  chatgpt_checkout_proxy: string;
   captcha_provider: 'local' | 'yescaptcha';
   local_solver_url: string;
   yescaptcha_key: string;
@@ -52,6 +56,7 @@ export interface GrokBatch {
   failed?: number;
   created_at?: number;
   updated_at?: number;
+  registration_target?: 'grok' | 'chatgpt';
 }
 
 export interface GrokSession {
@@ -64,6 +69,10 @@ export interface GrokSession {
   batch_index?: number;
   created_at?: number;
   updated_at?: number;
+  registration_target?: 'grok' | 'chatgpt';
+  access_token_available?: boolean;
+  plus_trial?: PlusTrialEligibility;
+  checkout_probe?: CheckoutProbe;
   events?: Array<{ at?: number; status?: string; message?: string }>;
   pre_import_probe_enabled?: boolean;
   registration_json_format?: 'sub2api' | 'cpa';
@@ -121,6 +130,40 @@ export interface RotationList {
   poll: { running?: boolean; interval_seconds?: number; last_auto_run_at?: number; next_auto_run_at?: number };
 }
 
+export interface ChatGPTAccountRecord {
+  id: string;
+  email: string;
+  created_at?: number;
+  access_token_available?: boolean;
+  plus_trial?: PlusTrialEligibility;
+  checkout_probe?: CheckoutProbe;
+  password?: string;
+  password_available?: boolean;
+}
+
+export interface PlusTrialEligibility {
+  status?: 'eligible' | 'ineligible' | 'unknown';
+  eligible?: boolean | null;
+  checked_at?: number;
+  source?: string;
+  amount?: number;
+  amount_text?: string;
+  reason?: string;
+  locale?: string;
+  country?: string;
+  currency?: string;
+}
+
+export interface CheckoutProbe {
+  status?: 'detected' | 'unknown' | 'disabled';
+  kind?: 'oaics' | 'cs_live' | 'cs_test' | 'unknown';
+  checked_at?: number;
+  http_status?: number;
+  country?: string;
+  currency?: string;
+  reason?: string;
+}
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
     headers: { 'Content-Type': 'application/json' },
@@ -142,6 +185,9 @@ export const grokRegistrationApi = {
   saveConfig: (config: GrokConfig) => request<{ ok: boolean; config: GrokConfig }>('/api/grok/config', { method: 'PUT', body: JSON.stringify(config) }),
   start: (config: GrokConfig) => request<Record<string, unknown>>('/api/grok/register', { method: 'POST', body: JSON.stringify(config) }),
   monitor: () => request<GrokMonitor>('/api/grok/sessions'),
+  chatgptAccessToken: (sessionId: string) => request<{ ok: boolean; email?: string; access_token: string }>(`/api/grok/chatgpt/sessions/${encodeURIComponent(sessionId)}/access-token`, { method: 'POST' }),
+  chatgptAccounts: () => request<{ ok: boolean; accounts: ChatGPTAccountRecord[]; total: number }>('/api/grok/chatgpt/accounts'),
+  chatgptAccountTokens: (ids: string[], allAccounts = false) => request<{ ok: boolean; tokens: Array<{ id: string; email: string; access_token: string }>; total: number }>('/api/grok/chatgpt/accounts/access-tokens', { method: 'POST', body: JSON.stringify({ ids, all_accounts: allAccounts }) }),
   resetMonitor: () => request<{ ok?: boolean; error?: string }>('/api/grok/sessions/reset', { method: 'POST' }),
   pauseBatch: (id: string) => request<Record<string, unknown>>(`/api/grok/batches/${encodeURIComponent(id)}/pause`, { method: 'POST' }),
   resumeBatch: (id: string) => request<Record<string, unknown>>(`/api/grok/batches/${encodeURIComponent(id)}/resume`, { method: 'POST' }),
@@ -158,15 +204,15 @@ export const grokRegistrationApi = {
       sub2api_api_key: config.sub2api_api_key,
     }),
   }),
-  hotmailAccounts: (source: GrokConfig['hotmail_account_source'] = 'mail_management') => request<Record<string, any>>(`/api/grok/mail/hotmail/accounts?source=${encodeURIComponent(source)}`),
+  hotmailAccounts: (source: GrokConfig['hotmail_account_source'] = 'mail_management', registrationTarget: GrokConfig['registration_target'] = 'grok') => request<Record<string, any>>(`/api/grok/mail/hotmail/accounts?source=${encodeURIComponent(source)}&registration_target=${encodeURIComponent(registrationTarget)}`),
   importHotmail: (text: string, baseUrl: string) => request<Record<string, any>>('/api/grok/mail/hotmail/accounts/import', { method: 'POST', body: JSON.stringify({ text, base_url: baseUrl }) }),
   probeHotmail: (baseUrl: string, source: GrokConfig['hotmail_account_source']) => request<Record<string, any>>('/api/grok/mail/hotmail/accounts/probe', { method: 'POST', body: JSON.stringify({ base_url: baseUrl, source }) }),
   probeHotmailOne: (id: string, baseUrl: string) => request<Record<string, any>>(`/api/grok/mail/hotmail/accounts/${encodeURIComponent(id)}/probe`, { method: 'POST', body: JSON.stringify({ base_url: baseUrl }) }),
-  updateHotmail: (id: string, payload: { used?: boolean; preferred_for_next_use?: boolean }) => request<Record<string, any>>(`/api/grok/mail/hotmail/accounts/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(payload) }),
-  restoreHotmailUses: (id: string, count: number) => request<Record<string, any>>(`/api/grok/mail/hotmail/accounts/${encodeURIComponent(id)}/restore-uses`, { method: 'POST', body: JSON.stringify({ count }) }),
+  updateHotmail: (id: string, payload: { used?: boolean; preferred_for_next_use?: boolean; registration_target?: GrokConfig['registration_target'] }) => request<Record<string, any>>(`/api/grok/mail/hotmail/accounts/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  restoreHotmailUses: (id: string, count: number, registrationTarget: GrokConfig['registration_target']) => request<Record<string, any>>(`/api/grok/mail/hotmail/accounts/${encodeURIComponent(id)}/restore-uses`, { method: 'POST', body: JSON.stringify({ count, registration_target: registrationTarget }) }),
   deleteHotmail: (id: string) => request<Record<string, any>>(`/api/grok/mail/hotmail/accounts/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   deleteHotmailSelected: (ids: string[]) => request<Record<string, any>>('/api/grok/mail/hotmail/accounts', { method: 'DELETE', body: JSON.stringify({ ids }) }),
-  deleteHotmailUsed: () => request<Record<string, any>>('/api/grok/mail/hotmail/accounts/used', { method: 'DELETE' }),
+  deleteHotmailUsed: (registrationTarget: GrokConfig['registration_target']) => request<Record<string, any>>(`/api/grok/mail/hotmail/accounts/used?registration_target=${encodeURIComponent(registrationTarget)}`, { method: 'DELETE' }),
   deleteHotmailUnhealthy: () => request<Record<string, any>>('/api/grok/mail/hotmail/accounts/unhealthy', { method: 'DELETE' }),
   testHotmail: (config: GrokConfig) => request<Record<string, any>>('/api/grok/mail/hotmail/test', { method: 'POST', body: JSON.stringify(config) }),
   rotation: (params: { status?: string; keyword?: string; page?: number; pageSize?: number }) => {

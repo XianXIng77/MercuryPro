@@ -69,10 +69,10 @@ def mail_provider_presets(ctx, response):
     }
 
 
-def hotmail_accounts(ctx, source="mail_management"):
+def hotmail_accounts(ctx, source="mail_management", registration_target="grok"):
     from hotmail_local import list_accounts
 
-    return list_accounts(source)
+    return list_accounts(source, registration_target)
 
 
 def hotmail_import(ctx, request):
@@ -124,28 +124,37 @@ def hotmail_set_status(ctx, account_id, request):
 
     try:
         if request.preferred_for_next_use is True:
-            if not set_preferred_account(account_id):
+            if not set_preferred_account(account_id, request.registration_target):
                 raise ctx.HTTPException(status_code=404, detail="邮箱账号不存在")
         elif request.used is not None:
-            if not set_used(account_id, request.used):
+            if not set_used(account_id, request.used, request.registration_target):
                 raise ctx.HTTPException(status_code=404, detail="邮箱账号不存在")
         else:
             raise ctx.HTTPException(status_code=400, detail="没有可更新的邮箱状态")
     except RuntimeError as exc:
         raise ctx.HTTPException(status_code=409, detail=str(exc)) from exc
-    return {"ok": True, "pool": list_accounts()}
+    return {
+        "ok": True,
+        "pool": list_accounts(registration_target=request.registration_target),
+    }
 
 
 def hotmail_restore_uses(ctx, account_id, request):
     from hotmail_local import list_accounts, restore_uses
 
     try:
-        restored = restore_uses(account_id, request.count)
+        restored = restore_uses(
+            account_id, request.count, request.registration_target
+        )
         if restored is None:
             raise ctx.HTTPException(status_code=404, detail="邮箱账号不存在")
     except RuntimeError as exc:
         raise ctx.HTTPException(status_code=409, detail=str(exc)) from exc
-    return {"ok": True, "restored": restored, "pool": list_accounts()}
+    return {
+        "ok": True,
+        "restored": restored,
+        "pool": list_accounts(registration_target=request.registration_target),
+    }
 
 
 def hotmail_delete_selected(ctx, request):
@@ -155,11 +164,15 @@ def hotmail_delete_selected(ctx, request):
     return {"ok": True, **result, "pool": list_accounts()}
 
 
-def hotmail_delete_used(ctx):
+def hotmail_delete_used(ctx, registration_target="grok"):
     from hotmail_local import delete_used_accounts, list_accounts
 
-    result = delete_used_accounts()
-    return {"ok": True, **result, "pool": list_accounts()}
+    result = delete_used_accounts(registration_target)
+    return {
+        "ok": True,
+        **result,
+        "pool": list_accounts(registration_target=registration_target),
+    }
 
 
 def hotmail_delete_unhealthy(ctx):
@@ -203,8 +216,8 @@ def _effective_registration_concurrency(cfg: dict[str, Any], target: str) -> int
 def start_register(ctx, settings=None, paused=False):
     cfg = settings.model_dump() if settings else ctx.load_config()
     requested_target = str(cfg.get("registration_target") or "grok").strip().lower()
-    if requested_target == "chatgpt":
-        raise ctx.HTTPException(status_code=400, detail="ChatGPT 注册暂时停用")
+    if requested_target not in {"grok", "chatgpt"}:
+        raise ctx.HTTPException(status_code=400, detail="不支持的注册目标")
     cfg["registration_mode"] = "browser"
     selected_format = str(
         cfg.get("registration_json_format") or cfg.get("auto_import_target") or "cpa"
@@ -216,10 +229,31 @@ def start_register(ctx, settings=None, paused=False):
     target = str(cfg.get("registration_target") or "grok").strip().lower()
     if target not in ("grok", "chatgpt"):
         target = "grok"
+    if target == "chatgpt" and bool(cfg.get("chatgpt_checkout_probe_enabled")):
+        checkout_proxy = str(cfg.get("chatgpt_checkout_proxy") or "").strip()
+        if not checkout_proxy:
+            raise ctx.HTTPException(
+                status_code=400,
+                detail="已开启 Checkout 类型检测，请填写专用德国代理",
+            )
+        from proxy_pool import parse_proxy_pool
+
+        checkout_proxies = parse_proxy_pool(
+            checkout_proxy,
+            username="",
+            password="",
+            fallback_env=False,
+        )
+        if len(checkout_proxies) != 1:
+            raise ctx.HTTPException(
+                status_code=400,
+                detail="Checkout 类型检测仅支持填写一条有效的德国代理",
+            )
+        cfg["chatgpt_checkout_proxy"] = checkout_proxies[0]
     if cfg.get("mail_provider") == "hotmail_local":
         from hotmail_local import list_accounts
 
-        pool = list_accounts(cfg.get("hotmail_account_source"))
+        pool = list_accounts(cfg.get("hotmail_account_source"), target)
         available = int(pool.get("available") or 0)
         if available < 1:
             raise ctx.HTTPException(
@@ -249,6 +283,12 @@ def start_register(ctx, settings=None, paused=False):
         persisted["sub2api_xai_group_name"] = cfg["sub2api_xai_group_name"]
         persisted["grok_headless"] = cfg["grok_headless"]
         persisted["chatgpt_headless"] = cfg["chatgpt_headless"]
+        persisted["chatgpt_checkout_probe_enabled"] = bool(
+            cfg.get("chatgpt_checkout_probe_enabled")
+        )
+        persisted["chatgpt_checkout_proxy"] = str(
+            cfg.get("chatgpt_checkout_proxy") or ""
+        )
         ctx.save_config(persisted)
     ctx.apply_environment(cfg)
     ctx._sync_solver_proxy_file(cfg)
@@ -267,7 +307,7 @@ def start_register(ctx, settings=None, paused=False):
         "hotmail_account_source": cfg["hotmail_account_source"],
         "count": cfg["count"],
         "concurrency": cfg["concurrency"],
-        "stagger_ms": 0 if target == "chatgpt" else cfg["stagger_ms"],
+        "stagger_ms": cfg["stagger_ms"],
         "post_registration": ctx._post_registration_config(cfg),
         "start_paused": paused,
     }
@@ -379,6 +419,32 @@ def session(ctx, session_id):
         except Exception:
             pass
     raise ctx.HTTPException(status_code=404, detail="session not found")
+
+
+def chatgpt_access_token(ctx, session_id):
+    """Return one ChatGPT AT without exposing tokens in monitor responses."""
+    if not str(session_id or "").startswith("cgpt_"):
+        raise ctx.HTTPException(status_code=404, detail="ChatGPT 注册会话不存在")
+    adapter = ctx._get_registration_adapter("chatgpt")
+    result = adapter.get_registration_access_token(session_id)
+    if not result or not result.get("ok"):
+        detail = (result or {}).get("error") or "该会话尚未生成 Access Token"
+        raise ctx.HTTPException(status_code=404, detail=detail)
+    return result
+
+
+def chatgpt_accounts(ctx):
+    adapter = ctx._get_registration_adapter("chatgpt")
+    return adapter.list_registration_accounts()
+
+
+def chatgpt_account_access_tokens(ctx, request):
+    adapter = ctx._get_registration_adapter("chatgpt")
+    if not request.all_accounts and not request.ids:
+        raise ctx.HTTPException(status_code=400, detail="请至少选择一个 ChatGPT 账号")
+    return adapter.get_registration_access_tokens(
+        request.ids, request.all_accounts
+    )
 
 
 def batch(ctx, batch_id):

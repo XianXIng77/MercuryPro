@@ -115,6 +115,13 @@ export interface MailAccount {
   usageStatus: '未用' | '使用中' | '已用';
   registrationUseCount?: number;
   registrationUseLimit?: number;
+  grokRegistrationUseCount?: number;
+  grokRegistrationUseLimit?: number;
+  openaiRegistrationUseCount?: number;
+  openaiRegistrationUseLimit?: number;
+  openaiRegistrationUsed?: boolean;
+  openaiRegistrationFailed?: boolean;
+  openaiRegistrationFailureReason?: string;
   createdTime: string;
   refreshResult: '未刷新' | '刷新成功' | '刷新失败';
   messages: Email[];

@@ -298,7 +298,7 @@ export const MailAccountList: React.FC<MailAccountListProps> = ({
           />
         </div>
         <div className="flex items-center gap-2">
-          <span className={`font-semibold ${theme.textPrimary}`}>使用状态</span>
+          <span className={`font-semibold ${theme.textPrimary}`}>Grok 状态</span>
           <div className={`inline-flex p-1 rounded-xl border ${theme.border} ${isDark ? 'bg-white/[0.035]' : 'bg-black/[0.035]'}`}>
             {([['all', '全部'], ['0', '未用'], ['2', '使用中'], ['1', '已用']] as const).map(([value, label]) => (
               <button
@@ -364,7 +364,8 @@ export const MailAccountList: React.FC<MailAccountListProps> = ({
               <tr>
                 <th className="py-3 px-3 w-12 text-center"><button onClick={toggleSelectAll}>{isAllSelected ? <CheckSquare className="w-4 h-4 text-blue-600" /> : <Square className="w-4 h-4" />}</button></th>
                 <th className="py-3 px-3 min-w-[260px] text-center">邮箱</th>
-                <th className="py-3 px-3 w-36 text-center">使用状态</th>
+                <th className="py-3 px-3 w-36 text-center">Grok 状态</th>
+                <th className="py-3 px-3 w-36 text-center">OpenAI 状态</th>
                 <th className="py-3 px-3 w-44 text-center">创建时间</th>
                 <th className="py-3 px-3 w-36 text-center">刷新结果</th>
                 <th className={`py-3 px-3 min-w-[280px] text-center sticky right-0 backdrop-blur-md ${isDark ? 'bg-white/10' : 'bg-black/5'}`}>操作</th>
@@ -372,9 +373,9 @@ export const MailAccountList: React.FC<MailAccountListProps> = ({
             </thead>
             <tbody className={`divide-y ${isDark ? 'divide-slate-800' : 'divide-slate-200'}`}>
               {loading ? (
-                <tr><td colSpan={6} className="py-20 text-center"><LoaderCircle className="w-7 h-7 animate-spin text-blue-600 mx-auto mb-2" /><span className={theme.textSecondary}>正在加载真实邮箱数据...</span></td></tr>
+                <tr><td colSpan={7} className="py-20 text-center"><LoaderCircle className="w-7 h-7 animate-spin text-blue-600 mx-auto mb-2" /><span className={theme.textSecondary}>正在加载真实邮箱数据...</span></td></tr>
               ) : accounts.length === 0 && !loadError ? (
-                <tr><td colSpan={6} className="py-20 text-center"><Info className="w-8 h-8 text-slate-400 mx-auto mb-2" /><span className={theme.textSecondary}>暂无符合条件的邮箱账号</span></td></tr>
+                <tr><td colSpan={7} className="py-20 text-center"><Info className="w-8 h-8 text-slate-400 mx-auto mb-2" /><span className={theme.textSecondary}>暂无符合条件的邮箱账号</span></td></tr>
               ) : accounts.map((account) => {
                 const selected = selectedIds.includes(account.id);
                 const refresh = refreshStates[account.id];
@@ -386,8 +387,17 @@ export const MailAccountList: React.FC<MailAccountListProps> = ({
                     </td>
                     <td className="py-3 px-3 text-center">
                       <button onClick={() => void handleStatusChange(account)} className={`inline-flex items-center px-2.5 py-1 rounded-full border text-xs font-bold ${account.backendStatus === '1' ? 'border-emerald-300 bg-emerald-50 text-emerald-700' : account.backendStatus === '2' ? 'border-amber-300 bg-amber-50 text-amber-700' : 'border-slate-300 bg-slate-100 text-slate-600'}`}>
-                        {account.backendStatus === '1' ? <Check className="w-3.5 h-3.5 mr-1" /> : account.backendStatus === '2' ? <RotateCcw className="w-3.5 h-3.5 mr-1" /> : <Square className="w-3 h-3 mr-1" />}{account.usageStatus} · {account.registrationUseCount || 0}/{account.registrationUseLimit || 3}
+                        {account.backendStatus === '1' ? <Check className="w-3.5 h-3.5 mr-1" /> : account.backendStatus === '2' ? <RotateCcw className="w-3.5 h-3.5 mr-1" /> : <Square className="w-3 h-3 mr-1" />}{account.usageStatus} · {account.grokRegistrationUseCount || 0}/{account.grokRegistrationUseLimit || 3}
                       </button>
+                    </td>
+                    <td className="py-3 px-3 text-center">
+                      <span
+                        title={account.openaiRegistrationFailureReason || ''}
+                        className={`inline-flex items-center px-2.5 py-1 rounded-full border text-xs font-bold ${account.openaiRegistrationUsed ? 'border-emerald-300 bg-emerald-50 text-emerald-700' : account.openaiRegistrationFailed ? 'border-rose-300 bg-rose-50 text-rose-700' : 'border-sky-300 bg-sky-50 text-sky-700'}`}
+                      >
+                        {account.openaiRegistrationUsed ? <Check className="w-3.5 h-3.5 mr-1" /> : account.openaiRegistrationFailed ? <AlertCircle className="w-3.5 h-3.5 mr-1" /> : <Square className="w-3 h-3 mr-1" />}
+                        {account.openaiRegistrationUsed ? '已用' : account.openaiRegistrationFailed ? '注册失败' : '未用'} · {account.openaiRegistrationUseCount || 0}/1
+                      </span>
                     </td>
                     <td className={`py-3 px-3 text-center font-mono text-xs ${theme.textSecondary}`}>{account.createdTime || '-'}</td>
                     <td className="py-3 px-3 text-center">

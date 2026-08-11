@@ -313,6 +313,95 @@ def get_registration_session(ctx, session_id):
         return ctx._compact_session(dict(sess))
 
 
+def get_registration_access_token(ctx, session_id):
+    """Load a saved AT only for an explicit per-session copy request."""
+    with ctx._lock:
+        sess = dict(ctx._sessions.get(session_id) or {})
+    if not sess:
+        return {"ok": False, "error": "ChatGPT 注册会话不存在"}
+    session_data = ctx._session_data_for(sess)
+    access_token = str(session_data.get("accessToken") or "").strip()
+    if not access_token:
+        return {"ok": False, "error": "该会话尚未生成 Access Token"}
+    return {
+        "ok": True,
+        "session_id": session_id,
+        "email": str(sess.get("email") or ""),
+        "access_token": access_token,
+    }
+
+
+def _saved_account_rows(ctx, *, include_tokens: bool = False):
+    """Read durable ChatGPT session files as account-management records."""
+    rows = []
+    try:
+        paths = list(ctx.CHATGPT_SESSIONS_DIR.glob("*.json"))
+    except OSError:
+        paths = []
+    for path in paths:
+        try:
+            payload = ctx.json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                continue
+            access_token = str(payload.get("accessToken") or "").strip()
+            if not access_token:
+                continue
+            user = payload.get("user") if isinstance(payload.get("user"), dict) else {}
+            email = str(user.get("email") or "").strip().lower()
+            plus_trial = (
+                dict(payload.get("mercuryPlusTrialEligibility"))
+                if isinstance(payload.get("mercuryPlusTrialEligibility"), dict)
+                else {"status": "unknown", "eligible": None, "reason": "尚未检测"}
+            )
+            checkout_probe = (
+                dict(payload.get("mercuryCheckoutProbe"))
+                if isinstance(payload.get("mercuryCheckoutProbe"), dict)
+                else {"status": "unknown", "kind": "unknown", "reason": "尚未检测"}
+            )
+            registration_password = str(
+                payload.get("mercuryRegistrationPassword") or ""
+            )
+            stat = path.stat()
+        except (OSError, ValueError, UnicodeDecodeError):
+            continue
+        row = {
+            "id": path.name,
+            "email": email,
+            "created_at": float(stat.st_mtime),
+            "access_token_available": True,
+            "plus_trial": plus_trial,
+            "checkout_probe": checkout_probe,
+            "password": registration_password,
+            "password_available": bool(registration_password),
+        }
+        if include_tokens:
+            row["access_token"] = access_token
+        rows.append(row)
+    rows.sort(key=lambda item: float(item.get("created_at") or 0), reverse=True)
+    return rows
+
+
+def list_registration_accounts(ctx):
+    accounts = _saved_account_rows(ctx)
+    return {"ok": True, "accounts": accounts, "total": len(accounts)}
+
+
+def get_registration_access_tokens(ctx, account_ids=None, all_accounts=False):
+    requested = {str(value or "") for value in (account_ids or []) if str(value or "")}
+    tokens = []
+    for item in _saved_account_rows(ctx, include_tokens=True):
+        if not all_accounts and str(item.get("id") or "") not in requested:
+            continue
+        tokens.append(
+            {
+                "id": item["id"],
+                "email": item.get("email") or "",
+                "access_token": item["access_token"],
+            }
+        )
+    return {"ok": True, "tokens": tokens, "total": len(tokens)}
+
+
 def get_registration_batch(ctx, batch_id):
     with ctx._lock:
         b = ctx._batches.get(batch_id)

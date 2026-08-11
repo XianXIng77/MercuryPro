@@ -20,6 +20,9 @@ DEFAULT_HELPER_URL = "http://127.0.0.1:17373"
 # Each imported base account can register ALIAS_USES times:
 #   base@domain, base+1@domain, ..., base+(ALIAS_USES-1)@domain
 ALIAS_USES = 3
+OPENAI_USES = 1
+REGISTRATION_TARGET_GROK = "grok"
+REGISTRATION_TARGET_OPENAI = "chatgpt"
 ACCOUNT_SOURCE_MANAGEMENT = "mail_management"
 ACCOUNT_SOURCE_MANUAL = "manual"
 try:
@@ -31,6 +34,10 @@ except (TypeError, ValueError):
 _lock = threading.RLock()
 # account_id -> currently reserved plus-alias indices for in-flight tasks
 _reservations: dict[str, set[int]] = {}
+# OpenAI can use each physical mailbox once. Keep its in-flight reservations
+# separate from Grok alias slots so the two usage histories never overwrite
+# each other.
+_openai_reservations: set[str] = set()
 # account_id -> alias_index -> latest in-flight verification state. Codes are
 # intentionally process-local and never written to the credential file.
 _verification_states: dict[str, dict[int, dict[str, Any]]] = {}
@@ -60,6 +67,14 @@ def _normalize_account_source(value: Any) -> str:
         ACCOUNT_SOURCE_MANUAL
         if str(value or "").strip().lower() == ACCOUNT_SOURCE_MANUAL
         else ACCOUNT_SOURCE_MANAGEMENT
+    )
+
+
+def _normalize_registration_target(value: Any) -> str:
+    return (
+        REGISTRATION_TARGET_OPENAI
+        if str(value or "").strip().lower() in {"chatgpt", "openai"}
+        else REGISTRATION_TARGET_GROK
     )
 
 
@@ -303,7 +318,10 @@ def _code_fetch_top(account_id: str) -> int:
     so concurrent plus-address registrations and resends remain covered.
     """
     with _lock:
-        active_aliases = len(_reservations.get(str(account_id or ""), set()))
+        key = str(account_id or "")
+        active_aliases = len(_reservations.get(key, set())) + int(
+            key in _openai_reservations
+        )
     return max(10, min(30, active_aliases * 2 + 4))
 
 
@@ -369,6 +387,27 @@ def _merge_duplicate_base_accounts(
         right_used = float(row.get("last_used_at") or 0)
         if left_used or right_used:
             existing["last_used_at"] = max(left_used, right_used)
+        if row.get("openai_used"):
+            existing["openai_used"] = True
+            existing["openai_failed"] = False
+            existing["openai_failure_reason"] = ""
+            existing["openai_failed_at"] = None
+        elif row.get("openai_failed") and not existing.get("openai_used"):
+            existing["openai_failed"] = True
+            existing["openai_failure_reason"] = str(
+                row.get("openai_failure_reason")
+                or existing.get("openai_failure_reason")
+                or ""
+            )
+            existing["openai_failed_at"] = (
+                row.get("openai_failed_at") or existing.get("openai_failed_at")
+            )
+        left_openai_used = float(existing.get("openai_last_used_at") or 0)
+        right_openai_used = float(row.get("openai_last_used_at") or 0)
+        if left_openai_used or right_openai_used:
+            existing["openai_last_used_at"] = max(
+                left_openai_used, right_openai_used
+            )
         # Drop the duplicate row; keep the first id for reservation continuity.
     return merged, changed
 
@@ -401,7 +440,11 @@ def _reserved_indices(account_id: str) -> set[int]:
 
 def _free_alias_index(item: dict[str, Any], account_id: str) -> int | None:
     """Next free plus-alias index for this base mailbox, or None if exhausted."""
-    if _account_level_failed(item) or item.get("mail_healthy") is False:
+    if (
+        _account_level_failed(item)
+        or item.get("mail_healthy") is False
+        or account_id in _openai_reservations
+    ):
         return None
     taken = (
         _normalize_used_aliases(item)
@@ -421,6 +464,42 @@ def _is_account_available(item: dict[str, Any], *, account_id: str | None = None
     if not item.get("email") or not item.get("client_id") or not item.get("refresh_token"):
         return False
     return _free_alias_index(item, account_id) is not None
+
+
+def _openai_remaining_uses(item: dict[str, Any], account_id: str) -> int:
+    if (
+        _account_level_failed(item)
+        or item.get("mail_healthy") is False
+        or item.get("openai_used") is True
+        or item.get("openai_failed") is True
+        or account_id in _openai_reservations
+        or bool(_reserved_indices(account_id))
+    ):
+        return 0
+    return OPENAI_USES
+
+
+def _is_target_available(
+    item: dict[str, Any], account_id: str, registration_target: str
+) -> bool:
+    if not item.get("email") or not item.get("client_id") or not item.get("refresh_token"):
+        return False
+    if _normalize_registration_target(registration_target) == REGISTRATION_TARGET_OPENAI:
+        return _openai_remaining_uses(item, account_id) > 0
+    return _free_alias_index(item, account_id) is not None
+
+
+def _account_has_reservation(account_id: str) -> bool:
+    key = str(account_id or "")
+    return bool(_reserved_indices(key)) or key in _openai_reservations
+
+
+def _preferred_for_target(item: dict[str, Any], registration_target: str) -> bool:
+    if item.get("preferred_for_next_use") is not True:
+        return False
+    return _normalize_registration_target(
+        item.get("preferred_registration_target") or REGISTRATION_TARGET_GROK
+    ) == _normalize_registration_target(registration_target)
 
 
 def build_plus_alias(email: str, use_index: int) -> str:
@@ -505,6 +584,9 @@ def _mirror_mail_management_usage(item: dict[str, Any]) -> None:
             source_account_id,
             used_aliases=sorted(_normalize_used_aliases(item)),
             failed_aliases=sorted(_normalize_failed_aliases(item)),
+            openai_used=item.get("openai_used") is True,
+            openai_failed=item.get("openai_failed") is True,
+            openai_failure_reason=str(item.get("openai_failure_reason") or ""),
             refresh_token=str(item.get("refresh_token") or "") or None,
         )
     except Exception:
@@ -556,6 +638,13 @@ def sync_mail_management_accounts() -> int:
                     "mail_health_error": "",
                     "mail_checked_at": None,
                     "preferred_for_next_use": False,
+                    "openai_used": source.get("openaiRegistrationUsed") is True,
+                    "openai_failed": source.get("openaiRegistrationFailed") is True,
+                    "openai_failure_reason": str(
+                        source.get("openaiRegistrationFailureReason") or ""
+                    ),
+                    "openai_failed_at": None,
+                    "openai_last_used_at": None,
                 }
                 _apply_alias_sets(item, used, failed)
                 accounts.append(item)
@@ -575,6 +664,17 @@ def sync_mail_management_accounts() -> int:
                 item["client_id"] = str(source.get("clientId") or item.get("client_id") or "")
                 item["refresh_token"] = str(source.get("refreshToken") or item.get("refresh_token") or "")
                 item.setdefault("password", "x")
+                if "openaiRegistrationUsed" in source:
+                    item["openai_used"] = source.get("openaiRegistrationUsed") is True
+                if "openaiRegistrationFailed" in source:
+                    item["openai_failed"] = (
+                        source.get("openaiRegistrationFailed") is True
+                        and not item.get("openai_used")
+                    )
+                if "openaiRegistrationFailureReason" in source:
+                    item["openai_failure_reason"] = str(
+                        source.get("openaiRegistrationFailureReason") or ""
+                    )
                 after = (
                     set(sources),
                     item.get("source_account_id"),
@@ -590,7 +690,7 @@ def sync_mail_management_accounts() -> int:
             if ACCOUNT_SOURCE_MANAGEMENT in sources and source_id not in managed_ids:
                 account_id = str(item.get("id") or "")
                 if sources == {ACCOUNT_SOURCE_MANAGEMENT}:
-                    if account_id not in _reservations:
+                    if not _account_has_reservation(account_id):
                         changed = True
                         continue
                 else:
@@ -742,7 +842,11 @@ def _masked(value: str, *, keep: int = 4) -> str:
     return f"{value[:keep]}…{value[-keep:]}"
 
 
-def list_accounts(account_source: str | None = None) -> dict[str, Any]:
+def list_accounts(
+    account_source: str | None = None,
+    registration_target: str = REGISTRATION_TARGET_GROK,
+) -> dict[str, Any]:
+    registration_target = _normalize_registration_target(registration_target)
     if account_source is not None and _normalize_account_source(account_source) == ACCOUNT_SOURCE_MANAGEMENT:
         sync_mail_management_accounts()
     with _lock:
@@ -753,44 +857,93 @@ def list_accounts(account_source: str | None = None) -> dict[str, Any]:
         account_failed = 0
         for item in accounts:
             account_id = str(item.get("id") or "")
-            use_count = len(_normalize_used_aliases(item) | _normalize_failed_aliases(item))
-            remaining = _remaining_uses(item)
+            grok_used_aliases = _normalize_used_aliases(item)
+            grok_failed_aliases = _normalize_failed_aliases(item)
+            grok_use_count = len(grok_used_aliases | grok_failed_aliases)
+            grok_remaining = _remaining_uses(item)
             reserved_set = _reserved_indices(account_id)
-            reserved = bool(reserved_set)
+            grok_reserved = bool(reserved_set)
+            openai_reserved = account_id in _openai_reservations
+            reserved = grok_reserved or openai_reserved
             free_index = _free_alias_index(item, account_id)
             account_failed_flag = _account_level_failed(item)
-            failed_aliases = _normalize_failed_aliases(item)
-            fully_used = _is_fully_exhausted(item)
-            if fully_used:
+            grok_fully_used = _is_fully_exhausted(item)
+            openai_used = item.get("openai_used") is True
+            openai_failed = item.get("openai_failed") is True and not openai_used
+            openai_remaining = _openai_remaining_uses(item, account_id)
+            target_openai = registration_target == REGISTRATION_TARGET_OPENAI
+            use_count = int(openai_used) if target_openai else grok_use_count
+            use_limit = OPENAI_USES if target_openai else ALIAS_USES
+            remaining = (
+                openai_remaining
+                if target_openai
+                else grok_remaining if free_index is not None else 0
+            )
+            target_failed = (
+                openai_failed or account_failed_flag
+                if target_openai
+                else account_failed_flag
+            )
+            target_used = openai_used if target_openai else grok_fully_used
+            target_reserved = openai_reserved if target_openai else grok_reserved
+            if target_used:
                 exhausted += 1
-            if account_failed_flag:
+            if target_failed:
                 account_failed += 1
-            if free_index is not None:
+            if target_openai:
+                available_slots += openai_remaining
+            elif free_index is not None:
                 # Free slots excluding in-flight reservations and failed aliases.
                 available_slots += max(
                     0,
                     ALIAS_USES
-                    - len(_normalize_used_aliases(item) | failed_aliases | reserved_set),
+                    - len(grok_used_aliases | grok_failed_aliases | reserved_set),
                 )
-            next_email = (
+            next_email = base_mailbox_email(str(item.get("email") or "")) if (
+                target_openai and openai_remaining > 0
+            ) else (
                 build_plus_alias(str(item.get("email") or ""), free_index)
-                if free_index is not None
+                if (not target_openai) and free_index is not None
                 else ""
             )
             rows.append({
                 "id": item.get("id"),
                 "email": item.get("email"),
                 "base_email": base_mailbox_email(str(item.get("email") or "")),
-                "used": fully_used,
+                "registration_target": registration_target,
+                "used": target_used,
                 "use_count": use_count,
-                "use_limit": ALIAS_USES,
-                "remaining_uses": remaining if free_index is not None else 0,
+                "use_limit": use_limit,
+                "remaining_uses": remaining,
                 "next_alias_email": next_email,
-                "failed": account_failed_flag,
-                "failed_aliases": sorted(failed_aliases),
-                "failure_reason": str(item.get("failure_reason") or ""),
-                "failed_at": item.get("failed_at"),
+                "failed": target_failed,
+                "failed_aliases": [] if target_openai else sorted(grok_failed_aliases),
+                "failure_reason": str(
+                    ((
+                        item.get("openai_failure_reason")
+                        or item.get("failure_reason")
+                    )
+                    if target_openai
+                    else item.get("failure_reason")
+                    ) or ""
+                ),
+                "failed_at": item.get("openai_failed_at") if target_openai else item.get("failed_at"),
                 "reserved": reserved,
+                "target_reserved": target_reserved,
+                "reserved_by_other_target": reserved and not target_reserved,
+                "grok_use_count": grok_use_count,
+                "grok_use_limit": ALIAS_USES,
+                "grok_remaining_uses": grok_remaining,
+                "grok_used": grok_fully_used,
+                "grok_failed_aliases": sorted(grok_failed_aliases),
+                "grok_reserved": grok_reserved,
+                "openai_use_count": int(openai_used),
+                "openai_use_limit": OPENAI_USES,
+                "openai_remaining_uses": openai_remaining,
+                "openai_used": openai_used,
+                "openai_failed": openai_failed,
+                "openai_failure_reason": str(item.get("openai_failure_reason") or ""),
+                "openai_reserved": openai_reserved,
                 "has_password": bool(item.get("password")),
                 "client_id_masked": _masked(str(item.get("client_id") or "")),
                 "refresh_token_masked": _masked(str(item.get("refresh_token") or "")),
@@ -799,7 +952,9 @@ def list_accounts(account_source: str | None = None) -> dict[str, Any]:
                 "mail_healthy": item.get("mail_healthy") if isinstance(item.get("mail_healthy"), bool) else None,
                 "mail_health_error": str(item.get("mail_health_error") or ""),
                 "mail_checked_at": item.get("mail_checked_at"),
-                "preferred_for_next_use": item.get("preferred_for_next_use") is True,
+                "preferred_for_next_use": _preferred_for_target(
+                    item, registration_target
+                ),
                 "sources": sorted(_account_sources(item)),
                 "source_account_id": item.get("source_account_id"),
                 "verification_entries": _verification_entries(account_id),
@@ -816,6 +971,7 @@ def list_accounts(account_source: str | None = None) -> dict[str, Any]:
             if not item["used"]
             and not item["failed"]
             and not item["reserved"]
+            and not item["reserved_by_other_target"]
             and item["mail_healthy"] is not False
             and int(item.get("remaining_uses") or 0) > 0
         ),
@@ -825,6 +981,8 @@ def list_accounts(account_source: str | None = None) -> dict[str, Any]:
         "unhealthy": sum(1 for item in rows if item["mail_healthy"] is False),
         "unchecked": sum(1 for item in rows if item["mail_healthy"] is None),
         "alias_uses": ALIAS_USES,
+        "registration_target": registration_target,
+        "use_limit": OPENAI_USES if registration_target == REGISTRATION_TARGET_OPENAI else ALIAS_USES,
         "account_source": _normalize_account_source(account_source) if account_source is not None else "all",
     }
 
@@ -833,9 +991,11 @@ def reserve_account(
     *,
     exclude_account_ids: set[str] | None = None,
     account_source: str | None = None,
+    registration_target: str = REGISTRATION_TARGET_GROK,
 ) -> dict[str, Any]:
-    """Reserve one plus-alias slot from an idle physical mailbox."""
+    """Reserve one target-specific registration slot from an idle mailbox."""
     global _reserve_cursor
+    registration_target = _normalize_registration_target(registration_target)
     if account_source is not None and _normalize_account_source(account_source) == ACCOUNT_SOURCE_MANAGEMENT:
         sync_mail_management_accounts()
     with _lock:
@@ -859,9 +1019,15 @@ def reserve_account(
                     continue
                 if not item.get("email") or not item.get("client_id") or not item.get("refresh_token"):
                     continue
-                if prefer_idle and _reserved_indices(account_id):
+                if prefer_idle and _account_has_reservation(account_id):
                     continue
-                alias_index = _free_alias_index(item, account_id)
+                if not _is_target_available(item, account_id, registration_target):
+                    continue
+                alias_index = (
+                    0
+                    if registration_target == REGISTRATION_TARGET_OPENAI
+                    else _free_alias_index(item, account_id)
+                )
                 if alias_index is None:
                     continue
                 found.append((item, account_id, alias_index))
@@ -873,7 +1039,10 @@ def reserve_account(
         if not ordered:
             raise RuntimeError("微软邮箱账户池没有可用账号，请先导入或恢复未用账号")
 
-        preferred = next((row for row in ordered if row[0].get("preferred_for_next_use") is True), None)
+        preferred = next(
+            (row for row in ordered if _preferred_for_target(row[0], registration_target)),
+            None,
+        )
         item, account_id, alias_index = preferred or ordered[0]
         # Advance cursor past the chosen mailbox so the next reserve starts elsewhere.
         try:
@@ -886,22 +1055,35 @@ def reserve_account(
         except StopIteration:
             _reserve_cursor = (_reserve_cursor + 1) % max(1, len(accounts))
 
-        _reservations.setdefault(account_id, set()).add(alias_index)
+        if registration_target == REGISTRATION_TARGET_OPENAI:
+            _openai_reservations.add(account_id)
+        else:
+            _reservations.setdefault(account_id, set()).add(alias_index)
         if item.get("preferred_for_next_use") is True:
             item["preferred_for_next_use"] = False
+            item.pop("preferred_registration_target", None)
             _save(accounts)
         reserved = dict(item)
         reserved["email"] = base_mailbox_email(str(item.get("email") or ""))
-        reserved["use_count"] = _normalize_use_count(item)
+        reserved["registration_target"] = registration_target
+        reserved["use_count"] = (
+            int(item.get("openai_used") is True)
+            if registration_target == REGISTRATION_TARGET_OPENAI
+            else _normalize_use_count(item)
+        )
         reserved["alias_index"] = alias_index
-        reserved["registration_email"] = build_plus_alias(
-            str(item.get("email") or ""), alias_index
+        reserved["registration_email"] = (
+            base_mailbox_email(str(item.get("email") or ""))
+            if registration_target == REGISTRATION_TARGET_OPENAI
+            else build_plus_alias(str(item.get("email") or ""), alias_index)
         )
         reserved["base_email"] = base_mailbox_email(str(item.get("email") or ""))
         return reserved
 
 
-def set_preferred_account(account_id: str) -> bool:
+def set_preferred_account(
+    account_id: str, registration_target: str = REGISTRATION_TARGET_GROK
+) -> bool:
     """Select one mailbox for the next allocation only."""
     account_id = str(account_id or "")
     with _lock:
@@ -912,16 +1094,30 @@ def set_preferred_account(account_id: str) -> bool:
         )
         if target is None:
             return False
-        if not _is_account_available(target, account_id=account_id):
+        if not _is_target_available(target, account_id, registration_target):
             raise RuntimeError("该邮箱当前不可用，无法指定使用")
         for item in accounts:
             item["preferred_for_next_use"] = str(item.get("id") or "") == account_id
+            if item["preferred_for_next_use"]:
+                item["preferred_registration_target"] = _normalize_registration_target(
+                    registration_target
+                )
+            else:
+                item.pop("preferred_registration_target", None)
         _save(accounts)
         return True
 
 
-def release_account(account_id: str, alias_index: int | None = None) -> None:
+def release_account(
+    account_id: str,
+    alias_index: int | None = None,
+    registration_target: str = REGISTRATION_TARGET_GROK,
+) -> None:
     account_id = str(account_id or "")
+    if _normalize_registration_target(registration_target) == REGISTRATION_TARGET_OPENAI:
+        with _lock:
+            _openai_reservations.discard(account_id)
+        return
     with _lock:
         held = _reservations.get(account_id)
         if not held:
@@ -964,18 +1160,32 @@ def _is_account_level_failure_reason(reason: str) -> bool:
     return any(marker in text for marker in markers)
 
 
-def mark_used(account_id: str, alias_index: int | None = None) -> bool:
-    """Consume one plus-address slot on successful registration.
+def mark_used(
+    account_id: str,
+    alias_index: int | None = None,
+    registration_target: str = REGISTRATION_TARGET_GROK,
+) -> bool:
+    """Consume one target-specific slot on successful registration.
 
     The base mailbox stays reusable until ALIAS_USES successful registrations.
     """
     account_id = str(account_id or "")
+    registration_target = _normalize_registration_target(registration_target)
     with _lock:
         accounts = _load()
         found = False
         changed_item: dict[str, Any] | None = None
         for item in accounts:
             if str(item.get("id") or "") == account_id:
+                if registration_target == REGISTRATION_TARGET_OPENAI:
+                    item["openai_used"] = True
+                    item["openai_failed"] = False
+                    item["openai_failure_reason"] = ""
+                    item["openai_failed_at"] = None
+                    item["openai_last_used_at"] = time.time()
+                    changed_item = dict(item)
+                    found = True
+                    break
                 used_aliases = _normalize_used_aliases(item)
                 failed_aliases = _normalize_failed_aliases(item)
                 chosen = _coerce_alias_index(alias_index)
@@ -1007,7 +1217,9 @@ def mark_used(account_id: str, alias_index: int | None = None) -> bool:
                 found = True
                 break
         held = _reservations.get(account_id)
-        if held is not None:
+        if registration_target == REGISTRATION_TARGET_OPENAI:
+            _openai_reservations.discard(account_id)
+        elif held is not None:
             if alias_index is None:
                 if held:
                     held.pop()
@@ -1024,13 +1236,19 @@ def mark_used(account_id: str, alias_index: int | None = None) -> bool:
     return found
 
 
-def mark_failed(account_id: str, reason: str = "", alias_index: int | None = None) -> bool:
+def mark_failed(
+    account_id: str,
+    reason: str = "",
+    alias_index: int | None = None,
+    registration_target: str = REGISTRATION_TARGET_GROK,
+) -> bool:
     """Record failure.
 
     - With alias_index: only that plus-alias is blocked; other aliases stay free.
     - Without alias_index / account-level reason: quarantine whole mailbox.
     """
     account_id = str(account_id or "")
+    registration_target = _normalize_registration_target(registration_target)
     reason_text = str(reason or "注册失败")[:500]
     with _lock:
         accounts = _load()
@@ -1038,6 +1256,14 @@ def mark_failed(account_id: str, reason: str = "", alias_index: int | None = Non
         changed_item: dict[str, Any] | None = None
         for item in accounts:
             if str(item.get("id") or "") == account_id:
+                if registration_target == REGISTRATION_TARGET_OPENAI:
+                    item["openai_used"] = False
+                    item["openai_failed"] = True
+                    item["openai_failure_reason"] = reason_text
+                    item["openai_failed_at"] = time.time()
+                    changed_item = dict(item)
+                    found = True
+                    break
                 used_aliases = _normalize_used_aliases(item)
                 failed_aliases = _normalize_failed_aliases(item)
                 item["used_aliases"] = sorted(used_aliases)
@@ -1067,7 +1293,9 @@ def mark_failed(account_id: str, reason: str = "", alias_index: int | None = Non
                 found = True
                 break
         held = _reservations.get(account_id)
-        if held is not None:
+        if registration_target == REGISTRATION_TARGET_OPENAI:
+            _openai_reservations.discard(account_id)
+        elif held is not None:
             if alias_index is None:
                 if held:
                     held.pop()
@@ -1129,15 +1357,29 @@ def rotate_refresh_token(account_id: str, refresh_token: str) -> str:
         return refresh_token
 
 
-def set_used(account_id: str, used: bool) -> bool:
-    """Mark an account fully used, or restore it for another full alias cycle."""
+def set_used(
+    account_id: str,
+    used: bool,
+    registration_target: str = REGISTRATION_TARGET_GROK,
+) -> bool:
+    """Mark the selected target used, or restore its registration capacity."""
     account_id = str(account_id or "")
+    registration_target = _normalize_registration_target(registration_target)
     with _lock:
         accounts = _load()
         found = False
         changed_item: dict[str, Any] | None = None
         for item in accounts:
             if str(item.get("id") or "") == account_id:
+                if registration_target == REGISTRATION_TARGET_OPENAI:
+                    item["openai_used"] = bool(used)
+                    item["openai_failed"] = False
+                    item["openai_failure_reason"] = ""
+                    item["openai_failed_at"] = None
+                    item["openai_last_used_at"] = time.time() if used else None
+                    changed_item = dict(item)
+                    found = True
+                    break
                 if used:
                     item["used_aliases"] = list(range(ALIAS_USES))
                     item["failed_aliases"] = []
@@ -1166,7 +1408,9 @@ def set_used(account_id: str, used: bool) -> bool:
                 changed_item = dict(item)
                 found = True
                 break
-        if not used:
+        if registration_target == REGISTRATION_TARGET_OPENAI:
+            _openai_reservations.discard(account_id)
+        elif not used:
             _reservations.pop(account_id, None)
         if found:
             _save(accounts)
@@ -1175,7 +1419,11 @@ def set_used(account_id: str, used: bool) -> bool:
     return found
 
 
-def restore_uses(account_id: str, count: int) -> int | None:
+def restore_uses(
+    account_id: str,
+    count: int,
+    registration_target: str = REGISTRATION_TARGET_GROK,
+) -> int | None:
     """Restore a specific number of consumed alias slots.
 
     Failed registration slots are restored before successful slots so test
@@ -1183,14 +1431,31 @@ def restore_uses(account_id: str, count: int) -> int | None:
     Returns None when the account does not exist.
     """
     account_id = str(account_id or "")
-    restore_count = max(1, min(ALIAS_USES, int(count)))
+    registration_target = _normalize_registration_target(registration_target)
+    limit = OPENAI_USES if registration_target == REGISTRATION_TARGET_OPENAI else ALIAS_USES
+    restore_count = max(1, min(limit, int(count)))
     with _lock:
         accounts = _load()
         for item in accounts:
             if str(item.get("id") or "") != account_id:
                 continue
-            if account_id in _reservations:
+            if _account_has_reservation(account_id):
                 raise RuntimeError("邮箱正在注册任务中使用，无法恢复使用次数")
+
+            if registration_target == REGISTRATION_TARGET_OPENAI:
+                restored = int(
+                    item.get("openai_used") is True or item.get("openai_failed") is True
+                )
+                item["openai_used"] = False
+                item["openai_failed"] = False
+                item["openai_failure_reason"] = ""
+                item["openai_failed_at"] = None
+                item["openai_last_used_at"] = None
+                item["preferred_for_next_use"] = False
+                if restored:
+                    _save(accounts)
+                changed_item = dict(item)
+                break
 
             used_aliases = _normalize_used_aliases(item)
             failed_aliases = _normalize_failed_aliases(item)
@@ -1235,7 +1500,7 @@ def delete_account(account_id: str) -> bool:
         accounts = _load()
         if not any(str(item.get("id") or "") == account_id for item in accounts):
             return False
-        if account_id in _reservations:
+        if _account_has_reservation(account_id):
             raise RuntimeError("邮箱正在注册任务中使用，无法删除")
         kept = [item for item in accounts if str(item.get("id") or "") != account_id]
         _drop_token_lock(account_id)
@@ -1251,7 +1516,9 @@ def delete_accounts(account_ids: list[str]) -> dict[str, int]:
     with _lock:
         accounts = _load()
         existing_ids = {str(item.get("id") or "") for item in accounts}
-        reserved_ids = requested & set(_reservations)
+        reserved_ids = {
+            account_id for account_id in requested if _account_has_reservation(account_id)
+        }
         deleted_ids = (requested & existing_ids) - reserved_ids
         kept = [item for item in accounts if str(item.get("id") or "") not in deleted_ids]
         if deleted_ids:
@@ -1266,8 +1533,11 @@ def delete_accounts(account_ids: list[str]) -> dict[str, int]:
         }
 
 
-def delete_used_accounts() -> dict[str, int]:
-    """Delete exhausted mailboxes (all aliases used or failed) not currently reserved."""
+def delete_used_accounts(
+    registration_target: str = REGISTRATION_TARGET_GROK,
+) -> dict[str, int]:
+    """Delete mailboxes exhausted for the selected registration target."""
+    registration_target = _normalize_registration_target(registration_target)
     with _lock:
         accounts = _load()
         kept: list[dict[str, Any]] = []
@@ -1276,12 +1546,16 @@ def delete_used_accounts() -> dict[str, int]:
         removed_ids: list[str] = []
         for item in accounts:
             account_id = str(item.get("id") or "")
-            exhausted = _is_fully_exhausted(item)
-            if exhausted and account_id not in _reservations:
+            exhausted = (
+                item.get("openai_used") is True
+                if registration_target == REGISTRATION_TARGET_OPENAI
+                else _is_fully_exhausted(item)
+            )
+            if exhausted and not _account_has_reservation(account_id):
                 deleted += 1
                 removed_ids.append(account_id)
                 continue
-            if exhausted and account_id in _reservations:
+            if exhausted and _account_has_reservation(account_id):
                 skipped_reserved += 1
             kept.append(item)
         if deleted:
@@ -1303,11 +1577,11 @@ def delete_unhealthy_accounts() -> dict[str, int]:
         for item in accounts:
             account_id = str(item.get("id") or "")
             unhealthy = item.get("mail_healthy") is False
-            if unhealthy and account_id not in _reservations:
+            if unhealthy and not _account_has_reservation(account_id):
                 deleted += 1
                 removed_ids.append(account_id)
                 continue
-            if unhealthy and account_id in _reservations:
+            if unhealthy and _account_has_reservation(account_id):
                 skipped_reserved += 1
             kept.append(item)
         if deleted:
@@ -1708,6 +1982,11 @@ def create_receiver(
     account_source: str | None = None,
     should_cancel: Any | None = None,
 ) -> tuple[str, HotmailLocalReceiver]:
+    registration_target = (
+        REGISTRATION_TARGET_GROK
+        if str(verification_target or "").strip().lower() == "xai"
+        else REGISTRATION_TARGET_OPENAI
+    )
     attempted: set[str] = set()
     probe_errors: list[str] = []
     while True:
@@ -1717,6 +1996,7 @@ def create_receiver(
             account = reserve_account(
                 exclude_account_ids=attempted,
                 account_source=account_source,
+                registration_target=registration_target,
             )
         except RuntimeError as exc:
             if probe_errors:
@@ -1731,7 +2011,11 @@ def create_receiver(
             if callable(should_cancel):
                 should_cancel()
             if not result.get("ok"):
-                release_account(account_id, alias_index=alias_index)
+                release_account(
+                    account_id,
+                    alias_index=alias_index,
+                    registration_target=registration_target,
+                )
                 attempted.add(account_id)
                 probe_errors.append(
                     f"{account.get('email') or account_id}: {result.get('error') or '测活失败'}"

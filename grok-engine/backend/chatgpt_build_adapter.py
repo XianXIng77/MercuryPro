@@ -160,6 +160,16 @@ class _RegCancelled(Exception):
 def _compact_session(sess: dict[str, Any]) -> dict[str, Any]:
     """Strip internal fields before returning to API."""
     out = dict(sess)
+    session_data = (
+        sess.get("session_data")
+        if isinstance(sess.get("session_data"), dict)
+        else {}
+    )
+    out["registration_target"] = "chatgpt"
+    out["access_token_available"] = bool(
+        str(session_data.get("accessToken") or "").strip()
+        or str(sess.get("session_file") or "").strip()
+    )
     for key in list(out):
         if isinstance(key, str) and key.startswith("_"):
             out.pop(key, None)
@@ -278,13 +288,18 @@ def _make_email_receiver(
     expiry_ms: int | None = None,
     mail_provider: str | None = None,
     hotmail_local_base_url: str | None = None,
+    hotmail_account_source: str | None = None,
     should_cancel: Any | None = None,
 ):
     """Create a temporary email mailbox for receiving ChatGPT verification codes."""
     if str(mail_provider or "").strip().lower() == "hotmail_local":
         from hotmail_local import create_receiver
 
-        return create_receiver(hotmail_local_base_url, should_cancel=should_cancel)
+        return create_receiver(
+            hotmail_local_base_url,
+            account_source=hotmail_account_source,
+            should_cancel=should_cancel,
+        )
 
     from moemail import (
         create_mailbox,
@@ -501,6 +516,7 @@ def _prepare_registration_session(
     expiry_ms: int | None = None,
     mail_provider: str | None = None,
     hotmail_local_base_url: str | None = None,
+    hotmail_account_source: str | None = None,
     batch_id: str | None = None,
     batch_index: int | None = None,
     batch_total: int | None = None,
@@ -517,6 +533,7 @@ def _prepare_registration_session(
         expiry_ms=expiry_ms,
         mail_provider=mail_provider,
         hotmail_local_base_url=hotmail_local_base_url,
+        hotmail_account_source=hotmail_account_source,
         batch_id=batch_id,
         batch_index=batch_index,
         batch_total=batch_total,
@@ -543,6 +560,7 @@ def _start_one_registration(
     expiry_ms: int | None = None,
     mail_provider: str | None = None,
     hotmail_local_base_url: str | None = None,
+    hotmail_account_source: str | None = None,
     batch_id: str | None = None,
     batch_index: int | None = None,
     batch_total: int | None = None,
@@ -559,6 +577,7 @@ def _start_one_registration(
         expiry_ms=expiry_ms,
         mail_provider=mail_provider,
         hotmail_local_base_url=hotmail_local_base_url,
+        hotmail_account_source=hotmail_account_source,
         batch_id=batch_id,
         batch_index=batch_index,
         batch_total=batch_total,
@@ -577,6 +596,7 @@ def _snapshot_reg_config(
     expiry_ms: int | None,
     mail_provider: str | None,
     hotmail_local_base_url: str | None,
+    hotmail_account_source: str | None,
     concurrency: int,
     stagger_ms: int,
     post_registration: dict[str, Any] | None = None,
@@ -591,6 +611,7 @@ def _snapshot_reg_config(
         expiry_ms=expiry_ms,
         mail_provider=mail_provider,
         hotmail_local_base_url=hotmail_local_base_url,
+        hotmail_account_source=hotmail_account_source,
         concurrency=concurrency,
         stagger_ms=stagger_ms,
         post_registration=post_registration,
@@ -610,6 +631,7 @@ def start_registration(
     expiry_ms: int | None = None,
     mail_provider: str | None = None,
     hotmail_local_base_url: str | None = None,
+    hotmail_account_source: str | None = None,
     count: int | None = None,
     concurrency: int | None = None,
     stagger_ms: int | None = None,
@@ -630,6 +652,7 @@ def start_registration(
         expiry_ms=expiry_ms,
         mail_provider=mail_provider,
         hotmail_local_base_url=hotmail_local_base_url,
+        hotmail_account_source=hotmail_account_source,
         count=count,
         concurrency=concurrency,
         stagger_ms=stagger_ms,
@@ -653,6 +676,7 @@ def _batch_spawner(
     expiry_ms: int | None,
     mail_provider: str | None,
     hotmail_local_base_url: str | None,
+    hotmail_account_source: str | None,
     post_registration: dict[str, Any] | None,
     headless: bool,
 ) -> None:
@@ -670,6 +694,7 @@ def _batch_spawner(
         expiry_ms,
         mail_provider,
         hotmail_local_base_url,
+        hotmail_account_source,
         post_registration,
         headless,
     )
@@ -732,6 +757,24 @@ def list_registration_sessions() -> dict[str, Any]:
 
 def get_registration_session(session_id: str) -> dict[str, Any] | None:
     return _operations.get_registration_session(_registration_context(), session_id)
+
+
+def get_registration_access_token(session_id: str) -> dict[str, Any]:
+    return _operations.get_registration_access_token(
+        _registration_context(), session_id
+    )
+
+
+def list_registration_accounts() -> dict[str, Any]:
+    return _operations.list_registration_accounts(_registration_context())
+
+
+def get_registration_access_tokens(
+    account_ids: list[str] | None = None, all_accounts: bool = False
+) -> dict[str, Any]:
+    return _operations.get_registration_access_tokens(
+        _registration_context(), account_ids, all_accounts
+    )
 
 
 def get_registration_batch(batch_id: str) -> dict[str, Any] | None:

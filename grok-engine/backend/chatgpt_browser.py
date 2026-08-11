@@ -12,6 +12,7 @@ Supports proxy, cancellation, and error handling.
 
 from __future__ import annotations
 
+import json
 import random
 import re
 import time
@@ -119,6 +120,373 @@ class ChatGPTRegistrationError(RuntimeError):
 
 class ChatGPTRegistrationCancelled(ChatGPTRegistrationError):
     """User cancelled registration."""
+
+
+_PLUS_TRIAL_CHECKOUT_URL = "https://chatgpt.com/backend-api/payments/checkout"
+_PLUS_TRIAL_AMOUNT_PROBE_JS = r"""
+() => {
+  const visible = (el) => {
+    if (!el) return false;
+    const style = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== 'none' && style.visibility !== 'hidden'
+      && rect.width > 0 && rect.height > 0;
+  };
+  const norm = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+  const parseNumber = (value) => {
+    let numeric = String(value || '').replace(/[^\d,.'’+-]/g, '').replace(/['’]/g, '');
+    if (!/\d/.test(numeric)) return null;
+    const comma = numeric.lastIndexOf(',');
+    const dot = numeric.lastIndexOf('.');
+    if (comma >= 0 && dot >= 0) {
+      numeric = comma > dot
+        ? numeric.replace(/\./g, '').replace(',', '.')
+        : numeric.replace(/,/g, '');
+    } else if (comma >= 0) {
+      const groups = numeric.split(',');
+      numeric = groups.length > 2 || groups[groups.length - 1].length === 3
+        ? groups.join('')
+        : numeric.replace(',', '.');
+    } else if (dot >= 0) {
+      const groups = numeric.split('.');
+      if (groups.length > 2 || groups[groups.length - 1].length === 3) numeric = groups.join('');
+    }
+    const amount = Number(numeric);
+    return Number.isFinite(amount) ? amount : null;
+  };
+  const parseAmount = (value) => {
+    const raw = norm(value);
+    const match = raw.match(/(?:US\$|S\$|HK\$|CN¥|[$€£¥￥])\s*([+-]?\d[\d\s,.'’]*)/i)
+      || raw.match(/([+-]?\d[\d\s,.'’]*)\s*(?:USD|EUR|GBP|JPY|[$€£¥￥])/i);
+    if (!match) return null;
+    const amount = parseNumber(match[1]);
+    return Number.isFinite(amount) ? { amount, raw } : null;
+  };
+  const hostedSelectors = [
+    '#OrderDetails-TotalAmount .CurrencyAmount',
+    '#OrderDetails-TotalAmount',
+    '#ProductSummary-totalAmount .CurrencyAmount',
+    '#ProductSummary-totalAmount',
+  ];
+  for (const selector of hostedSelectors) {
+    const element = document.querySelector(selector);
+    if (!visible(element)) continue;
+    const parsed = parseAmount(element.innerText || element.textContent || '');
+    if (parsed) return {
+      has_today_due: true,
+      amount: parsed.amount,
+      is_zero: Math.abs(parsed.amount) < 0.005,
+      raw_amount: parsed.raw,
+      source: 'hosted',
+    };
+  }
+  const labelPattern = /amount\s*due\s*today|due\s*today|today'?s\s*total|total\s*due\s*today|今日应付金额|今日應付金額|本日(?:の)?(?:お)?支払(?:い)?(?:金)?額|本日(?:の)?請求額|montant\s+d[uû]\s+aujourd['’]hui|total\s+d[uû]\s+aujourd['’]hui/i;
+  const elements = Array.from(document.querySelectorAll('div, span, p, strong, b'))
+    .filter((element) => visible(element) && labelPattern.test(norm(element.innerText || element.textContent || '')))
+    .sort((left, right) => norm(left.innerText || left.textContent || '').length - norm(right.innerText || right.textContent || '').length);
+  let sawTodayDue = false;
+  for (const element of elements) {
+    sawTodayDue = true;
+    const text = norm(element.innerText || element.textContent || '');
+    const candidates = [text.replace(labelPattern, '').trim()];
+    let container = element.parentElement;
+    for (let depth = 0; container && depth < 3; depth += 1) {
+      for (const sibling of Array.from(container.children || [])) {
+        if (visible(sibling)) {
+          candidates.push(norm(sibling.innerText || sibling.textContent || ''));
+        }
+      }
+      container = container.parentElement;
+    }
+    for (const candidate of candidates) {
+      const parsed = parseAmount(candidate);
+      if (parsed) return {
+        has_today_due: true,
+        amount: parsed.amount,
+        is_zero: Math.abs(parsed.amount) < 0.005,
+        raw_amount: parsed.raw,
+        source: 'inline-label',
+      };
+    }
+  }
+  if (sawTodayDue) return { has_today_due: true, amount: null, is_zero: false, raw_amount: '', source: 'inline-label' };
+  return { has_today_due: false, amount: null, is_zero: false, raw_amount: '', source: 'none' };
+}
+"""
+
+
+def _classify_plus_trial_probe(
+    probe: dict[str, Any] | None, body_text: str = ""
+) -> dict[str, Any]:
+    """Classify checkout evidence without treating missing evidence as ineligible."""
+    checked_at = time.time()
+    data = probe if isinstance(probe, dict) else {}
+    amount = data.get("amount")
+    if data.get("has_today_due") and isinstance(amount, (int, float)):
+        eligible = bool(data.get("is_zero"))
+        return {
+            "status": "eligible" if eligible else "ineligible",
+            "eligible": eligible,
+            "checked_at": checked_at,
+            "source": "checkout_amount",
+            "amount": float(amount),
+            "amount_text": str(data.get("raw_amount") or ""),
+            "reason": "今日应付金额为 0" if eligible else "今日应付金额不为 0",
+        }
+    text = str(body_text or "")
+    if re.search(
+        r"(?:1|one)\s*month\s*free|free\s*trial|essai\s+gratuit|"
+        r"1\s*か月無料|無料(?:体験|トライアル)|一个月免费|一個月免費",
+        text,
+        re.I,
+    ):
+        return {
+            "status": "eligible",
+            "eligible": True,
+            "checked_at": checked_at,
+            "source": "checkout_offer_text",
+            "reason": "结账页显示 Plus 免费试用活动",
+        }
+    return {
+        "status": "unknown",
+        "eligible": None,
+        "checked_at": checked_at,
+        "source": str(data.get("source") or "checkout"),
+        "reason": "结账页未返回可确认的今日应付金额",
+    }
+
+
+def _check_plus_trial_eligibility(
+    page: Any, context: Any, access_token: str, *, timeout_sec: float = 20.0
+) -> dict[str, Any]:
+    """Create a non-paying Plus promo checkout and inspect today's amount due."""
+    try:
+        locale = str(page.evaluate("() => navigator.language || 'en-US'") or "en-US")
+    except Exception:
+        locale = "en-US"
+    locale_key = locale.lower()
+    if locale_key.startswith("ja"):
+        country, currency = "JP", "JPY"
+    elif locale_key.startswith("fr"):
+        country, currency = "FR", "EUR"
+    elif locale_key.startswith("en-gb"):
+        country, currency = "GB", "GBP"
+    else:
+        country, currency = "US", "USD"
+    payload = {
+        "plan_name": "chatgptplusplan",
+        "billing_details": {"country": country, "currency": currency},
+        "cancel_url": "https://chatgpt.com/#pricing",
+        "promo_campaign": {
+            "promo_campaign_id": "plus-1-month-free",
+            "is_coupon_from_query_param": False,
+        },
+        "checkout_ui_mode": "hosted",
+    }
+    try:
+        response = context.request.post(
+            _PLUS_TRIAL_CHECKOUT_URL,
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+                "oai-language": locale,
+            },
+            data=json.dumps(payload),
+            timeout=min(max(timeout_sec, 5.0), 30.0) * 1000,
+        )
+        response_text = str(response.text() or "")[:2000]
+        try:
+            response_data = response.json()
+        except Exception:
+            response_data = {}
+        if response.status < 200 or response.status >= 300:
+            if re.search(r"not.?eligible|ineligible|promo.*(?:invalid|unavailable)", response_text, re.I):
+                return {
+                    "status": "ineligible",
+                    "eligible": False,
+                    "checked_at": time.time(),
+                    "source": "checkout_api",
+                    "reason": "Plus 免费试用活动不适用于该账号",
+                    "http_status": response.status,
+                }
+            return {
+                "status": "unknown",
+                "eligible": None,
+                "checked_at": time.time(),
+                "source": "checkout_api",
+                "reason": f"资格接口返回 HTTP {response.status}",
+                "http_status": response.status,
+            }
+        data = response_data if isinstance(response_data, dict) else {}
+        checkout_url = str(
+            data.get("url") or data.get("stripe_hosted_url") or data.get("checkout_url") or ""
+        ).strip()
+        if not checkout_url:
+            checkout_id = str(data.get("checkout_session_id") or data.get("cs_id") or "").strip()
+            if checkout_id:
+                checkout_url = f"https://chatgpt.com/checkout/openai_llc/{checkout_id}"
+        if not checkout_url:
+            return {
+                "status": "unknown",
+                "eligible": None,
+                "checked_at": time.time(),
+                "source": "checkout_api",
+                "reason": "资格接口未返回结账页面",
+            }
+        page.goto(checkout_url, wait_until="domcontentloaded", timeout=30000)
+        check_deadline = time.time() + max(5.0, min(timeout_sec, 25.0))
+        last_probe: dict[str, Any] = {}
+        body_text = ""
+        while time.time() < check_deadline:
+            try:
+                last_probe = page.evaluate(_PLUS_TRIAL_AMOUNT_PROBE_JS) or {}
+            except Exception:
+                last_probe = {}
+            body_text = _safe_page_text(page)
+            if isinstance(last_probe, dict) and last_probe.get("has_today_due"):
+                break
+            page.wait_for_timeout(250)
+        result = _classify_plus_trial_probe(last_probe, body_text)
+        result.update({"locale": locale, "country": country, "currency": currency})
+        return result
+    except Exception as exc:
+        return {
+            "status": "unknown",
+            "eligible": None,
+            "checked_at": time.time(),
+            "source": "checkout_exception",
+            "reason": str(exc)[:240],
+        }
+
+
+def _classify_checkout_session_id(checkout_session_id: Any) -> str:
+    """Classify a checkout session without treating every ``cs_`` ID as live."""
+    value = str(checkout_session_id or "").strip().lower()
+    if value.startswith("oaics_"):
+        return "oaics"
+    if value.startswith("cs_live_"):
+        return "cs_live"
+    if value.startswith("cs_test_"):
+        return "cs_test"
+    return "unknown"
+
+
+def _check_checkout_kind(
+    context: Any,
+    access_token: str,
+    *,
+    country: str = "US",
+    currency: str = "USD",
+    locale: str = "en-US",
+    proxy: str = "",
+    timeout_sec: float = 20.0,
+) -> dict[str, Any]:
+    """Create a non-paying custom checkout and classify its session ID prefix."""
+    checked_at = time.time()
+    billing_country = str(country or "US").strip().upper() or "US"
+    billing_currency = str(currency or "USD").strip().upper() or "USD"
+    token = str(access_token or "").strip()
+    base_result: dict[str, Any] = {
+        "status": "unknown",
+        "kind": "unknown",
+        "checked_at": checked_at,
+        "country": billing_country,
+        "currency": billing_currency,
+        "source": "dedicated_proxy" if str(proxy or "").strip() else "browser_context",
+    }
+    if not token:
+        return {**base_result, "reason": "缺少 Access Token"}
+
+    payload = {
+        "entry_point": "all_plans_pricing_modal",
+        "plan_name": "chatgptplusplan",
+        "billing_details": {
+            "country": billing_country,
+            "currency": billing_currency,
+        },
+        "checkout_ui_mode": "custom",
+    }
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "Referer": "https://chatgpt.com/",
+        "oai-language": str(locale or "en-US"),
+        "x-openai-target-path": "/backend-api/payments/checkout",
+        "x-openai-target-route": "/backend-api/payments/checkout",
+    }
+    dedicated_session = None
+    try:
+        proxy_value = str(proxy or "").strip()
+        if proxy_value:
+            from curl_cffi import requests as curl_requests
+            from proxy_pool import parse_proxy_pool
+
+            proxy_pool = parse_proxy_pool(
+                proxy_value,
+                username="",
+                password="",
+                fallback_env=False,
+            )
+            if len(proxy_pool) != 1:
+                return {**base_result, "reason": "专用德国代理格式无效"}
+            dedicated_session = curl_requests.Session(impersonate="chrome136")
+            dedicated_session.proxies = {
+                "http": proxy_pool[0],
+                "https": proxy_pool[0],
+            }
+            response = dedicated_session.post(
+                _PLUS_TRIAL_CHECKOUT_URL,
+                json=payload,
+                headers=headers,
+                timeout=min(max(timeout_sec, 5.0), 30.0),
+            )
+            http_status = int(response.status_code)
+        else:
+            response = context.request.post(
+                _PLUS_TRIAL_CHECKOUT_URL,
+                headers=headers,
+                data=json.dumps(payload),
+                timeout=min(max(timeout_sec, 5.0), 30.0) * 1000,
+            )
+            http_status = int(response.status)
+        try:
+            response_data = response.json()
+        except Exception:
+            response_data = {}
+        data = response_data if isinstance(response_data, dict) else {}
+        checkout_session_id = str(
+            data.get("checkout_session_id")
+            or data.get("session_id")
+            or data.get("cs_id")
+            or data.get("id")
+            or ""
+        ).strip()
+        kind = _classify_checkout_session_id(checkout_session_id)
+        result = {
+            **base_result,
+            "http_status": http_status,
+            "kind": kind,
+        }
+        if http_status < 200 or http_status >= 300:
+            result["reason"] = f"结账类型接口返回 HTTP {http_status}"
+            return result
+        if kind == "unknown":
+            result["reason"] = "结账接口未返回可识别的 session ID"
+            return result
+        result.update({"status": "detected", "reason": f"检测到 {kind} checkout"})
+        return result
+    except Exception as exc:
+        return {
+            **base_result,
+            "reason": f"专用德国代理查询失败：{type(exc).__name__}" if str(proxy or "").strip() else str(exc)[:240],
+        }
+    finally:
+        if dedicated_session is not None:
+            try:
+                dedicated_session.close()
+            except Exception:
+                pass
 
 
 def _find_and_fill_input(
@@ -346,36 +714,49 @@ def _signup_state(page: Any) -> str:
     if "max_check_attempts" in text:
         return "security_blocked"
     if "user_already_exists" in text or re.search(
-        r"account .*already exists|email address.*already exists", text
+        r"account .*already exists|email address.*already exists|"
+        r"アカウント.*(?:すでに|既に).*存在|メールアドレス.*(?:使用されています|登録済み)",
+        text,
     ):
         return "existing_account"
     if "account_deactivated" in text or re.search(
         r"account (?:has been |was )?(?:deleted|deactivated)|"
         r"do not have an account because it has been (?:deleted|deactivated)|"
-        r"账号.*(?:删除|停用)|账户.*(?:删除|停用)",
+        r"账号.*(?:删除|停用)|账户.*(?:删除|停用)|"
+        r"アカウント.*(?:削除|無効|停止)",
         text,
         re.I,
     ):
         return "account_deactivated"
     if re.search(
-        r"something went wrong|operation timed out|failed to fetch|405 method not allowed",
+        r"something went wrong|operation timed out|failed to fetch|405 method not allowed|"
+        r"問題が発生しました|操作がタイムアウト|取得に失敗",
         text,
     ):
-        if _find_action(page, r"try\s+again|retry|重试", include_disabled=True):
+        if _find_action(
+            page, action_pattern("retry"), include_disabled=True
+        ):
             return "retry"
     if "create-account-enroll-passkey" in path or re.search(
-        r"add passkey|通行密钥", text
+        r"add passkey|通行密钥|パスキー(?:を追加)?", text
     ):
         return "passkey"
     if "/add-phone" in path or re.search(
-        r"add (?:a )?phone|phone number required|添加手机号", text
+        r"add (?:a )?phone|phone number required|添加手机号|"
+        r"電話番号(?:を追加|が必要)",
+        text,
     ):
         return "add_phone"
     if parsed.hostname in {
         "chatgpt.com",
         "www.chatgpt.com",
         "chat.openai.com",
-    } and re.search(r"you(?:'| a)?re all set|ready to go|你已准备就绪", text, re.I):
+    } and re.search(
+        r"you(?:'| a)?re all set|ready to go|你已准备就绪|"
+        r"準備完了|すべての設定が完了",
+        text,
+        re.I,
+    ):
         return "logged_in"
     # The auth app can keep the /email-verification URL (and even the old OTP
     # input in the DOM) after rendering the profile step. Prefer the visible
@@ -417,7 +798,7 @@ def _recover_retry_page(
         check_cancel()
         if _signup_state(page) != "retry":
             return True
-        button = _find_action(page, r"try\s+again|retry|重试")
+        button = _find_action(page, action_pattern("retry"))
         if not button:
             page.wait_for_timeout(500)
             continue
@@ -427,7 +808,9 @@ def _recover_retry_page(
 
 
 def _skip_passkey(page: Any) -> bool:
-    button = _find_action(page, r"^\s*skip\s*$|跳过")
+    button = _find_action(
+        page, r"^\s*skip\s*$|跳过|スキップ|今はしない|後で"
+    )
     if not button:
         return False
     button.click()
@@ -478,46 +861,71 @@ def _fill_profile_fields(
     if age:
         age.fill(str(max(18, datetime.now().year - int(birthdate["year"]))))
     else:
-        parts = {
-            "year": birthdate["year"],
-            "month": birthdate["month"].zfill(2),
-            "day": birthdate["day"].zfill(2),
-        }
-        filled_parts = 0
-        for key, value in parts.items():
-            element = _first_visible(
-                page,
-                [
-                    f'[role="spinbutton"][data-type="{key}"]',
-                    f'input[name="{key}"]',
-                    f'input[aria-label*="{key}" i]',
-                    f'select[name="{key}"]',
-                    f'select[aria-label*="{key}" i]',
-                ],
-            )
-            if not element:
-                continue
-            tag = str(element.evaluate("el => el.tagName.toLowerCase()"))
-            if tag == "select":
-                element.select_option(str(int(value)))
-            else:
-                try:
-                    element.fill(value)
-                except Exception:
-                    element.click()
-                    element.press("Control+A")
-                    element.type(value)
-            filled_parts += 1
-
-        hidden_birthday = page.query_selector('input[name="birthday"]')
-        if hidden_birthday:
-            hidden_birthday.evaluate(
-                "(el, value) => { el.value=value; el.dispatchEvent(new Event('input',{bubbles:true})); "
-                "el.dispatchEvent(new Event('change',{bubbles:true})); }",
+        # Newer /about-you pages render one controlled birthday input and may
+        # prefill it with today's date. Handle this variant before the older
+        # three-part date controls. HTML date inputs always accept ISO values;
+        # the browser itself displays them as YYYY/MM/DD on Japanese systems.
+        combined_birthday = _first_visible(
+            page,
+            [
+                'input[name="birthday"]',
+                'input[autocomplete="bday"]',
+                'input[type="date"]',
+                'input[aria-label*="birth" i]',
+                'input[aria-label*="生年月日"]',
+                'input[aria-label*="date de naissance" i]',
+            ],
+        )
+        if combined_birthday:
+            birthdate_order = _detect_birthdate_input_order(combined_birthday)
+            _replace_birthdate_input(
+                combined_birthday,
                 birthdate["iso"],
+                order=birthdate_order,
             )
-        if filled_parts < 3 and not hidden_birthday:
-            raise ChatGPTRegistrationError(f"未找到完整的生日或年龄输入项: {page.url}")
+        else:
+            parts = {
+                "year": birthdate["year"],
+                "month": birthdate["month"].zfill(2),
+                "day": birthdate["day"].zfill(2),
+            }
+            filled_parts = 0
+            for key, value in parts.items():
+                element = _first_visible(
+                    page,
+                    [
+                        f'[role="spinbutton"][data-type="{key}"]',
+                        f'input[name="{key}"]',
+                        f'input[aria-label*="{key}" i]',
+                        f'select[name="{key}"]',
+                        f'select[aria-label*="{key}" i]',
+                    ],
+                )
+                if not element:
+                    continue
+                tag = str(element.evaluate("el => el.tagName.toLowerCase()"))
+                if tag == "select":
+                    element.select_option(str(int(value)))
+                else:
+                    try:
+                        element.fill(value)
+                    except Exception:
+                        element.click()
+                        element.press("Control+A")
+                        element.type(value)
+                filled_parts += 1
+
+            hidden_birthday = page.query_selector('input[name="birthday"]')
+            if hidden_birthday:
+                hidden_birthday.evaluate(
+                    "(el, value) => { el.value=value; el.dispatchEvent(new Event('input',{bubbles:true})); "
+                    "el.dispatchEvent(new Event('change',{bubbles:true})); }",
+                    birthdate["iso"],
+                )
+            if filled_parts < 3 and not hidden_birthday:
+                raise ChatGPTRegistrationError(
+                    f"未找到完整的生日或年龄输入项: {page.url}"
+                )
 
     for checkbox in _visible_elements(page, 'input[type="checkbox"]'):
         try:
@@ -527,12 +935,164 @@ def _fill_profile_fields(
                 )
             )
             if (
-                re.search(r"agree|同意", parent_text, re.I)
+                re.search(r"agree|同意|承諾", parent_text, re.I)
                 and not checkbox.is_checked()
             ):
                 checkbox.check()
         except Exception:
             continue
+
+
+def _infer_birthdate_order(probe: dict[str, Any] | None) -> tuple[str, str, str]:
+    """Infer visual date segment order from the actual field, not page language."""
+    data = probe if isinstance(probe, dict) else {}
+    valid = {"year", "month", "day"}
+    segments = [str(item).lower() for item in data.get("segments") or []]
+    segments = [item for item in segments if item in valid]
+    if len(segments) >= 3 and set(segments[:3]) == valid:
+        return tuple(segments[:3])  # type: ignore[return-value]
+
+    for raw_hint in data.get("hints") or []:
+        hint = str(raw_hint or "").strip()
+        if not hint:
+            continue
+        token_positions: dict[str, int] = {}
+        patterns = {
+            "year": r"yyyy|\byear\b|年",
+            "month": r"(?<!m)mm(?!m)|\bmonth\b|月",
+            "day": r"(?<!d)dd(?!d)|\bday\b|日",
+        }
+        for key, pattern in patterns.items():
+            match = re.search(pattern, hint, re.I)
+            if match:
+                token_positions[key] = match.start()
+        if len(token_positions) == 3:
+            ordered = tuple(
+                key for key, _position in sorted(token_positions.items(), key=lambda item: item[1])
+            )
+            if set(ordered) == valid:
+                return ordered  # type: ignore[return-value]
+        if re.match(r"^\s*\d{4}\s*[-/.年]", hint):
+            return ("year", "month", "day")
+
+    intl_parts = [str(item).lower() for item in data.get("intl_parts") or []]
+    intl_parts = [item for item in intl_parts if item in valid]
+    if len(intl_parts) >= 3 and set(intl_parts[:3]) == valid:
+        return tuple(intl_parts[:3])  # type: ignore[return-value]
+    return ("month", "day", "year")
+
+
+def _detect_birthdate_input_order(element: Any) -> tuple[str, str, str]:
+    try:
+        probe = element.evaluate(
+            """el => {
+                const visible = node => {
+                    if (!node) return false;
+                    const style = getComputedStyle(node);
+                    const rect = node.getBoundingClientRect();
+                    return style.display !== 'none' && style.visibility !== 'hidden'
+                        && rect.width > 0 && rect.height > 0;
+                };
+                const root = el.closest('[role="group"], fieldset, [data-testid*="birth" i]')
+                    || el.parentElement?.parentElement || el.parentElement || el;
+                const segments = Array.from(root.querySelectorAll('[data-type]'))
+                    .filter(visible)
+                    .map(node => ({
+                        type: String(node.getAttribute('data-type') || '').toLowerCase(),
+                        left: node.getBoundingClientRect().left,
+                    }))
+                    .filter(item => ['year', 'month', 'day'].includes(item.type))
+                    .sort((a, b) => a.left - b.left)
+                    .map(item => item.type);
+                const inputType = String(el.getAttribute('type') || '').toLowerCase();
+                const hints = [
+                    el.getAttribute('placeholder'),
+                    el.getAttribute('aria-label'),
+                    el.getAttribute('data-placeholder'),
+                    el.getAttribute('data-format'),
+                    inputType === 'date' ? '' : el.getAttribute('value'),
+                    inputType === 'date' ? '' : el.value,
+                    root.getAttribute?.('aria-label'),
+                ].filter(Boolean);
+                let intlParts = [];
+                try {
+                    intlParts = new Intl.DateTimeFormat(undefined, {
+                        year: 'numeric', month: '2-digit', day: '2-digit'
+                    }).formatToParts(new Date(2001, 10, 22))
+                      .map(part => part.type)
+                      .filter(type => ['year', 'month', 'day'].includes(type));
+                } catch (_error) {}
+                return { segments, hints, intl_parts: intlParts };
+            }"""
+        )
+    except Exception:
+        probe = {}
+    return _infer_birthdate_order(probe)
+
+
+def _replace_birthdate_input(
+    element: Any,
+    iso_birthdate: str,
+    *,
+    order: tuple[str, str, str] = ("month", "day", "year"),
+) -> None:
+    """Clear a prefilled OpenAI birthday field before entering an adult date."""
+    value = str(iso_birthdate or "").strip()
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+        raise ChatGPTRegistrationError(f"无效的生日格式: {value!r}")
+    try:
+        element.click()
+    except Exception:
+        pass
+    # Explicit clearing is important for React's controlled /about-you field;
+    # directly assigning el.value can leave its internal state on today's date.
+    try:
+        element.press("Control+A")
+        element.press("Backspace")
+    except Exception:
+        pass
+    year, month, day = value.split("-")
+    part_values = {"year": year, "month": month, "day": day}
+    normalized_order = tuple(item for item in order if item in part_values)
+    if len(normalized_order) != 3 or set(normalized_order) != set(part_values):
+        normalized_order = ("month", "day", "year")
+    typed_digits = "".join(part_values[item] for item in normalized_order)
+    try:
+        element.fill("")
+    except Exception:
+        pass
+    retry_segment_navigation = False
+    try:
+        for item in normalized_order:
+            element.type(part_values[item], delay=40)
+    except Exception:
+        retry_segment_navigation = True
+    try:
+        current_digits = re.sub(r"\D", "", str(element.input_value() or ""))
+        retry_segment_navigation = current_digits not in {
+            f"{year}{month}{day}",
+            typed_digits,
+        }
+    except Exception:
+        pass
+    if retry_segment_navigation:
+        try:
+            element.click()
+            element.press("Control+A")
+            element.press("Backspace")
+            for index, item in enumerate(normalized_order):
+                if index:
+                    element.press("ArrowRight")
+                element.type(part_values[item], delay=40)
+        except Exception:
+            # Plain HTML date inputs may reject keyboard typing but still
+            # accept their normalized ISO value through Playwright fill.
+            element.fill("")
+            element.fill(value)
+    try:
+        element.press("Tab")
+    except Exception:
+        pass
 
 
 def _submit_for_element(page: Any, element: Any, pattern: str) -> bool:
@@ -647,11 +1207,22 @@ class ChatGPTBrowserRuntime:
         try:
             from camoufox.sync_api import Camoufox
 
-            options: dict[str, Any] = {"headless": headless}
+            # Match the stable Camoufox profile used by openai-free. These
+            # options are isolated to ChatGPT and never alter the Grok runtime.
+            options: dict[str, Any] = {
+                "headless": headless,
+                "block_webrtc": True,
+                "humanize": True,
+                "os": ["windows", "macos", "linux"],
+            }
             if not headless:
                 options["window"] = (debug_window_width, debug_window_height)
             if proxy and proxy.get("server"):
                 options["proxy"] = proxy
+                # openai-free derives locale, timezone and geolocation from
+                # the real proxy exit. Let Camoufox perform that natively so
+                # the browser fingerprint and OpenAI-visible IP stay aligned.
+                options["geoip"] = True
             self.camoufox_manager = Camoufox(**options)
             self.browser = self.camoufox_manager.start()
             self.using_camoufox = True
@@ -699,6 +1270,8 @@ def register_chatgpt_account(
     on_progress: Callable[[str], None] | None = None,
     browser_data_dir: str | None = None,
     operation_delay_ms: int = 3000,
+    checkout_probe_enabled: bool = False,
+    checkout_proxy: str = "",
     browser_runtime: ChatGPTBrowserRuntime | None = None,
 ) -> dict[str, Any]:
     return _registration.register_chatgpt_account(
@@ -713,5 +1286,7 @@ def register_chatgpt_account(
         on_progress=on_progress,
         browser_data_dir=browser_data_dir,
         operation_delay_ms=operation_delay_ms,
+        checkout_probe_enabled=checkout_probe_enabled,
+        checkout_proxy=checkout_proxy,
         browser_runtime=browser_runtime,
     )

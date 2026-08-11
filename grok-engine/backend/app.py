@@ -141,6 +141,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "concurrency": 1,
     "stagger_ms": 1200,
     "chatgpt_step_delay_ms": 3000,
+    "chatgpt_checkout_probe_enabled": False,
+    "chatgpt_checkout_proxy": "",
     "auto_tune_enabled": False,
     "probe_delay_sec": 0,
     "probe_model": "grok-4.5",
@@ -238,6 +240,8 @@ class Settings(BaseModel):
     concurrency: int = Field(1, ge=1, le=10000)
     stagger_ms: int = Field(1200, ge=0, le=60000)
     chatgpt_step_delay_ms: int = Field(3000, ge=0, le=30000)
+    chatgpt_checkout_probe_enabled: bool = False
+    chatgpt_checkout_proxy: str = ""
     auto_tune_enabled: bool = False
     probe_delay_sec: int = Field(0, ge=0, le=600)
     probe_model: str = "grok-4.5"
@@ -299,10 +303,12 @@ class ProxyCheckRequest(BaseModel):
 class HotmailStatusRequest(BaseModel):
     used: bool | None = None
     preferred_for_next_use: bool | None = None
+    registration_target: Literal["grok", "chatgpt"] = "grok"
 
 
 class HotmailRestoreUsesRequest(BaseModel):
     count: int = Field(..., ge=1, le=3)
+    registration_target: Literal["grok", "chatgpt"] = "grok"
 
 
 class HotmailDeleteRequest(BaseModel):
@@ -316,6 +322,11 @@ class AccountRotationProbeRequest(BaseModel):
 
 class AccountRotationDeleteRequest(BaseModel):
     ids: list[str] = Field(default_factory=list)
+
+
+class ChatGPTAccessTokensRequest(BaseModel):
+    ids: list[str] = Field(default_factory=list)
+    all_accounts: bool = False
 
 
 def _post_registration_config(cfg: dict[str, Any]) -> dict[str, Any]:
@@ -548,8 +559,11 @@ def mail_provider_presets(response: Response) -> dict[str, Any]:
 @app.get("/api/mail/hotmail/accounts")
 def hotmail_accounts(
     source: Literal["mail_management", "manual"] = Query("mail_management"),
+    registration_target: Literal["grok", "chatgpt"] = Query("grok"),
 ) -> dict[str, Any]:
-    return _app_routes.hotmail_accounts(_app_context(), source)
+    return _app_routes.hotmail_accounts(
+        _app_context(), source, registration_target
+    )
 
 
 @app.post("/api/mail/hotmail/accounts/import")
@@ -592,8 +606,10 @@ def hotmail_delete_selected(request: HotmailDeleteRequest) -> dict[str, Any]:
 
 
 @app.delete("/api/mail/hotmail/accounts/used")
-def hotmail_delete_used() -> dict[str, Any]:
-    return _app_routes.hotmail_delete_used(_app_context())
+def hotmail_delete_used(
+    registration_target: Literal["grok", "chatgpt"] = Query("grok"),
+) -> dict[str, Any]:
+    return _app_routes.hotmail_delete_used(_app_context(), registration_target)
 
 
 @app.delete("/api/mail/hotmail/accounts/unhealthy")
@@ -668,6 +684,26 @@ def reset_grok_sessions() -> dict[str, Any]:
 @app.get("/api/sessions/{session_id}")
 def session(session_id: str) -> dict[str, Any]:
     return _app_routes.session(_app_context(), session_id)
+
+
+@app.post("/api/chatgpt/sessions/{session_id}/access-token")
+def chatgpt_access_token(session_id: str, response: Response) -> dict[str, Any]:
+    response.headers["Cache-Control"] = "no-store"
+    return _app_routes.chatgpt_access_token(_app_context(), session_id)
+
+
+@app.get("/api/chatgpt/accounts")
+def chatgpt_accounts(response: Response) -> dict[str, Any]:
+    response.headers["Cache-Control"] = "no-store"
+    return _app_routes.chatgpt_accounts(_app_context())
+
+
+@app.post("/api/chatgpt/accounts/access-tokens")
+def chatgpt_account_access_tokens(
+    request: ChatGPTAccessTokensRequest, response: Response
+) -> dict[str, Any]:
+    response.headers["Cache-Control"] = "no-store"
+    return _app_routes.chatgpt_account_access_tokens(_app_context(), request)
 
 
 @app.get("/api/batches/{batch_id}")

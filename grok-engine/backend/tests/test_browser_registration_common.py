@@ -79,6 +79,31 @@ class BrowserRegistrationCommonTests(unittest.TestCase):
         self.assertTrue(action_text_matches("oauth_approve", "許可"))
         self.assertTrue(action_text_matches("oauth_approve", "Autorisieren"))
 
+    def test_cookie_accept_all_covers_french_and_japanese(self) -> None:
+        labels = (
+            "Accept all",
+            "Tout accepter",
+            "すべて許可",
+            "すべての Cookie を受け入れる",
+            "全て同意",
+        )
+        for label in labels:
+            with self.subTest(label=label):
+                self.assertTrue(action_text_matches("cookie_accept_all", label))
+        self.assertTrue(
+            action_text_matches(
+                "cookie_accept_all",
+                "Tout accepter cookie-policy-manage-dialog-accept-button",
+            )
+        )
+
+        self.assertFalse(
+            action_text_matches(
+                "cookie_accept_all", "Refuser les cookies non essentiels"
+            )
+        )
+        self.assertTrue(action_text_matches("retry", "もう一度お試しください"))
+
     def test_find_action_uses_accessible_visible_text(self) -> None:
         disabled = _FakeElement("メールアドレスで登録", enabled=False)
         enabled = _FakeElement("メールアドレスで登録")

@@ -121,6 +121,9 @@ def update_registration_usage_sync(
     *,
     used_aliases: list[int] | None = None,
     failed_aliases: list[int] | None = None,
+    openai_used: bool | None = None,
+    openai_failed: bool | None = None,
+    openai_failure_reason: str | None = None,
     refresh_token: str | None = None,
 ) -> bool:
     """Mirror registration slot usage into the mailbox-management record."""
@@ -144,6 +147,14 @@ def update_registration_usage_sync(
         target["registrationUseCount"] = consumed
         target["registrationUseLimit"] = REGISTRATION_USE_LIMIT
         target["status"] = "1" if consumed >= REGISTRATION_USE_LIMIT else ("2" if consumed else "0")
+        if openai_used is not None:
+            target["openaiRegistrationUsed"] = bool(openai_used)
+            target["openaiRegistrationUseCount"] = int(bool(openai_used))
+            target["openaiRegistrationUseLimit"] = 1
+        if openai_failed is not None:
+            target["openaiRegistrationFailed"] = bool(openai_failed) and not bool(openai_used)
+        if openai_failure_reason is not None:
+            target["openaiRegistrationFailureReason"] = str(openai_failure_reason or "")
         target["updateTime"] = _now_text()
         if refresh_token:
             target["refreshToken"] = str(refresh_token)
@@ -338,6 +349,11 @@ async def import_accounts(
                         "registrationUseLimit": REGISTRATION_USE_LIMIT,
                         "registrationUsedAliases": [],
                         "registrationFailedAliases": [],
+                        "openaiRegistrationUsed": False,
+                        "openaiRegistrationFailed": False,
+                        "openaiRegistrationFailureReason": "",
+                        "openaiRegistrationUseCount": 0,
+                        "openaiRegistrationUseLimit": 1,
                         "createTime": timestamp,
                         "updateTime": timestamp,
                     }

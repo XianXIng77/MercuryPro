@@ -70,6 +70,23 @@ ONE_TIME_CODE_INPUT_SELECTORS = (
 # common neighbouring locales. They deliberately describe intent rather than
 # a specific site's DOM so xAI, OpenAI and future providers can share them.
 ACTION_PATTERNS: dict[str, str] = {
+    "cookie_accept_all": (
+        r"(?:accept\s+all|allow\s+all|"
+        r"接受全部|全部接受|同意全部|允許全部|全部允許|"
+        r"すべて(?:の\s*cookie\s*を)?(?:許可|同意|受け入れる)|"
+        r"全て(?:の\s*cookie\s*を)?(?:許可|同意|受け入れる)|"
+        r"tout\s+accepter|accepter\s+tout|"
+        r"alle\s+akzeptieren|alles\s+akzeptieren|"
+        r"aceptar\s+todo|aceptar\s+todas|"
+        r"aceitar\s+todos|accetta\s+tutto|"
+        r"모두\s*(?:허용|동의|수락))"
+    ),
+    "cookie_reject_nonessential": (
+        r"reject\s+non-essential|refuse\s+non-essential|"
+        r"refuser\s+les\s+cookies\s+non\s+essentiels|"
+        r"必須でない(?:cookie|クッキー)を拒否|必要不可欠でない(?:cookie|クッキー)を拒否|"
+        r"不要な(?:cookie|クッキー)を拒否|非必須.*拒否"
+    ),
     "email_signup": (
         r"sign\s*up\s*with\s*(?:an?\s*)?e-?mail(?:\s*address)?|"
         r"(?:使用|通过|用)?(?:邮箱|电子邮件|電子郵件|電郵).*(?:注册|註冊)|"
@@ -161,6 +178,15 @@ ACTION_PATTERNS: dict[str, str] = {
         r"anmelden|einloggen|se\s+connecter|connexion|"
         r"iniciar\s+sesi[oó]n|entrar|accedi|inloggen|zaloguj|"
         r"войти|giri[şs]\s+yap|masuk"
+    ),
+    "retry": (
+        r"try\s+again|retry|"
+        r"重试|重試|再试一次|再試一次|"
+        r"もう一度(?:お試し|試す)|再試行|"
+        r"r[ée]essayer|essayer\s+à\s+nouveau|"
+        r"erneut\s+versuchen|noch\s+einmal\s+versuchen|"
+        r"intentar\s+de\s+nuevo|reintentar|"
+        r"다시\s+시도"
     ),
     "oauth_approve": (
         r"allow|authorize|approve|accept|confirm|continue|grant|"
