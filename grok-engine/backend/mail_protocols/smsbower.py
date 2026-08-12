@@ -51,6 +51,8 @@ def _smsbower_get(
 ) -> dict[str, Any]:
     """Call a SMSBower API endpoint (GET with api_key query param)."""
     base = (base_url or SMSBOWER_DEFAULT_BASE_URL).rstrip("/")
+    if not base.startswith(("http://", "https://")):
+        base = f"https://{base}"
     query: dict[str, Any] = {"api_key": api_key}
     if params:
         query.update(params)
