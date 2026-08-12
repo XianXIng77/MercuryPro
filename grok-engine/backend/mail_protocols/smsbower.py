@@ -47,7 +47,7 @@ def _smsbower_get(
     api_key: str,
     base_url: str,
     params: dict[str, Any] | None = None,
-    timeout: float = 30.0,
+    timeout: float = 45.0,
 ) -> dict[str, Any]:
     """Call a SMSBower API endpoint (GET with api_key query param)."""
     base = (base_url or SMSBOWER_DEFAULT_BASE_URL).rstrip("/")
@@ -57,7 +57,8 @@ def _smsbower_get(
     if params:
         query.update(params)
 
-    with httpx.Client(timeout=timeout) as client:
+    # Use generous timeouts — SMSBower API can be slow from some regions.
+    with httpx.Client(timeout=httpx.Timeout(timeout, connect=15.0)) as client:
         try:
             resp = client.get(f"{base}/{endpoint.lstrip('/')}", params=query)
         except httpx.RequestError as exc:
@@ -183,7 +184,7 @@ def check_balance(
         api_key=key,
         base_url=base_url or SMSBOWER_DEFAULT_BASE_URL,
         params={"service": SMSBOWER_DEFAULT_SERVICE, "domain": SMSBOWER_DEFAULT_DOMAIN},
-        timeout=15.0,
+        timeout=45.0,
     )
 
     inner = data.get("data") if isinstance(data, dict) else {}
