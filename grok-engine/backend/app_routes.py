@@ -74,6 +74,10 @@ def mail_provider_presets(ctx, response):
                 "available": True,
                 "hotmail_local_base_url": "http://127.0.0.1:17373",
             },
+            "naturalflower": {
+                "available": True,
+                "naturalflower_mailboxes": "",
+            },
         }
     }
 
@@ -284,6 +288,23 @@ def start_register(ctx, settings=None, paused=False):
         if requested_count < 1:
             raise ctx.HTTPException(status_code=400, detail="注册数量必须大于 0")
         cfg["count"] = min(requested_count, available)
+    elif cfg.get("mail_provider") == "naturalflower":
+        if target != "chatgpt":
+            raise ctx.HTTPException(
+                status_code=400, detail="Naturalflower 取件邮箱仅支持 OpenAI 注册"
+            )
+        from naturalflower_mail import parse_naturalflower_mailboxes
+
+        try:
+            mailboxes = parse_naturalflower_mailboxes(
+                cfg.get("naturalflower_mailboxes")
+            )
+        except ValueError as exc:
+            raise ctx.HTTPException(status_code=400, detail=str(exc)) from exc
+        requested_count = int(cfg.get("count") or 0)
+        if requested_count < 1:
+            raise ctx.HTTPException(status_code=400, detail="注册数量必须大于 0")
+        cfg["count"] = min(requested_count, len(mailboxes))
     elif target == "chatgpt" and cfg.get("mail_provider") == "smsbower":
         smsbower_key = str(cfg.get("smsbower_api_key") or "").strip()
         if not smsbower_key:
@@ -345,6 +366,7 @@ def start_register(ctx, settings=None, paused=False):
         "mail_provider": cfg["mail_provider"],
         "hotmail_local_base_url": cfg["hotmail_local_base_url"],
         "hotmail_account_source": cfg["hotmail_account_source"],
+        "naturalflower_mailboxes": cfg.get("naturalflower_mailboxes", ""),
         "count": cfg["count"],
         "concurrency": cfg["concurrency"],
         "stagger_ms": cfg["stagger_ms"],

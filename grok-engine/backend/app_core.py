@@ -40,6 +40,7 @@ def load_config(ctx):
                 "stalwart",
                 "hotmail_local",
                 "smsbower",
+                "naturalflower",
             }
             else "custom"
         )

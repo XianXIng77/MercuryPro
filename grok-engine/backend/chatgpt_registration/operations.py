@@ -295,12 +295,26 @@ def resume_registration_batch_probe(ctx, batch_id):
     return {"ok": True, "batch_id": batch_id, "probe_status": "running"}
 
 
+def _public_batch(batch):
+    """Hide pickup bearer tokens from monitor responses while retaining resume state."""
+    result = dict(batch)
+    reg_config = result.get("reg_config")
+    if isinstance(reg_config, dict):
+        public_config = dict(reg_config)
+        mailbox_text = str(public_config.get("naturalflower_mailboxes") or "")
+        if mailbox_text:
+            count = len([line for line in mailbox_text.splitlines() if line.strip()])
+            public_config["naturalflower_mailboxes"] = f"[已隐藏 {count} 条取件链接]"
+        result["reg_config"] = public_config
+    return result
+
+
 def list_registration_sessions(ctx):
     with ctx._lock:
         sessions = {
             sid: ctx._compact_session(dict(s)) for sid, s in ctx._sessions.items()
         }
-        batches = {bid: dict(b) for bid, b in ctx._batches.items()}
+        batches = {bid: _public_batch(b) for bid, b in ctx._batches.items()}
     ctx._persist_monitor_state()
     return {"sessions": sessions, "batches": batches}
 
@@ -407,7 +421,7 @@ def get_registration_batch(ctx, batch_id):
         b = ctx._batches.get(batch_id)
         if b is None:
             return None
-        result = dict(b)
+        result = _public_batch(b)
         sids = list(result.get("session_ids") or [])
         result["sessions"] = [
             ctx._compact_session(ctx._sessions[s]) for s in sids if s in ctx._sessions

@@ -44,7 +44,8 @@ RUN useradd --create-home --uid 1000 mercury \
 
 USER mercury
 
-RUN python -m camoufox fetch
+RUN python -m camoufox fetch \
+    && python -c "from camoufox.pkgman import camoufox_path; p = camoufox_path(download_if_missing=False); executable = p / 'camoufox-bin'; assert executable.is_file(), f'Camoufox executable missing: {executable}'; print(f'Camoufox verified: {executable}')"
 
 EXPOSE 9100
 

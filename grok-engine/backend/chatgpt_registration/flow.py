@@ -30,6 +30,7 @@ def _prepare_registration_session(
     mail_provider=None,
     hotmail_local_base_url=None,
     hotmail_account_source=None,
+    naturalflower_mailboxes=None,
     batch_id=None,
     batch_index=None,
     batch_total=None,
@@ -41,6 +42,17 @@ def _prepare_registration_session(
     if start_delay > 0:
         ctx.time.sleep(start_delay)
     try:
+        naturalflower_mailbox = None
+        if str(mail_provider or "").strip().lower() == "naturalflower":
+            from naturalflower_mail import naturalflower_mailbox_for_index
+
+            entry = naturalflower_mailbox_for_index(
+                naturalflower_mailboxes, batch_index
+            )
+            naturalflower_mailbox = {
+                "email": entry.email,
+                "pickup_url": entry.pickup_url,
+            }
         email, receiver = ctx._make_email_receiver(
             api_key=moemail_api_key,
             base_url=moemail_base_url,
@@ -49,6 +61,7 @@ def _prepare_registration_session(
             mail_provider=mail_provider,
             hotmail_local_base_url=hotmail_local_base_url,
             hotmail_account_source=hotmail_account_source,
+            naturalflower_mailbox=naturalflower_mailbox,
         )
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -99,6 +112,7 @@ def _start_one_registration(
     mail_provider=None,
     hotmail_local_base_url=None,
     hotmail_account_source=None,
+    naturalflower_mailboxes=None,
     batch_id=None,
     batch_index=None,
     batch_total=None,
@@ -116,6 +130,7 @@ def _start_one_registration(
         mail_provider=mail_provider,
         hotmail_local_base_url=hotmail_local_base_url,
         hotmail_account_source=hotmail_account_source,
+        naturalflower_mailboxes=naturalflower_mailboxes,
         batch_id=batch_id,
         batch_index=batch_index,
         batch_total=batch_total,
@@ -162,6 +177,7 @@ def _snapshot_reg_config(
     mail_provider,
     hotmail_local_base_url,
     hotmail_account_source,
+    naturalflower_mailboxes,
     concurrency,
     stagger_ms,
     post_registration=None,
@@ -176,6 +192,7 @@ def _snapshot_reg_config(
         "mail_provider": (mail_provider or "moemail").strip().lower(),
         "hotmail_local_base_url": hotmail_local_base_url or "http://127.0.0.1:17373",
         "hotmail_account_source": hotmail_account_source or "mail_management",
+        "naturalflower_mailboxes": naturalflower_mailboxes or "",
         "concurrency": concurrency,
         "stagger_ms": stagger_ms,
         "post_registration": dict(post_registration or {}),
@@ -197,6 +214,7 @@ def start_registration(
     mail_provider=None,
     hotmail_local_base_url=None,
     hotmail_account_source=None,
+    naturalflower_mailboxes=None,
     count=None,
     concurrency=None,
     stagger_ms=None,
@@ -206,11 +224,17 @@ def start_registration(
     **kwargs,
 ):
     """Start one or many ChatGPT registration sessions (multi-thread)."""
+    requested_provider = (mail_provider or "moemail").strip().lower() or "moemail"
     try:
         n = int(count if count is not None else 1)
     except (TypeError, ValueError):
         n = 1
     n = max(1, n)
+    if requested_provider == "naturalflower":
+        from naturalflower_mail import parse_naturalflower_mailboxes
+
+        mailbox_count = len(parse_naturalflower_mailboxes(naturalflower_mailboxes))
+        n = min(n, mailbox_count)
     try:
         workers = int(
             concurrency if concurrency is not None else ctx.DEFAULT_CONCURRENCY
@@ -223,7 +247,6 @@ def start_registration(
     except (TypeError, ValueError):
         stagger = 2000
     stagger = max(0, min(stagger, 60000))
-    requested_provider = (mail_provider or "moemail").strip().lower() or "moemail"
     if requested_provider == "hotmail_local":
         from hotmail_local import list_accounts
 
@@ -242,7 +265,7 @@ def start_registration(
     )
     proxy_strat = (proxy_strategy or "round_robin").strip().lower()
     proxy_val = ctx._pick_proxy_from_pool(proxy_pool, strategy=proxy_strat, index=0)
-    if requested_provider == "hotmail_local":
+    if requested_provider in {"hotmail_local", "naturalflower"}:
         mail_prov = requested_provider
     else:
         try:
@@ -263,6 +286,7 @@ def start_registration(
             mail_provider=mail_prov,
             hotmail_local_base_url=hotmail_local_base_url,
             hotmail_account_source=hotmail_account_source,
+            naturalflower_mailboxes=naturalflower_mailboxes,
             post_registration=post_registration,
             headless=headless,
         )
@@ -296,6 +320,7 @@ def start_registration(
             mail_provider=mail_prov,
             hotmail_local_base_url=hotmail_local_base_url,
             hotmail_account_source=hotmail_account_source,
+            naturalflower_mailboxes=naturalflower_mailboxes,
             concurrency=workers,
             stagger_ms=stagger,
             post_registration=post_registration,
@@ -335,6 +360,7 @@ def start_registration(
             mail_prov,
             hotmail_local_base_url,
             hotmail_account_source,
+            naturalflower_mailboxes,
             post_registration,
             headless,
         ),
@@ -377,6 +403,7 @@ def _batch_spawner(
     mail_provider,
     hotmail_local_base_url,
     hotmail_account_source,
+    naturalflower_mailboxes,
     post_registration,
     headless,
 ):
@@ -421,6 +448,7 @@ def _batch_spawner(
             mail_provider=mail_provider,
             hotmail_local_base_url=hotmail_local_base_url,
             hotmail_account_source=hotmail_account_source,
+            naturalflower_mailboxes=naturalflower_mailboxes,
             batch_id=batch_id,
             batch_index=i,
             batch_total=total,

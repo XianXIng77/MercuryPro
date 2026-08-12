@@ -107,6 +107,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "mail_expiry_ms": 86400000,
     "smsbower_api_key": "",
     "smsbower_base_url": "",
+    "naturalflower_mailboxes": "",
     "mail_provider_configs": {
         "yyds": {
             "mail_base_url": "",
@@ -231,6 +232,7 @@ class Settings(BaseModel):
         "stalwart",
         "hotmail_local",
         "smsbower",
+        "naturalflower",
     ] = "hotmail_local"
     mail_api_key: str = ""
     mail_base_url: str = ""
@@ -240,6 +242,7 @@ class Settings(BaseModel):
     mail_provider_configs: dict[str, dict[str, str]] = Field(default_factory=dict)
     smsbower_api_key: str = ""
     smsbower_base_url: str = ""
+    naturalflower_mailboxes: str = ""
     hotmail_local_base_url: str = "http://127.0.0.1:17373"
     hotmail_account_source: Literal["mail_management", "manual"] = "mail_management"
     captcha_provider: Literal["local", "yescaptcha"] = "local"

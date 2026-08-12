@@ -82,6 +82,8 @@ def normalize_mail_provider(provider: str | None, *, base_url: str | None = None
         return "stalwart"
     if p in {"smsbower", "smsbower_mail", "sms-bower", "sms_bower"}:
         return "smsbower"
+    if p in {"naturalflower", "natural-flower", "naturalflower_pickup"}:
+        return "naturalflower"
     if base.startswith(("imap://", "imaps://")):
         return "imap"
     if any(x in base for x in ("maliapi.215.im", "vip.215.im", "215.im/v1", "yyds")):

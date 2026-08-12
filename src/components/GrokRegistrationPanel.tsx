@@ -62,6 +62,7 @@ const DEFAULT_CONFIG: GrokConfig = {
   mail_expiry_ms: 86400000,
   smsbower_api_key: '',
   smsbower_base_url: '',
+  naturalflower_mailboxes: '',
   hotmail_local_base_url: 'http://127.0.0.1:17373',
   hotmail_account_source: 'mail_management',
   proxy: '',
@@ -105,6 +106,7 @@ function rotationDuration(start?: number, end?: number): string {
 function mergeConfig(value: Partial<GrokConfig>): GrokConfig {
   const mailProvider = value.mail_provider === 'hotmail_local' ? 'hotmail_local'
     : value.mail_provider === 'smsbower' && value.registration_target === 'chatgpt' ? 'smsbower'
+    : value.mail_provider === 'naturalflower' && value.registration_target === 'chatgpt' ? 'naturalflower'
     : 'custom';
   return {
     ...DEFAULT_CONFIG,
@@ -673,6 +675,7 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
     ];
     if (config.registration_target === 'chatgpt') {
       options.push({ value: 'smsbower', label: 'SMSBower（购买 Gmail 邮箱）', description: '每次注册前通过 SMSBower 临时购买 Gmail 邮箱并接取验证码' });
+      options.push({ value: 'naturalflower', label: 'Naturalflower 取件邮箱', description: '逐行填写 iCloud 邮箱与专属取件 URL' });
     }
     return options;
   }, [config.registration_target]);
@@ -810,7 +813,12 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
   const normalizedConfig = (): GrokConfig => {
     const requestedCount = Math.max(1, Math.floor(Number(config.count) || 1));
     const availableSlots = Math.max(0, Number(hotmailPool?.available || 0));
-    const count = config.mail_provider === 'hotmail_local' && availableSlots > 0 ? Math.min(requestedCount, availableSlots) : requestedCount;
+    const naturalflowerCount = config.naturalflower_mailboxes.split(/\r?\n/).filter((line) => line.trim()).length;
+    const count = config.mail_provider === 'hotmail_local' && availableSlots > 0
+      ? Math.min(requestedCount, availableSlots)
+      : config.mail_provider === 'naturalflower' && naturalflowerCount > 0
+        ? Math.min(requestedCount, naturalflowerCount)
+        : requestedCount;
     return {
       ...config,
       registration_target: config.registration_target,
@@ -1365,11 +1373,16 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
   const performanceMemory = performanceProfile?.memory_available_gb ?? '--';
   const performanceSolverThreads = performanceProfile?.solver_threads || performanceProfile?.local_slots || '--';
   const proxyCount = config.proxy.split(/\r?\n/).filter((item) => item.trim()).length;
+  const naturalflowerMailboxLines = config.naturalflower_mailboxes.split(/\r?\n/).filter((line) => line.trim());
+  const naturalflowerMailboxCount = naturalflowerMailboxLines.length;
+  const naturalflowerMailboxesValid = naturalflowerMailboxCount > 0 && naturalflowerMailboxLines.every((line) => /^[^\s@]+@[^\s@]+\.[^\s@]+\s+https:\/\/pickup\.naturalflower\.cn\/(?:\?token=|p\/)[^\s]+$/i.test(line.trim()));
   const registrationRounds = Math.ceil(Math.max(1, Number(config.count) || 1) / Math.max(1, Number(config.concurrency) || 1));
   const mailReady = config.mail_provider === 'hotmail_local'
     ? Boolean(config.hotmail_local_base_url.trim() && hotmailAvailableSlots > 0)
     : config.mail_provider === 'smsbower'
       ? Boolean(config.smsbower_api_key.trim() && config.smsbower_base_url.trim() && smsbowerBalance?.ok)
+      : config.mail_provider === 'naturalflower'
+        ? naturalflowerMailboxesValid
       : Boolean(config.mail_base_url.trim() && config.mail_api_key.trim());
   const checkoutProbeReady = config.registration_target !== 'chatgpt'
     || !config.chatgpt_checkout_probe_enabled
@@ -1385,7 +1398,7 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
     config.registration_target === 'chatgpt'
       ? { label: 'OpenAI 浏览器环境', detail: '使用独立 Camoufox 指纹与全新隐私上下文', ready: serviceOnline === true }
       : { label: '验证码服务', detail: config.captcha_provider === 'local' ? `本地 Solver：${solverState}` : captchaReady ? 'YesCaptcha 密钥已填写' : '等待填写 YesCaptcha 密钥', ready: captchaReady },
-    { label: '注册邮箱', detail: mailReady ? (config.mail_provider === 'hotmail_local' ? '微软邮箱账户池已配置' : config.mail_provider === 'smsbower' ? `SMSBower 余额正常 · 将临时购买 Gmail` : '自定义邮箱 API 已配置') : (config.mail_provider === 'smsbower' ? '请填写 SMSBower API Key / 地址并查询余额' : '请先完成邮箱配置'), ready: mailReady },
+    { label: '注册邮箱', detail: mailReady ? (config.mail_provider === 'hotmail_local' ? '微软邮箱账户池已配置' : config.mail_provider === 'smsbower' ? `SMSBower 余额正常 · 将临时购买 Gmail` : config.mail_provider === 'naturalflower' ? `Naturalflower 已填写 ${naturalflowerMailboxCount} 个邮箱` : '自定义邮箱 API 已配置') : (config.mail_provider === 'smsbower' ? '请填写 SMSBower API Key / 地址并查询余额' : config.mail_provider === 'naturalflower' ? '请按“邮箱 + 取件 URL”逐行填写' : '请先完成邮箱配置'), ready: mailReady },
     ...(config.registration_target === 'chatgpt' ? [{
       label: 'Checkout 类型检测',
       detail: !config.chatgpt_checkout_probe_enabled ? '当前关闭，注册后跳过 oaics / cs_live 查询' : checkoutProbeReady ? '将通过专用德国代理查询（DE / EUR）' : '已开启，请填写一条专用德国代理',
@@ -1522,7 +1535,7 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <Field label="注册目标"><StyledSelect ariaLabel="注册目标" value={config.registration_target} onChange={(value) => setField('registration_target', value as GrokConfig['registration_target'])} options={REGISTRATION_TARGET_OPTIONS} isDark={isDark} /></Field>
                     <Field label="注册方式"><input value="浏览器注册" disabled className={`${fieldClass} opacity-70`} /></Field>
-                    <Field label={config.mail_provider === 'hotmail_local' ? `注册数量（可用槽位 ${hotmailAvailableSlots}）` : '注册数量'}><input type="number" min={1} max={config.mail_provider === 'hotmail_local' ? Math.max(1, hotmailAvailableSlots) : 10000} value={config.count} onChange={(e) => setField('count', Number(e.target.value))} className={fieldClass} /></Field>
+                    <Field label={config.mail_provider === 'hotmail_local' ? `注册数量（可用槽位 ${hotmailAvailableSlots}）` : config.mail_provider === 'naturalflower' ? `注册数量（已填写 ${naturalflowerMailboxCount} 个）` : '注册数量'}><input type="number" min={1} max={config.mail_provider === 'hotmail_local' ? Math.max(1, hotmailAvailableSlots) : config.mail_provider === 'naturalflower' ? Math.max(1, naturalflowerMailboxCount) : 10000} value={config.count} onChange={(e) => setField('count', Number(e.target.value))} className={fieldClass} /></Field>
                     <Field label={`并发数（推荐最大为 ${recommendedConcurrency || '--'}）`}><input type="number" min={1} value={config.concurrency} onChange={(e) => setField('concurrency', Number(e.target.value))} className={fieldClass} /></Field>
                     <Field label="错峰毫秒"><input type="number" min={0} max={60000} value={config.stagger_ms} onChange={(e) => setField('stagger_ms', Number(e.target.value))} className={fieldClass} /></Field>
                     {config.registration_target === 'chatgpt' && <Field label="页面操作间隔（毫秒）" hint="适当放慢填写和点击，减少页面状态未稳定导致的失败。"><input type="number" min={0} max={30000} value={config.chatgpt_step_delay_ms} onChange={(e) => setField('chatgpt_step_delay_ms', Number(e.target.value))} className={fieldClass} /></Field>}
@@ -1623,6 +1636,11 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
                       <Field label="SMSBower API 地址"><input value={config.smsbower_base_url} onChange={(e) => setField('smsbower_base_url', e.target.value)} placeholder="https://smsbower.page/api/mail" className={fieldClass} /></Field>
                       <Field label="SMSBower API Key"><div className="flex gap-2"><input type="password" value={config.smsbower_api_key} onChange={(e) => setField('smsbower_api_key', e.target.value)} className={fieldClass} /><button onClick={() => void checkSmsbowerBalance()} disabled={!!busy || !config.smsbower_api_key.trim()} className="px-3 rounded-lg bg-slate-600 text-white text-xs font-bold min-w-max flex items-center gap-1.5 disabled:opacity-50">{busy === 'smsbower-balance' && <Loader2 className="w-3.5 h-3.5 animate-spin" />}查询余额</button></div></Field>
                       {smsbowerBalance !== null && <div className="col-span-2"><div className={`rounded-lg border px-4 py-3 ${smsbowerBalance.ok ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-rose-500/30 bg-rose-500/5'}`}><span className={`text-xs font-bold ${smsbowerBalance.ok ? 'text-emerald-600' : 'text-rose-600'}`}>{smsbowerBalance.ok ? `SMSBower 可用 · 单价 $${smsbowerBalance.balance ?? '--'} · 库存 ${smsbowerBalance.count ?? '--'} 个` : `SMSBower 查询失败：${smsbowerBalance.error || '未知错误'}`}</span></div></div>}
+                    </> : config.mail_provider === 'naturalflower' ? <>
+                      <Field label="Naturalflower 邮箱与取件链接" wide hint="每行一组，格式：icloud邮箱 空格 https://pickup.naturalflower.cn/?token=...；任务会按行顺序一一使用。">
+                        <textarea rows={10} value={config.naturalflower_mailboxes} onChange={(e) => setField('naturalflower_mailboxes', e.target.value)} placeholder="crabber.veils7s@icloud.com https://pickup.naturalflower.cn/?token=..." className={`${fieldClass} font-mono`} />
+                      </Field>
+                      <div className="col-span-2"><div className={`rounded-lg border px-4 py-3 ${naturalflowerMailboxesValid ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-amber-500/30 bg-amber-500/5'}`}><span className={`text-xs font-bold ${naturalflowerMailboxesValid ? 'text-emerald-600' : 'text-amber-600'}`}>{naturalflowerMailboxesValid ? `格式检查通过 · 共 ${naturalflowerMailboxCount} 个邮箱` : '请检查每行是否同时包含有效邮箱和完整 Naturalflower 取件 URL'}</span></div></div>
                     </> : <>
                       <div className="space-y-1.5"><span className={`block text-xs font-bold ${theme.textPrimary}`}>账号来源</span><StyledSelect ariaLabel="微软邮箱账号来源" value={config.hotmail_account_source} onChange={(value) => setField('hotmail_account_source', value as GrokConfig['hotmail_account_source'])} options={HOTMAIL_ACCOUNT_SOURCE_OPTIONS.map((option) => option.value === 'mail_management' ? { ...option, description: config.registration_target === 'chatgpt' ? '仅使用邮箱管理中 OpenAI 状态为 0/1 的账号' : '仅使用邮箱管理中 Grok 状态为 0/3、1/3、2/3 的账号' } : option)} isDark={isDark} /></div>
                       <Field label="本地助手地址"><div className="flex gap-2"><input value={config.hotmail_local_base_url} onChange={(e) => setField('hotmail_local_base_url', e.target.value)} className={fieldClass} /><button onClick={() => void testHotmail()} disabled={!!busy} className="px-3 rounded-lg bg-slate-600 text-white text-xs font-bold min-w-max flex items-center gap-1.5 disabled:opacity-50">{busy === 'hotmail-test' && <Loader2 className="w-3.5 h-3.5 animate-spin" />}检测助手</button></div></Field>
@@ -1631,6 +1649,10 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
                   </div>
                   {config.mail_provider === 'smsbower' && <div className={`rounded-xl border p-4 ${theme.border} ${isDark ? 'bg-slate-900/40' : 'bg-slate-50'}`}>
                     <div className="flex items-center justify-between gap-3"><div className="min-w-0"><strong className={`text-xs ${theme.textPrimary}`}>SMSBower Gmail 邮箱</strong><p className={`text-[10px] mt-1 leading-5 ${theme.textSecondary}`}>每次注册前通过 SMSBower API 临时购买一个 Gmail 邮箱，注册完成后释放。验证码通过 SMSBower 接口自动获取。{smsbowerBalance?.ok && <span className="text-emerald-600"> · 单价 ${smsbowerBalance.balance ?? '--'} · 库存 {smsbowerBalance.count ?? '--'} 个</span>}</p></div></div>
+                  </div>}
+                  {config.mail_provider === 'naturalflower' && <div className={`rounded-xl border p-4 ${theme.border} ${isDark ? 'bg-slate-900/40' : 'bg-slate-50'}`}>
+                    <strong className={`text-xs ${theme.textPrimary}`}>Naturalflower 专属取件链接</strong>
+                    <p className={`text-[10px] mt-1 leading-5 ${theme.textSecondary}`}>启动任务时会校验邮箱与取件链接的绑定关系；OpenAI 发出验证码后，后端直接轮询对应 JSON 接口。每个任务固定使用一行，不会在并发任务间串号。</p>
                   </div>}
                   {config.mail_provider === 'hotmail_local' && <div className={`rounded-xl border overflow-hidden ${theme.border} ${isDark ? 'bg-slate-900/40' : 'bg-slate-50'}`}>
                     <div className={`p-4 border-b ${theme.border}`}>

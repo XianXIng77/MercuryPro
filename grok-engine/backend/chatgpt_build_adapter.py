@@ -289,6 +289,7 @@ def _make_email_receiver(
     mail_provider: str | None = None,
     hotmail_local_base_url: str | None = None,
     hotmail_account_source: str | None = None,
+    naturalflower_mailbox: dict[str, Any] | None = None,
     should_cancel: Any | None = None,
 ):
     """Create a temporary email mailbox for receiving ChatGPT verification codes."""
@@ -301,6 +302,14 @@ def _make_email_receiver(
             account_source=hotmail_account_source,
             should_cancel=should_cancel,
         )
+
+    # -- Naturalflower public pickup-link path -----------------------------
+    if str(mail_provider or "").strip().lower() == "naturalflower":
+        from naturalflower_mail import create_naturalflower_receiver
+
+        if not naturalflower_mailbox:
+            raise ValueError("Naturalflower 邮箱任务缺少邮箱与取件 URL")
+        return create_naturalflower_receiver(naturalflower_mailbox)
 
     # -- shared imports ---------------------------------------------------
     from moemail import (
@@ -605,6 +614,7 @@ def _prepare_registration_session(
     mail_provider: str | None = None,
     hotmail_local_base_url: str | None = None,
     hotmail_account_source: str | None = None,
+    naturalflower_mailboxes: str | None = None,
     batch_id: str | None = None,
     batch_index: int | None = None,
     batch_total: int | None = None,
@@ -622,6 +632,7 @@ def _prepare_registration_session(
         mail_provider=mail_provider,
         hotmail_local_base_url=hotmail_local_base_url,
         hotmail_account_source=hotmail_account_source,
+        naturalflower_mailboxes=naturalflower_mailboxes,
         batch_id=batch_id,
         batch_index=batch_index,
         batch_total=batch_total,
@@ -649,6 +660,7 @@ def _start_one_registration(
     mail_provider: str | None = None,
     hotmail_local_base_url: str | None = None,
     hotmail_account_source: str | None = None,
+    naturalflower_mailboxes: str | None = None,
     batch_id: str | None = None,
     batch_index: int | None = None,
     batch_total: int | None = None,
@@ -666,6 +678,7 @@ def _start_one_registration(
         mail_provider=mail_provider,
         hotmail_local_base_url=hotmail_local_base_url,
         hotmail_account_source=hotmail_account_source,
+        naturalflower_mailboxes=naturalflower_mailboxes,
         batch_id=batch_id,
         batch_index=batch_index,
         batch_total=batch_total,
@@ -685,6 +698,7 @@ def _snapshot_reg_config(
     mail_provider: str | None,
     hotmail_local_base_url: str | None,
     hotmail_account_source: str | None,
+    naturalflower_mailboxes: str | None,
     concurrency: int,
     stagger_ms: int,
     post_registration: dict[str, Any] | None = None,
@@ -700,6 +714,7 @@ def _snapshot_reg_config(
         mail_provider=mail_provider,
         hotmail_local_base_url=hotmail_local_base_url,
         hotmail_account_source=hotmail_account_source,
+        naturalflower_mailboxes=naturalflower_mailboxes,
         concurrency=concurrency,
         stagger_ms=stagger_ms,
         post_registration=post_registration,
@@ -720,6 +735,7 @@ def start_registration(
     mail_provider: str | None = None,
     hotmail_local_base_url: str | None = None,
     hotmail_account_source: str | None = None,
+    naturalflower_mailboxes: str | None = None,
     count: int | None = None,
     concurrency: int | None = None,
     stagger_ms: int | None = None,
@@ -741,6 +757,7 @@ def start_registration(
         mail_provider=mail_provider,
         hotmail_local_base_url=hotmail_local_base_url,
         hotmail_account_source=hotmail_account_source,
+        naturalflower_mailboxes=naturalflower_mailboxes,
         count=count,
         concurrency=concurrency,
         stagger_ms=stagger_ms,
@@ -765,6 +782,7 @@ def _batch_spawner(
     mail_provider: str | None,
     hotmail_local_base_url: str | None,
     hotmail_account_source: str | None,
+    naturalflower_mailboxes: str | None,
     post_registration: dict[str, Any] | None,
     headless: bool,
 ) -> None:
@@ -783,6 +801,7 @@ def _batch_spawner(
         mail_provider,
         hotmail_local_base_url,
         hotmail_account_source,
+        naturalflower_mailboxes,
         post_registration,
         headless,
     )

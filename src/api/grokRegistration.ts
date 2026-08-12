@@ -14,7 +14,7 @@ export interface GrokConfig {
   captcha_provider: 'local' | 'yescaptcha';
   local_solver_url: string;
   yescaptcha_key: string;
-  mail_provider: 'custom' | 'hotmail_local' | 'smsbower';
+  mail_provider: 'custom' | 'hotmail_local' | 'smsbower' | 'naturalflower';
   mail_base_url: string;
   mail_api_key: string;
   mail_domain: string;
@@ -22,6 +22,7 @@ export interface GrokConfig {
   mail_expiry_ms: number;
   smsbower_api_key: string;
   smsbower_base_url: string;
+  naturalflower_mailboxes: string;
   hotmail_local_base_url: string;
   hotmail_account_source: 'mail_management' | 'manual';
   proxy: string;
