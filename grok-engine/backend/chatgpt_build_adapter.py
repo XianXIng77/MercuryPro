@@ -346,6 +346,9 @@ def _make_email_receiver(
             self.base_url = base_url or default_base
             self.provider = provider
             self.token = token
+            # Lifecycle hooks — set by provider-specific paths for cleanup.
+            self._on_code_received: Any = None  # callable(code_str)
+            self._on_cancelled: Any = None      # callable()
 
         def wait_for_code(
             self,
@@ -362,6 +365,11 @@ def _make_email_receiver(
 
             while time.time() < deadline:
                 if callable(should_cancel) and should_cancel():
+                    if callable(self._on_cancelled):
+                        try:
+                            self._on_cancelled()
+                        except Exception:
+                            pass
                     raise _RegCancelled("cancelled while waiting for email code")
                 try:
                     messages = fetch_messages(
@@ -401,6 +409,11 @@ def _make_email_receiver(
                                 and clean.isdigit()
                                 and clean not in (exclude_codes or set())
                             ):
+                                if callable(self._on_code_received):
+                                    try:
+                                        self._on_code_received(clean)
+                                    except Exception:
+                                        pass
                                 return clean
                     consecutive_fetch_failures = 0
                 except Exception as exc:
@@ -413,6 +426,11 @@ def _make_email_receiver(
                 slept = 0.0
                 while slept < poll:
                     if callable(should_cancel) and should_cancel():
+                        if callable(self._on_cancelled):
+                            try:
+                                self._on_cancelled()
+                            except Exception:
+                                pass
                         raise _RegCancelled("cancelled while waiting for email code")
                     time.sleep(min(0.25, poll - slept))
                     slept += min(0.25, poll - slept)
@@ -440,9 +458,24 @@ def _make_email_receiver(
         address = mailbox["email"]
         token = str(mailbox.get("token") or "")
 
-        return address, _MailReceiver(
+        receiver = _MailReceiver(
             address, email_id, api_key=key, base_url=base, provider="smsbower", token=token,
         )
+
+        # Wire up SMSBower activation lifecycle hooks so the reserved balance
+        # is properly settled: complete on code received, cancel on abort.
+        from mail_protocols.smsbower import complete_activation, cancel_activation
+
+        def _on_smsbower_code(code: str) -> None:
+            complete_activation(email_id, key, base_url=base)
+
+        def _on_smsbower_cancel() -> None:
+            cancel_activation(email_id, key, base_url=base)
+
+        receiver._on_code_received = _on_smsbower_code
+        receiver._on_cancelled = _on_smsbower_cancel
+
+        return address, receiver
 
     # -- generic path (yyds / custom / cfmail / stalwart / …) --------------
     key = (api_key or MOEMAIL_API_KEY or "").strip()

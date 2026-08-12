@@ -238,7 +238,11 @@ export const grokRegistrationApi = {
   }),
   probeRotationOne: (id: string) => request<{ ok: boolean; scheduled?: number }>(`/api/grok/account-rotation/${encodeURIComponent(id)}/probe`, { method: 'POST' }),
   deleteRotation: (ids: string[]) => request<{ ok: boolean; deleted?: number }>('/api/grok/account-rotation', { method: 'DELETE', body: JSON.stringify({ ids }) }),
-  smsbowerBalance: (apiKey: string, baseUrl: string) => request<{ ok: boolean; balance?: number; count?: number; currency?: string; error?: string }>('/api/smsbower/balance', {
+  smsbowerBalance: (apiKey: string, baseUrl: string) => request<{ ok: boolean; balance?: number; count?: number; price?: number; currency?: string; error?: string }>('/api/smsbower/balance', {
+    method: 'POST',
+    body: JSON.stringify({ smsbower_api_key: apiKey, smsbower_base_url: baseUrl }),
+  }),
+  smsbowerServices: (apiKey: string, baseUrl: string) => request<{ ok: boolean; services?: { code: string; name: string }[]; error?: string }>('/api/smsbower/services', {
     method: 'POST',
     body: JSON.stringify({ smsbower_api_key: apiKey, smsbower_base_url: baseUrl }),
   }),

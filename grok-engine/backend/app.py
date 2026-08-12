@@ -650,7 +650,30 @@ def smsbower_balance(request: dict[str, Any]) -> dict[str, Any]:
         return {"ok": False, "error": "SMSBower API Key 未提供"}
     try:
         result = check_balance(api_key=api_key, base_url=base_url or None)
-        return {"ok": True, "balance": result.get("balance"), "count": result.get("count"), "currency": result.get("currency"), "raw": result.get("raw")}
+        return {
+            "ok": True,
+            "balance": result.get("balance"),
+            "count": result.get("count"),
+            "price": result.get("price"),
+            "currency": result.get("currency"),
+            "raw": result.get("raw"),
+        }
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+@app.post("/api/smsbower/services")
+def smsbower_services(request: dict[str, Any]) -> dict[str, Any]:
+    """Fetch available mail service codes from SMSBower."""
+    from mail_protocols.smsbower import get_mail_services_list
+
+    api_key = str(request.get("smsbower_api_key") or "").strip()
+    base_url = str(request.get("smsbower_base_url") or "").strip()
+    if not api_key:
+        return {"ok": False, "error": "SMSBower API Key 未提供"}
+    try:
+        services = get_mail_services_list(api_key, base_url=base_url or None)
+        return {"ok": True, "services": services}
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
 
