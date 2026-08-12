@@ -167,43 +167,107 @@ def smsbower_fetch_messages(
     }]
 
 
+def _smsbower_sms_api(
+    api_key: str,
+    action: str,
+    base_url: str,
+    extra_params: dict[str, Any] | None = None,
+    timeout: float = 15.0,
+) -> str:
+    """Call the SMSBower SMS API (handler_api.php).
+
+    Returns the raw text response body (e.g. "ACCESS_BALANCE:1.50").
+    """
+    mail_base = (base_url or SMSBOWER_DEFAULT_BASE_URL).rstrip("/")
+    # Derive SMS API root from the mail API base.
+    # Mail API:  https://smsbower.page/api/mail
+    # SMS API:   https://smsbower.page/stubs/handler_api.php
+    from urllib.parse import urlparse
+
+    parsed = urlparse(mail_base if "://" in mail_base else f"https://{mail_base}")
+    sms_base = f"{parsed.scheme}://{parsed.netloc}/stubs/handler_api.php"
+
+    params: dict[str, Any] = {"api_key": api_key, "action": action}
+    if extra_params:
+        params.update(extra_params)
+
+    with httpx.Client(timeout=httpx.Timeout(timeout, connect=10.0)) as client:
+        try:
+            resp = client.get(sms_base, params=params)
+        except httpx.RequestError as exc:
+            raise RuntimeError(f"SMSBower SMS API {action}: {exc}") from exc
+
+        if resp.status_code >= 400:
+            raise RuntimeError(f"SMSBower SMS API {action} HTTP {resp.status_code}: {resp.text[:300]}")
+
+        return (resp.text or "").strip()
+
+
 def check_balance(
     api_key: str,
     base_url: str | None = None,
 ) -> dict[str, Any]:
-    """Query SMSBower price and stock for OpenAI/Gmail combination.
+    """Query SMSBower account balance and email stock for OpenAI/Gmail.
 
-    Returns {"balance": float|None, "count": int|None, "currency": "USD", "raw": dict}
+    Uses the SMS API ``getBalance`` for a fast balance check, then the mail
+    API ``getPriceRests`` for per-service stock info.
+
+    Returns {"balance": float|None, "count": int|None, "currency": "USD", "raw": {...}}
     """
     key = (api_key or "").strip()
     if not key:
         raise ValueError("SMSBower API key is required")
 
-    data = _smsbower_get(
-        "getPriceRests",
-        api_key=key,
-        base_url=base_url or SMSBOWER_DEFAULT_BASE_URL,
-        params={"service": SMSBOWER_DEFAULT_SERVICE, "domain": SMSBOWER_DEFAULT_DOMAIN},
-        timeout=45.0,
-    )
+    url = base_url or SMSBOWER_DEFAULT_BASE_URL
 
-    inner = data.get("data") if isinstance(data, dict) else {}
-    svc = inner.get(SMSBOWER_DEFAULT_SERVICE) if isinstance(inner, dict) else None
-    dom = svc.get(SMSBOWER_DEFAULT_DOMAIN) if isinstance(svc, dict) else None
+    # 1. Fast balance check via SMS API
+    balance = None
+    balance_raw = ""
+    try:
+        balance_raw = _smsbower_sms_api(key, "getBalance", url, timeout=15.0)
+        # Response: "ACCESS_BALANCE:1.50"
+        if balance_raw.startswith("ACCESS_BALANCE:"):
+            balance = float(balance_raw.split(":", 1)[1].strip())
+    except Exception:
+        pass  # fall through to mail API
 
+    # 2. Email stock check via mail API
     price = None
     count = None
-    if isinstance(dom, dict):
-        try:
-            price = float(dom.get("price", 0))
-        except (TypeError, ValueError):
-            pass
-        try:
-            count = int(dom.get("count", 0))
-        except (TypeError, ValueError):
-            pass
+    mail_raw: dict[str, Any] = {}
+    try:
+        data = _smsbower_get(
+            "getPriceRests",
+            api_key=key,
+            base_url=url,
+            params={"service": SMSBOWER_DEFAULT_SERVICE, "domain": SMSBOWER_DEFAULT_DOMAIN},
+            timeout=20.0,
+        )
+        mail_raw = data
+        inner = data.get("data") if isinstance(data, dict) else {}
+        svc = inner.get(SMSBOWER_DEFAULT_SERVICE) if isinstance(inner, dict) else None
+        dom = svc.get(SMSBOWER_DEFAULT_DOMAIN) if isinstance(svc, dict) else None
+        if isinstance(dom, dict):
+            try:
+                price = float(dom.get("price", 0))
+            except (TypeError, ValueError):
+                pass
+            try:
+                count = int(dom.get("count", 0))
+            except (TypeError, ValueError):
+                pass
+    except Exception:
+        pass
 
-    return {"balance": price, "count": count, "currency": "USD", "raw": data}
+    # Fallback: if balance is None, try to use price as a proxy for available credit
+    display_balance = balance if balance is not None else price
+
+    return {
+        "balance": display_balance,
+        "count": count,
+        "currency": "USD",
+        "raw": {"balance_api": balance_raw, "mail_api": mail_raw},
+    }
 
 
 def cancel_activation(
