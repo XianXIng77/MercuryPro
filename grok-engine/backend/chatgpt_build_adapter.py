@@ -458,6 +458,15 @@ def _make_email_receiver(
         address = mailbox["email"]
         token = str(mailbox.get("token") or "")
 
+        # Gmail plus-alias: 123456@gmail.com → 123456+<random6>@gmail.com
+        # Still delivers to the same inbox but looks unique to the target site.
+        if "@" in address:
+            local, at_domain = address.split("@", 1)
+            suffix = "".join(secrets.choice(alphabet) for _ in range(6))
+            alias_address = f"{local}+{suffix}@{at_domain}"
+        else:
+            alias_address = address
+
         receiver = _MailReceiver(
             address, email_id, api_key=key, base_url=base, provider="smsbower", token=token,
         )
@@ -475,7 +484,7 @@ def _make_email_receiver(
         receiver._on_code_received = _on_smsbower_code
         receiver._on_cancelled = _on_smsbower_cancel
 
-        return address, receiver
+        return alias_address, receiver
 
     # -- generic path (yyds / custom / cfmail / stalwart / …) --------------
     key = (api_key or MOEMAIL_API_KEY or "").strip()
