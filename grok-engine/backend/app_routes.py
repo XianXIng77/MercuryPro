@@ -284,6 +284,15 @@ def start_register(ctx, settings=None, paused=False):
         if requested_count < 1:
             raise ctx.HTTPException(status_code=400, detail="注册数量必须大于 0")
         cfg["count"] = min(requested_count, available)
+    elif target == "chatgpt" and cfg.get("mail_provider") == "smsbower":
+        smsbower_key = str(cfg.get("smsbower_api_key") or "").strip()
+        if not smsbower_key:
+            raise ctx.HTTPException(status_code=400, detail="SMSBower API Key 未填写，请在邮箱配置中填写")
+        smsbower_base = str(cfg.get("smsbower_base_url") or "").strip()
+        if not smsbower_base:
+            raise ctx.HTTPException(status_code=400, detail="SMSBower API 地址未填写，请在邮箱配置中填写")
+        if int(cfg.get("count") or 0) < 1:
+            raise ctx.HTTPException(status_code=400, detail="注册数量必须大于 0")
     elif int(cfg.get("count") or 0) < 1:
         raise ctx.HTTPException(status_code=400, detail="注册数量必须大于 0")
     cfg["concurrency"] = _effective_registration_concurrency(cfg, target)
@@ -314,13 +323,23 @@ def start_register(ctx, settings=None, paused=False):
     ctx.apply_environment(cfg)
     ctx._sync_solver_proxy_file(cfg)
     adapter = ctx._get_registration_adapter(target)
+    _mail_api_key = (
+        cfg.get("smsbower_api_key", "")
+        if cfg.get("mail_provider") == "smsbower"
+        else cfg["mail_api_key"]
+    )
+    _mail_base_url = (
+        cfg.get("smsbower_base_url", "")
+        if cfg.get("mail_provider") == "smsbower"
+        else cfg["mail_base_url"]
+    )
     kwargs: dict[str, Any] = {
         "proxy": cfg["proxy"],
         "proxy_username": "",
         "proxy_password": "",
         "proxy_strategy": cfg["proxy_strategy"],
-        "moemail_api_key": cfg["mail_api_key"],
-        "moemail_base_url": cfg["mail_base_url"],
+        "moemail_api_key": _mail_api_key,
+        "moemail_base_url": _mail_base_url,
         "domain": cfg["mail_domain"],
         "expiry_ms": cfg["mail_expiry_ms"],
         "mail_provider": cfg["mail_provider"],

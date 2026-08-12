@@ -105,6 +105,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "mail_domain": "",
     "mail_prefix": "",
     "mail_expiry_ms": 86400000,
+    "smsbower_api_key": "",
+    "smsbower_base_url": "",
     "mail_provider_configs": {
         "yyds": {
             "mail_base_url": "",
@@ -122,6 +124,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "mail_domain": "",
         },
         "stalwart": {
+            "mail_base_url": "",
+            "mail_api_key": "",
+            "mail_domain": "",
+        },
+        "smsbower": {
             "mail_base_url": "",
             "mail_api_key": "",
             "mail_domain": "",
@@ -223,6 +230,7 @@ class Settings(BaseModel):
         "cloudflare_grokfree",
         "stalwart",
         "hotmail_local",
+        "smsbower",
     ] = "hotmail_local"
     mail_api_key: str = ""
     mail_base_url: str = ""
@@ -230,6 +238,8 @@ class Settings(BaseModel):
     mail_prefix: str = ""
     mail_expiry_ms: int = Field(86400000, ge=60000, le=604800000)
     mail_provider_configs: dict[str, dict[str, str]] = Field(default_factory=dict)
+    smsbower_api_key: str = ""
+    smsbower_base_url: str = ""
     hotmail_local_base_url: str = "http://127.0.0.1:17373"
     hotmail_account_source: Literal["mail_management", "manual"] = "mail_management"
     captcha_provider: Literal["local", "yescaptcha"] = "local"
@@ -627,6 +637,22 @@ def hotmail_delete(account_id: str) -> dict[str, Any]:
 @app.post("/api/mail/hotmail/test")
 def hotmail_test(settings: Settings | None = None) -> dict[str, Any]:
     return _app_routes.hotmail_test(_app_context(), settings)
+
+
+@app.post("/api/smsbower/balance")
+def smsbower_balance(request: dict[str, Any]) -> dict[str, Any]:
+    """Query SMSBower account balance."""
+    from mail_protocols.smsbower import check_balance
+
+    api_key = str(request.get("smsbower_api_key") or "").strip()
+    base_url = str(request.get("smsbower_base_url") or "").strip()
+    if not api_key:
+        return {"ok": False, "error": "SMSBower API Key 未提供"}
+    try:
+        result = check_balance(api_key=api_key, base_url=base_url or None)
+        return {"ok": True, "balance": result.get("balance"), "count": result.get("count"), "currency": result.get("currency"), "raw": result.get("raw")}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
 
 
 @app.put("/api/config")

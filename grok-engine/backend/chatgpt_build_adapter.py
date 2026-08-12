@@ -292,6 +292,7 @@ def _make_email_receiver(
     should_cancel: Any | None = None,
 ):
     """Create a temporary email mailbox for receiving ChatGPT verification codes."""
+    # -- hotmail_local path ------------------------------------------------
     if str(mail_provider or "").strip().lower() == "hotmail_local":
         from hotmail_local import create_receiver
 
@@ -301,6 +302,7 @@ def _make_email_receiver(
             should_cancel=should_cancel,
         )
 
+    # -- shared imports ---------------------------------------------------
     from moemail import (
         create_mailbox,
         extract_verification_codes,
@@ -314,37 +316,7 @@ def _make_email_receiver(
         MOEMAIL_EXPIRY_MS,
     )
 
-    key = (api_key or MOEMAIL_API_KEY or "").strip()
-    if not key:
-        raise ValueError(
-            "Mail API key missing. Configure in settings or set environment variables."
-        )
-
-    base = (base_url or MOEMAIL_BASE_URL or "").rstrip("/")
-    prov = normalize_mail_provider(mail_provider, base_url=base)
-
-    # Domain handling per provider
-    if prov in {"yyds", "gptmail", "cfmail", "stalwart"}:
-        dom = (domain or "").strip().lstrip("@").strip(".")
-    else:
-        dom = (domain or MOEMAIL_DOMAIN or "").strip().lstrip("@").strip(".")
-
-    # Generate random local-part
-    alphabet = string.ascii_lowercase + string.digits
-    pre = "".join(secrets.choice(alphabet) for _ in range(12))
-
-    mailbox = create_mailbox(
-        provider=prov,
-        name=pre,
-        domain=dom or None,
-        expiry_ms=expiry_ms if expiry_ms is not None else MOEMAIL_EXPIRY_MS,
-        api_key=key,
-        base_url=base,
-    )
-    email_id = mailbox["id"]
-    address = mailbox["email"]
-    token = str(mailbox.get("token") or "")
-
+    # -- shared _MailReceiver (used by smsbower + generic paths) ----------
     class _MailReceiver:
         def __init__(
             self,
@@ -367,6 +339,8 @@ def _make_email_receiver(
                 default_base = "https://temp-email-api.awsl.uk"
             elif provider == "stalwart":
                 default_base = ""
+            elif provider == "smsbower":
+                default_base = "https://smsbower.page/api/mail"
             else:
                 default_base = "https://moemail.521884.xyz"
             self.base_url = base_url or default_base
@@ -445,8 +419,63 @@ def _make_email_receiver(
                 poll = min(2.0, poll + 0.15)
             raise RuntimeError("timeout waiting for ChatGPT email verification code")
 
+    # -- smsbower path -----------------------------------------------------
+    if str(mail_provider or "").strip().lower() == "smsbower":
+        key = (api_key or "").strip()
+        if not key:
+            raise ValueError("SMSBower API key missing. Configure in mail settings.")
+
+        base = (base_url or "").rstrip("/")
+
+        alphabet = string.ascii_lowercase + string.digits
+        pre = "".join(secrets.choice(alphabet) for _ in range(12))
+
+        mailbox = create_mailbox(
+            provider="smsbower",
+            name=pre,
+            api_key=key,
+            base_url=base,
+        )
+        email_id = mailbox["id"]
+        address = mailbox["email"]
+        token = str(mailbox.get("token") or "")
+
+        return address, _MailReceiver(
+            address, email_id, api_key=key, base_url=base, provider="smsbower", token=token,
+        )
+
+    # -- generic path (yyds / custom / cfmail / stalwart / …) --------------
+    key = (api_key or MOEMAIL_API_KEY or "").strip()
+    if not key:
+        raise ValueError(
+            "Mail API key missing. Configure in settings or set environment variables."
+        )
+
+    base = (base_url or MOEMAIL_BASE_URL or "").rstrip("/")
+    prov = normalize_mail_provider(mail_provider, base_url=base)
+
+    if prov in {"yyds", "gptmail", "cfmail", "stalwart"}:
+        dom = (domain or "").strip().lstrip("@").strip(".")
+    else:
+        dom = (domain or MOEMAIL_DOMAIN or "").strip().lstrip("@").strip(".")
+
+    alphabet = string.ascii_lowercase + string.digits
+    pre = "".join(secrets.choice(alphabet) for _ in range(12))
+
+    mailbox = create_mailbox(
+        provider=prov,
+        name=pre,
+        domain=dom or None,
+        expiry_ms=expiry_ms if expiry_ms is not None else MOEMAIL_EXPIRY_MS,
+        api_key=key,
+        base_url=base,
+    )
+    email_id = mailbox["id"]
+    address = mailbox["email"]
+    token = str(mailbox.get("token") or "")
+
     return address, _MailReceiver(
-        address, email_id, api_key=key, base_url=base, provider=prov, token=token
+        address, email_id, api_key=key, base_url=base, provider=prov, token=token,
     )
 
 

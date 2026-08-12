@@ -39,6 +39,7 @@ def load_config(ctx):
                 "cloudflare_grokfree",
                 "stalwart",
                 "hotmail_local",
+                "smsbower",
             }
             else "custom"
         )
@@ -127,6 +128,12 @@ def save_config(ctx, data):
             "mail_api_key": str(clean.get("mail_api_key") or ""),
             "mail_domain": str(clean.get("mail_domain") or ""),
         }
+    elif active_provider == "smsbower":
+        profiles["smsbower"] = {
+            "mail_base_url": str(clean.get("smsbower_base_url") or ""),
+            "mail_api_key": str(clean.get("smsbower_api_key") or ""),
+            "mail_domain": "",
+        }
     clean["mail_provider_configs"] = profiles
     selected_format = str(clean.get("registration_json_format") or "cpa").lower()
     clean["registration_json_format"] = (
@@ -159,7 +166,7 @@ def _normalize_mail_provider_configs(ctx, value):
     raw = value if isinstance(value, dict) else {}
     result: dict[str, dict[str, str]] = {}
     defaults = ctx.DEFAULT_CONFIG.get("mail_provider_configs") or {}
-    for provider in ("yyds", "custom", "cloudflare_grokfree", "stalwart"):
+    for provider in ("yyds", "custom", "cloudflare_grokfree", "stalwart", "smsbower"):
         item = raw.get(provider) if isinstance(raw.get(provider), dict) else {}
         fallback = (
             defaults.get(provider) if isinstance(defaults.get(provider), dict) else {}

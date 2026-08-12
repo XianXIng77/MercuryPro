@@ -49,6 +49,7 @@ from mail_protocols.gptmail import (  # noqa: F401 - compatibility facade
 )
 from mail_protocols.imap_mail import imap_create_mailbox, imap_fetch_messages
 from mail_protocols.moemail import moemail_create_mailbox, moemail_fetch_messages
+from mail_protocols.smsbower import smsbower_create_mailbox, smsbower_fetch_messages
 from mail_protocols.stalwart import stalwart_create_mailbox, stalwart_fetch_messages
 from mail_protocols.yyds import (  # noqa: F401 - compatibility facade
     yyds_create_mailbox,
@@ -132,6 +133,17 @@ def create_mailbox(
             proxy_username=proxy_username,
             proxy_password=proxy_password,
         )
+    if prov == "smsbower":
+        return smsbower_create_mailbox(
+            name=name,
+            domain=domain,
+            expiry_ms=expiry_ms,
+            api_key=api_key,
+            base_url=base_url,
+            proxy=proxy,
+            proxy_username=proxy_username,
+            proxy_password=proxy_password,
+        )
     box = moemail_create_mailbox(
         name=name,
         domain=domain,
@@ -196,6 +208,15 @@ def fetch_messages(
         )
     if prov == "cfmail":
         return cfmail_fetch_messages(
+            email_id,
+            api_key=api_key,
+            base_url=base_url,
+            include_details=include_details,
+            address=address,
+            token=token,
+        )
+    if prov == "smsbower":
+        return smsbower_fetch_messages(
             email_id,
             api_key=api_key,
             base_url=base_url,
