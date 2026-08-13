@@ -51,6 +51,7 @@ const DEFAULT_CONFIG: GrokConfig = {
   chatgpt_step_delay_ms: 3000,
   chatgpt_checkout_probe_enabled: false,
   chatgpt_checkout_proxy: '',
+  chatgpt_checkout_proxy_strategy: 'round_robin',
   captcha_provider: 'local',
   local_solver_url: 'http://127.0.0.1:5072',
   yescaptcha_key: '',
@@ -933,6 +934,19 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
     }
   };
 
+  const checkCheckoutProxy = async () => {
+    setBusy('checkout-proxy-check');
+    try {
+      const result = await grokRegistrationApi.checkProxy(config.chatgpt_checkout_proxy);
+      setProxyResult(formatProxyCheckResult(result, 'Checkout 检查代理检测完成'));
+    } catch (error) {
+      showError(error);
+      setProxyResult({ tone: 'error', summary: 'Checkout 检查代理检测失败', detail: `原因：${error instanceof Error ? error.message : String(error)}`, items: [] });
+    } finally {
+      setBusy('');
+    }
+  };
+
   const importHotmail = async () => {
     if (!hotmailImportText.trim()) return setNotice({ tone: 'error', text: '请先粘贴微软邮箱账号。' });
     setBusy('hotmail-import');
@@ -1364,15 +1378,19 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
   }, [hotmailPool]);
 
   useEffect(() => {
-    const container = logContainerRef.current;
-    if (container) container.scrollTop = container.scrollHeight;
-  }, [logs.length, logs[logs.length - 1]?.key]);
+    const frame = window.requestAnimationFrame(() => {
+      const container = logContainerRef.current;
+      if (container) container.scrollTop = container.scrollHeight;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [tab, logs]);
   const hotmailAvailableSlots = Math.max(0, Number(hotmailPool?.available || 0));
   const recommendedConcurrency = Number(performanceProfile?.recommended_concurrency || performanceProfile?.effective_cap || 0);
   const performancePhysicalCores = performanceProfile?.physical_cores ?? '--';
   const performanceMemory = performanceProfile?.memory_available_gb ?? '--';
   const performanceSolverThreads = performanceProfile?.solver_threads || performanceProfile?.local_slots || '--';
   const proxyCount = config.proxy.split(/\r?\n/).filter((item) => item.trim()).length;
+  const checkoutProxyCount = config.chatgpt_checkout_proxy.split(/\r?\n/).filter((item) => item.trim()).length;
   const naturalflowerMailboxLines = config.naturalflower_mailboxes.split(/\r?\n/).filter((line) => line.trim());
   const naturalflowerMailboxCount = naturalflowerMailboxLines.length;
   const naturalflowerMailboxesValid = naturalflowerMailboxCount > 0 && naturalflowerMailboxLines.every((line) => /^[^\s@]+@[^\s@]+\.[^\s@]+\s+https:\/\/pickup\.naturalflower\.cn\/(?:\?token=|p\/)[^\s]+$/i.test(line.trim()));
@@ -1386,7 +1404,7 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
       : Boolean(config.mail_base_url.trim() && config.mail_api_key.trim());
   const checkoutProbeReady = config.registration_target !== 'chatgpt'
     || !config.chatgpt_checkout_probe_enabled
-    || Boolean(config.chatgpt_checkout_proxy.trim());
+    || checkoutProxyCount > 0;
   const captchaReady = config.registration_target === 'chatgpt' || (config.captcha_provider === 'local' ? solverState === '在线' : Boolean(config.yescaptcha_key.trim()));
   const importReady = !config.auto_import_enabled || (config.auto_import_target === 'cpa'
     ? Boolean(config.cpa_base_url.trim() && config.cpa_management_key.trim())
@@ -1401,7 +1419,7 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
     { label: '注册邮箱', detail: mailReady ? (config.mail_provider === 'hotmail_local' ? '微软邮箱账户池已配置' : config.mail_provider === 'smsbower' ? `SMSBower 余额正常 · 将临时购买 Gmail` : config.mail_provider === 'naturalflower' ? `Naturalflower 已填写 ${naturalflowerMailboxCount} 个邮箱` : '自定义邮箱 API 已配置') : (config.mail_provider === 'smsbower' ? '请填写 SMSBower API Key / 地址并查询余额' : config.mail_provider === 'naturalflower' ? '请按“邮箱 + 取件 URL”逐行填写' : '请先完成邮箱配置'), ready: mailReady },
     ...(config.registration_target === 'chatgpt' ? [{
       label: 'Checkout 类型检测',
-      detail: !config.chatgpt_checkout_probe_enabled ? '当前关闭，注册后跳过 oaics / cs_live 查询' : checkoutProbeReady ? '将通过专用德国代理查询（DE / EUR）' : '已开启，请填写一条专用德国代理',
+      detail: !config.chatgpt_checkout_probe_enabled ? '当前关闭，注册后跳过 oaics / cs_live 查询' : checkoutProbeReady ? `将轮换使用 ${checkoutProxyCount} 条 Checkout 检查代理（DE / EUR）` : '已开启，请到代理配置填写 Checkout 检查代理池',
       ready: checkoutProbeReady,
     }] : []),
     config.registration_target === 'chatgpt'
@@ -1500,7 +1518,7 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
           </div>
         )}
 
-        <div className={`relative ${tab === 'rotation' || tab === 'browser' ? '' : 'space-y-4 xl:space-y-0 xl:pr-[376px]'}`}>
+        <div className={`relative ${tab === 'rotation' || tab === 'browser' ? '' : tab === 'registration' ? 'space-y-4 xl:space-y-0 xl:grid xl:grid-cols-[minmax(0,1fr)_360px] xl:items-start xl:gap-4' : 'space-y-4 xl:space-y-0 xl:pr-[376px]'}`}>
         <section className={`${cardClass} min-w-0 overflow-hidden flex flex-col ${tab === 'rotation' ? '' : 'xl:min-h-[calc(100vh-260px)]'}`}>
           <div className={`px-4 py-3 border-b ${theme.border} flex flex-col sm:flex-row sm:items-center justify-between gap-3`}>
             <div>
@@ -1551,11 +1569,8 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
                   </div>
 
                   {config.registration_target === 'chatgpt' && <div className={`rounded-xl border p-4 space-y-3 ${theme.border} ${isDark ? 'bg-slate-900/45' : 'bg-slate-50/70'}`}>
-                    <Toggle label="检测 Checkout 类型（oaics / cs_live）" hint="默认关闭；开启后才会发起查询。" checked={config.chatgpt_checkout_probe_enabled} onChange={(value) => setField('chatgpt_checkout_probe_enabled', value)} />
-                    {config.chatgpt_checkout_probe_enabled && <Field label="专用德国代理" wide hint="仅用于 Checkout 类型查询，固定按 DE / EUR 请求；不会替换注册代理或 Plus 试用检测所用网络。">
-                      <input type="password" value={config.chatgpt_checkout_proxy} onChange={(e) => setField('chatgpt_checkout_proxy', e.target.value)} placeholder="us.1024proxy.io:3000:用户名-region-DE-sid-随机ID-t-5:密码" className={`${fieldClass} font-mono`} />
-                    </Field>}
-                    {config.chatgpt_checkout_probe_enabled && !config.chatgpt_checkout_proxy.trim() && <p className="text-[10px] font-bold text-rose-600">开启后必须填写一条有效的德国代理，才能开始注册。</p>}
+                    <Toggle label="检测 Checkout 类型（oaics / cs_live）" hint="默认关闭；开启后才会发起查询，检查代理池在“代理配置”中维护。" checked={config.chatgpt_checkout_probe_enabled} onChange={(value) => setField('chatgpt_checkout_probe_enabled', value)} />
+                    {config.chatgpt_checkout_probe_enabled && !checkoutProxyCount && <p className="text-[10px] font-bold text-rose-600">已开启检测，请到“代理配置”填写 Checkout 检查代理池后再开始注册。</p>}
                   </div>}
 
                   {config.registration_target === 'chatgpt' && <div className={`rounded-xl border overflow-hidden ${theme.border} ${isDark ? 'bg-slate-900/45' : 'bg-slate-50/70'}`}>
@@ -1718,6 +1733,20 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
                     <Field label="轮换策略"><StyledSelect ariaLabel="代理轮换策略" value={config.proxy_strategy} onChange={(value) => setField('proxy_strategy', value as GrokConfig['proxy_strategy'])} options={PROXY_STRATEGY_OPTIONS} isDark={isDark} /></Field>
                     <div className="flex items-end gap-2"><button onClick={() => void detectProxy()} disabled={!!busy} className={`flex-1 px-3 py-2 rounded-lg border text-xs font-bold flex items-center justify-center gap-1.5 disabled:opacity-50 ${theme.border} ${theme.textPrimary}`}>{busy === 'proxy' && <Loader2 className="w-3.5 h-3.5 animate-spin" />}检测本机代理</button><button onClick={() => void checkProxy()} disabled={!!busy || !config.proxy.trim()} className="flex-1 px-3 py-2 rounded-lg bg-blue-600 text-white text-xs font-bold flex items-center justify-center gap-1.5 disabled:opacity-50">{busy === 'proxy-check' && <Loader2 className="w-3.5 h-3.5 animate-spin" />}检测代理可用性</button></div>
                   </div>
+                  {config.registration_target === 'chatgpt' && <div className={`rounded-xl border p-4 space-y-3 ${theme.border} ${isDark ? 'bg-slate-900/45' : 'bg-slate-50/70'}`}>
+                    <div>
+                      <h4 className={`text-xs font-bold ${theme.textPrimary}`}>Checkout 检查代理池</h4>
+                      <p className={`mt-1 text-[10px] ${theme.textSecondary}`}>仅用于查询 oaics / cs_live，固定按 DE / EUR 请求，不会替换注册代理或 Plus 试用检测网络。每行一条，可配置多条。</p>
+                    </div>
+                    <Field label={`检查代理池（${checkoutProxyCount} 条）`} wide hint={config.chatgpt_checkout_probe_enabled ? '注册配置已开启 Checkout 类型检测，因此这里至少需要一条有效代理。' : '当前未开启 Checkout 类型检测，可留空。'}>
+                      <textarea rows={5} value={config.chatgpt_checkout_proxy} onChange={(e) => setField('chatgpt_checkout_proxy', e.target.value)} placeholder={'us.1024proxy.io:3000:username-region-DE-sid-AbCd1234-t-5:password\nus.1024proxy.io:3000:username-region-DE-sid-EfGh5678-t-5:password'} className={`${fieldClass} font-mono`} />
+                    </Field>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <Field label="Checkout 代理轮换策略"><StyledSelect ariaLabel="Checkout 代理轮换策略" value={config.chatgpt_checkout_proxy_strategy} onChange={(value) => setField('chatgpt_checkout_proxy_strategy', value as GrokConfig['chatgpt_checkout_proxy_strategy'])} options={PROXY_STRATEGY_OPTIONS} isDark={isDark} /></Field>
+                      <div className="flex items-end"><button onClick={() => void checkCheckoutProxy()} disabled={!!busy || !checkoutProxyCount} className="w-full px-3 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold flex items-center justify-center gap-1.5 disabled:opacity-50">{busy === 'checkout-proxy-check' && <Loader2 className="w-3.5 h-3.5 animate-spin" />}检测 Checkout 代理池</button></div>
+                    </div>
+                    {config.chatgpt_checkout_probe_enabled && !checkoutProxyCount && <p className="text-[10px] font-bold text-rose-600">Checkout 类型检测已开启，必须配置至少一条检查代理。</p>}
+                  </div>}
                   {proxyResult && <div className={`rounded-lg border shadow-sm ${isDark ? 'border-slate-700 bg-slate-900 text-slate-200' : 'border-slate-300 bg-white text-slate-800'}`}>
                     <div className="flex items-center gap-2.5 px-3.5 py-3 text-xs">
                       <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${proxyResult.tone === 'success' ? 'bg-emerald-500' : proxyResult.tone === 'warning' ? 'bg-amber-500' : proxyResult.tone === 'error' ? 'bg-rose-500' : 'bg-blue-500'}`} />
@@ -1876,8 +1905,8 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
           </div>
         </section>
 
-        {tab !== 'rotation' && tab !== 'browser' && <aside className="min-w-0 flex flex-col gap-4 xl:absolute xl:inset-y-0 xl:right-0 xl:w-[360px] xl:grid xl:grid-rows-[minmax(0,1fr)_minmax(0,1.15fr)]">
-          <section className={`${cardClass} order-2 min-h-0 overflow-hidden flex flex-col`}>
+        {tab !== 'rotation' && tab !== 'browser' && <aside className={`min-w-0 flex flex-col gap-4 ${tab === 'registration' ? '' : 'xl:absolute xl:inset-y-0 xl:right-0 xl:w-[360px] xl:grid xl:grid-rows-[minmax(0,1fr)_minmax(0,1.15fr)]'}`}>
+          <section className={`${cardClass} order-3 min-h-0 overflow-hidden flex flex-col`}>
             <div className={`px-3 py-2.5 border-b ${theme.border}`}>
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-2 min-w-0">
@@ -1921,7 +1950,7 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
                 <button type="button" onClick={() => setLogClearBefore(Math.max(Date.now() / 1000, ...logs.map((log) => log.at)))} disabled={!logs.length} className="inline-flex items-center gap-1 rounded-md border border-rose-500/30 bg-rose-500/10 px-2 py-1 text-[10px] font-bold text-rose-400 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-40"><Trash2 className="h-3 w-3" />清理日志</button>
               </div>
             </div>
-            <div ref={logContainerRef} className="p-3 flex-1 min-h-0 max-h-[420px] xl:max-h-none overflow-y-auto bg-[#0d1117] font-mono [scrollbar-color:#475569_#0d1117] [scrollbar-width:thin]">
+            <div ref={logContainerRef} className={`p-3 flex-1 min-h-0 max-h-[420px] overflow-y-auto bg-[#0d1117] font-mono [scrollbar-color:#475569_#0d1117] [scrollbar-width:thin] ${tab === 'registration' ? '' : 'xl:max-h-none'}`}>
               {logs.length ? <div className="space-y-1">{logs.map((log) => {
                 const toneStyle = log.tone === 'success'
                   ? 'border-emerald-500/20 bg-emerald-500/[0.07] text-emerald-400'
@@ -1937,6 +1966,32 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
               })}</div> : <div className="min-h-44 flex items-center justify-center text-center text-[11px] leading-5 text-slate-500"><span className="mr-2 text-emerald-500">$</span>注册日志将在这里自动滚动显示<span className="ml-1 inline-block w-1.5 h-3 bg-slate-500/70 animate-pulse" aria-hidden="true" /></div>}
             </div>
           </section>
+
+          {tab === 'registration' && debugBrowserVisible && <section className="order-2 min-h-0 overflow-hidden rounded-xl border border-slate-700/80 bg-[#0d1117] shadow-[0_10px_30px_rgba(15,23,42,0.12)]">
+            <div className="px-3 py-2.5 border-b border-[#30363d] bg-[#161b22] flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <Globe2 className="w-4 h-4 shrink-0 text-blue-400" />
+                <div className="min-w-0"><h3 className="text-xs font-semibold text-slate-200">注册浏览器</h3><p className="mt-0.5 truncate text-[9px] text-slate-500">日志下方实时画面</p></div>
+              </div>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button type="button" onClick={() => setDebugBrowserKey((value) => value + 1)} className="inline-flex items-center gap-1 rounded-md border border-slate-600 px-2 py-1 text-[9px] font-bold text-slate-300 transition hover:bg-slate-700/70"><RefreshCw className="w-3 h-3" />重连</button>
+                <button type="button" onClick={() => window.open(browserViewerUrl, '_blank', 'noopener,noreferrer')} className="inline-flex items-center gap-1 rounded-md bg-blue-600 px-2 py-1 text-[9px] font-bold text-white transition hover:bg-blue-500"><Globe2 className="w-3 h-3" />新窗口</button>
+              </div>
+            </div>
+            <div className="aspect-video min-h-[202px] bg-black">
+              {debugBrowserAvailable ? (
+                <iframe key={`embedded-${debugBrowserKey}`} src={browserViewerUrl} title="注册配置中的浏览器实时画面" allow="clipboard-read; clipboard-write; fullscreen" allowFullScreen className="block h-full w-full border-0 bg-black" />
+              ) : (
+                <div className="flex h-full items-center justify-center px-5 text-center">
+                  <div className="space-y-2">
+                    <Globe2 className="mx-auto h-8 w-8 text-slate-600" />
+                    <p className="text-[11px] font-bold text-slate-300">浏览器窗口已显示在桌面上</p>
+                    <p className="text-[9px] leading-4 text-slate-500">当前环境没有 noVNC 远程画面，请查看桌面上的 Camoufox 浏览器。</p>
+                  </div>
+                </div>
+              )}
+            </div>
+          </section>}
         </aside>}
         </div>
       </div>

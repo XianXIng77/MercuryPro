@@ -152,6 +152,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "chatgpt_step_delay_ms": 3000,
     "chatgpt_checkout_probe_enabled": False,
     "chatgpt_checkout_proxy": "",
+    "chatgpt_checkout_proxy_strategy": "round_robin",
     "auto_tune_enabled": False,
     "probe_delay_sec": 0,
     "probe_model": "grok-4.5",
@@ -256,6 +257,9 @@ class Settings(BaseModel):
     chatgpt_step_delay_ms: int = Field(3000, ge=0, le=30000)
     chatgpt_checkout_probe_enabled: bool = False
     chatgpt_checkout_proxy: str = ""
+    chatgpt_checkout_proxy_strategy: Literal["round_robin", "random", "sticky"] = (
+        "round_robin"
+    )
     auto_tune_enabled: bool = False
     probe_delay_sec: int = Field(0, ge=0, le=600)
     probe_model: str = "grok-4.5"

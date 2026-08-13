@@ -14,6 +14,40 @@ def _browser_debug_desktop_disabled(environ: Any) -> bool:
     )
 
 
+def _normalize_checkout_proxy_pool(cfg: dict[str, Any]) -> None:
+    """Validate and canonicalize the optional Checkout-only proxy pool."""
+    target = str(cfg.get("registration_target") or "grok").strip().lower()
+    if target != "chatgpt" or not bool(cfg.get("chatgpt_checkout_probe_enabled")):
+        return
+
+    checkout_proxy = str(cfg.get("chatgpt_checkout_proxy") or "").strip()
+    if not checkout_proxy:
+        raise ValueError(
+            "已开启 Checkout 类型检测，请至少填写一条有效的检查代理"
+        )
+
+    from proxy_pool import validate_proxy_pool
+
+    checkout_validation = validate_proxy_pool(
+        checkout_proxy,
+        username="",
+        password="",
+        fallback_env=False,
+    )
+    if checkout_validation.get("errors"):
+        first_error = checkout_validation["errors"][0]
+        raise ValueError(
+            "Checkout 检查代理池包含无效代理："
+            f"第 {first_error.get('line')} 行 {first_error.get('error')}"
+        )
+    checkout_proxies = list(checkout_validation.get("proxies") or [])
+    if not checkout_proxies:
+        raise ValueError(
+            "已开启 Checkout 类型检测，请至少填写一条有效的检查代理"
+        )
+    cfg["chatgpt_checkout_proxy"] = "\n".join(checkout_proxies)
+
+
 
 def get_config(ctx):
     return ctx.load_config()
@@ -254,27 +288,10 @@ def start_register(ctx, settings=None, paused=False):
                     "或关闭“显示注册浏览器”"
                 ),
             )
-    if target == "chatgpt" and bool(cfg.get("chatgpt_checkout_probe_enabled")):
-        checkout_proxy = str(cfg.get("chatgpt_checkout_proxy") or "").strip()
-        if not checkout_proxy:
-            raise ctx.HTTPException(
-                status_code=400,
-                detail="已开启 Checkout 类型检测，请填写专用德国代理",
-            )
-        from proxy_pool import parse_proxy_pool
-
-        checkout_proxies = parse_proxy_pool(
-            checkout_proxy,
-            username="",
-            password="",
-            fallback_env=False,
-        )
-        if len(checkout_proxies) != 1:
-            raise ctx.HTTPException(
-                status_code=400,
-                detail="Checkout 类型检测仅支持填写一条有效的德国代理",
-            )
-        cfg["chatgpt_checkout_proxy"] = checkout_proxies[0]
+    try:
+        _normalize_checkout_proxy_pool(cfg)
+    except ValueError as exc:
+        raise ctx.HTTPException(status_code=400, detail=str(exc)) from exc
     if cfg.get("mail_provider") == "hotmail_local":
         from hotmail_local import list_accounts
 
@@ -339,6 +356,9 @@ def start_register(ctx, settings=None, paused=False):
         )
         persisted["chatgpt_checkout_proxy"] = str(
             cfg.get("chatgpt_checkout_proxy") or ""
+        )
+        persisted["chatgpt_checkout_proxy_strategy"] = str(
+            cfg.get("chatgpt_checkout_proxy_strategy") or "round_robin"
         )
         ctx.save_config(persisted)
     ctx.apply_environment(cfg)

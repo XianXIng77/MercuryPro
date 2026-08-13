@@ -240,6 +240,9 @@ def _post_registration_config(ctx, cfg):
         "step_delay_ms": int(cfg.get("chatgpt_step_delay_ms") or 0),
         "checkout_probe_enabled": bool(cfg.get("chatgpt_checkout_probe_enabled")),
         "checkout_proxy": str(cfg.get("chatgpt_checkout_proxy") or "").strip(),
+        "checkout_proxy_strategy": str(
+            cfg.get("chatgpt_checkout_proxy_strategy") or "round_robin"
+        ).strip(),
         "pipeline_concurrency": int(cfg.get("concurrency") or 1),
         "probe_concurrency": int(
             cfg.get("probe_concurrency") or cfg.get("concurrency") or 1

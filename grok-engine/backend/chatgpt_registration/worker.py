@@ -5,6 +5,25 @@ from __future__ import annotations
 from typing import Any
 
 
+def _pick_checkout_proxy(ctx, pipeline_cfg, sess):
+    if not pipeline_cfg.get("checkout_probe_enabled"):
+        return ""
+    checkout_proxy_pool = ctx._proxy_pool(
+        str(pipeline_cfg.get("checkout_proxy") or ""),
+        username="",
+        password="",
+    )
+    try:
+        checkout_proxy_index = max(0, int(sess.get("batch_index") or 1) - 1)
+    except (TypeError, ValueError):
+        checkout_proxy_index = 0
+    return ctx._pick_proxy_from_pool(
+        checkout_proxy_pool,
+        strategy=str(pipeline_cfg.get("checkout_proxy_strategy") or "round_robin"),
+        index=checkout_proxy_index,
+    )
+
+
 def _run_registration(ctx, sid, proxy, receiver, browser_runtime=None):
     """Execute the ChatGPT registration flow for one session."""
     with ctx._lock:
@@ -42,6 +61,7 @@ def _run_registration(ctx, sid, proxy, receiver, browser_runtime=None):
     email = str(sess.get("email") or "").strip().lower()
     headless = bool(sess.get("_headless", True))
     pipeline_cfg = dict(sess.get("_post_registration") or {})
+    checkout_proxy = _pick_checkout_proxy(ctx, pipeline_cfg, sess)
     step_delay_ms = max(0, min(30000, int(pipeline_cfg.get("step_delay_ms") or 3000)))
     hotmail_account_id = str(sess.get("_hotmail_account_id") or "")
     hotmail_alias_index = sess.get("_hotmail_alias_index")
@@ -212,7 +232,7 @@ def _run_registration(ctx, sid, proxy, receiver, browser_runtime=None):
             checkout_probe_enabled=bool(
                 pipeline_cfg.get("checkout_probe_enabled")
             ),
-            checkout_proxy=str(pipeline_cfg.get("checkout_proxy") or ""),
+            checkout_proxy=checkout_proxy,
             browser_runtime=browser_runtime,
         )
         if not result.get("ok"):

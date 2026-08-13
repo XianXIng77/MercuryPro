@@ -11,6 +11,7 @@ export interface GrokConfig {
   chatgpt_step_delay_ms: number;
   chatgpt_checkout_probe_enabled: boolean;
   chatgpt_checkout_proxy: string;
+  chatgpt_checkout_proxy_strategy: 'round_robin' | 'random' | 'sticky';
   captcha_provider: 'local' | 'yescaptcha';
   local_solver_url: string;
   yescaptcha_key: string;

@@ -18,7 +18,7 @@ if str(BACKEND_DIR) not in sys.path:
 import app_core  # noqa: E402
 import chatgpt_browser  # noqa: E402
 import chatgpt_build_adapter  # noqa: E402
-from chatgpt_registration import flow, operations  # noqa: E402
+from chatgpt_registration import flow, operations, worker  # noqa: E402
 
 
 class ChatGPTRegistrationWiringTests(unittest.TestCase):
@@ -125,6 +125,65 @@ class ChatGPTRegistrationWiringTests(unittest.TestCase):
             self.assertEqual("chatgpt", loaded["registration_target"])
         finally:
             config_file.unlink(missing_ok=True)
+
+    def test_checkout_proxy_pool_rotates_by_batch_index(self) -> None:
+        captured: dict[str, object] = {}
+
+        def pick(pool, *, strategy, index):
+            captured.update(pool=pool, strategy=strategy, index=index)
+            return pool[index % len(pool)]
+
+        ctx = SimpleNamespace(
+            _proxy_pool=lambda text, **_kwargs: text.splitlines(),
+            _pick_proxy_from_pool=pick,
+        )
+        selected = worker._pick_checkout_proxy(
+            ctx,
+            {
+                "checkout_probe_enabled": True,
+                "checkout_proxy": "proxy-a\nproxy-b",
+                "checkout_proxy_strategy": "round_robin",
+            },
+            {"batch_index": 2},
+        )
+
+        self.assertEqual("proxy-b", selected)
+        self.assertEqual("round_robin", captured["strategy"])
+        self.assertEqual(1, captured["index"])
+
+    def test_checkout_proxy_pool_strategy_reaches_registration_pipeline(self) -> None:
+        pipeline = app_core._post_registration_config(
+            SimpleNamespace(CHATGPT_SUB2API_MODELS=[]),
+            {
+                "registration_target": "chatgpt",
+                "chatgpt_checkout_probe_enabled": True,
+                "chatgpt_checkout_proxy": "proxy-a\nproxy-b",
+                "chatgpt_checkout_proxy_strategy": "random",
+                "concurrency": 1,
+                "probe_concurrency": 1,
+                "import_concurrency": 1,
+            },
+        )
+
+        self.assertTrue(pipeline["checkout_probe_enabled"])
+        self.assertEqual("proxy-a\nproxy-b", pipeline["checkout_proxy"])
+        self.assertEqual("random", pipeline["checkout_proxy_strategy"])
+
+    def test_disabled_checkout_probe_does_not_resolve_proxy(self) -> None:
+        ctx = SimpleNamespace(
+            _proxy_pool=lambda *_args, **_kwargs: self.fail(
+                "disabled checkout probe must not read its proxy pool"
+            )
+        )
+
+        self.assertEqual(
+            "",
+            worker._pick_checkout_proxy(
+                ctx,
+                {"checkout_probe_enabled": False, "checkout_proxy": ""},
+                {},
+            ),
+        )
 
 
 if __name__ == "__main__":
