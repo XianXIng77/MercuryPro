@@ -4,6 +4,7 @@ import {
   Palette,
   Check,
   ChevronDown,
+  LogOut,
 } from 'lucide-react';
 import { NavTab, StylePreset, StylePresetId } from '../types';
 import { STYLE_PRESETS } from '../data/stylePresets';
@@ -13,6 +14,8 @@ interface NavbarProps {
   currentPreset: StylePreset;
   onSelectPreset: (presetId: StylePresetId) => void;
   onRunAiAutoTag: () => void;
+  sessionUser?: string | null;
+  onLogout?: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -20,6 +23,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   currentPreset,
   onSelectPreset,
   onRunAiAutoTag,
+  sessionUser,
+  onLogout,
 }) => {
   const [showStyleMenu, setShowStyleMenu] = useState(false);
 
@@ -41,11 +46,6 @@ export const Navbar: React.FC<NavbarProps> = ({
             }`}>
               {activeTab === 'email' && '邮箱管理'}
               {activeTab === 'register' && '注册'}
-              {activeTab === 'calendar' && '日历日程'}
-              {activeTab === 'contacts' && '通讯录'}
-              {activeTab === 'analytics' && '数据统计'}
-              {activeTab === 'tickets' && '工单协同'}
-              {activeTab === 'settings' && '系统设置'}
             </span>
           </div>
         </div>
@@ -121,11 +121,30 @@ export const Navbar: React.FC<NavbarProps> = ({
             )}
           </div>
 
-          {/* User Profile Avatar */}
+          {/* User Profile Avatar + 退出登录 */}
           <div className={`flex items-center gap-2 pl-2 border-l ${isDark ? 'border-slate-700' : 'border-slate-300'}`}>
-            <div className="w-8 h-8 rounded-lg bg-blue-600 text-white flex items-center justify-center font-bold italic text-sm shadow-xs">
-              M
+            <div className="hidden md:block max-w-[160px] text-right" title={sessionUser || ''}>
+              <p className={`text-[11px] font-bold truncate ${isDark ? 'text-slate-200' : 'text-slate-800'}`}>{sessionUser || '未登录'}</p>
+              <p className={`text-[9px] ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>在线</p>
             </div>
+            <div className="w-8 h-8 shrink-0 rounded-lg bg-blue-600 text-white flex items-center justify-center font-bold italic text-sm shadow-xs">
+              {(sessionUser || 'M').charAt(0).toUpperCase()}
+            </div>
+            {onLogout && (
+              <button
+                type="button"
+                onClick={onLogout}
+                title="退出登录"
+                className={`flex items-center gap-1 rounded-md border px-2.5 py-1.5 text-xs font-semibold transition-colors ${
+                  isDark
+                    ? 'border-slate-700 text-slate-300 hover:border-rose-500/50 hover:bg-rose-500/10 hover:text-rose-400'
+                    : 'border-slate-300 text-slate-600 hover:border-rose-400 hover:bg-rose-50 hover:text-rose-600'
+                }`}
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">退出</span>
+              </button>
+            )}
           </div>
         </div>
       </div>

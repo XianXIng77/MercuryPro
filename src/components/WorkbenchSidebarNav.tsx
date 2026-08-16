@@ -3,11 +3,6 @@ import { motion } from 'motion/react';
 import {
   Mail,
   UserPlus,
-  Calendar,
-  Users,
-  BarChart3,
-  Ticket,
-  Settings,
 } from 'lucide-react';
 import { NavTab, StylePreset } from '../types';
 
@@ -44,31 +39,6 @@ export const WorkbenchSidebarNav: React.FC<WorkbenchSidebarNavProps> = ({
       id: 'register',
       label: '注册',
       icon: <UserPlus className="w-5 h-5" />,
-    },
-    {
-      id: 'calendar',
-      label: '日历日程',
-      icon: <Calendar className="w-5 h-5" />,
-    },
-    {
-      id: 'contacts',
-      label: '联系人',
-      icon: <Users className="w-5 h-5" />,
-    },
-    {
-      id: 'analytics',
-      label: '数据统计',
-      icon: <BarChart3 className="w-5 h-5" />,
-    },
-    {
-      id: 'tickets',
-      label: '工单协同',
-      icon: <Ticket className="w-5 h-5" />,
-    },
-    {
-      id: 'settings',
-      label: '系统设置',
-      icon: <Settings className="w-5 h-5" />,
     },
   ];
 

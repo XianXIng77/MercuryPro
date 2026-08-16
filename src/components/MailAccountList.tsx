@@ -386,14 +386,14 @@ export const MailAccountList: React.FC<MailAccountListProps> = ({
                       <button onClick={async () => { await copyText(account.emailAddress); showToast('邮箱地址已复制'); }} className="text-blue-600 hover:text-blue-800 hover:underline">{account.emailAddress}</button>
                     </td>
                     <td className="py-3 px-3 text-center">
-                      <button onClick={() => void handleStatusChange(account)} className={`inline-flex items-center px-2.5 py-1 rounded-full border text-xs font-bold ${account.backendStatus === '1' ? 'border-emerald-300 bg-emerald-50 text-emerald-700' : account.backendStatus === '2' ? 'border-amber-300 bg-amber-50 text-amber-700' : 'border-slate-300 bg-slate-100 text-slate-600'}`}>
+                      <button onClick={() => void handleStatusChange(account)} className={`inline-flex items-center px-2.5 py-1 rounded-full border text-xs font-bold ${account.backendStatus === '1' ? (isDark ? 'border-emerald-400/40 bg-emerald-400/15 text-emerald-300' : 'border-emerald-300 bg-emerald-50 text-emerald-700') : account.backendStatus === '2' ? (isDark ? 'border-amber-400/40 bg-amber-400/15 text-amber-300' : 'border-amber-300 bg-amber-50 text-amber-700') : (isDark ? 'border-slate-400/30 bg-slate-400/15 text-slate-300' : 'border-slate-300 bg-slate-100 text-slate-600')}`}>
                         {account.backendStatus === '1' ? <Check className="w-3.5 h-3.5 mr-1" /> : account.backendStatus === '2' ? <RotateCcw className="w-3.5 h-3.5 mr-1" /> : <Square className="w-3 h-3 mr-1" />}{account.usageStatus} · {account.grokRegistrationUseCount || 0}/{account.grokRegistrationUseLimit || 3}
                       </button>
                     </td>
                     <td className="py-3 px-3 text-center">
                       <span
                         title={account.openaiRegistrationFailureReason || ''}
-                        className={`inline-flex items-center px-2.5 py-1 rounded-full border text-xs font-bold ${account.openaiRegistrationUsed ? 'border-emerald-300 bg-emerald-50 text-emerald-700' : account.openaiRegistrationFailed ? 'border-rose-300 bg-rose-50 text-rose-700' : 'border-sky-300 bg-sky-50 text-sky-700'}`}
+                        className={`inline-flex items-center px-2.5 py-1 rounded-full border text-xs font-bold ${account.openaiRegistrationUsed ? (isDark ? 'border-emerald-400/40 bg-emerald-400/15 text-emerald-300' : 'border-emerald-300 bg-emerald-50 text-emerald-700') : account.openaiRegistrationFailed ? (isDark ? 'border-rose-400/40 bg-rose-400/15 text-rose-300' : 'border-rose-300 bg-rose-50 text-rose-700') : (isDark ? 'border-sky-400/40 bg-sky-400/15 text-sky-300' : 'border-sky-300 bg-sky-50 text-sky-700')}`}
                       >
                         {account.openaiRegistrationUsed ? <Check className="w-3.5 h-3.5 mr-1" /> : account.openaiRegistrationFailed ? <AlertCircle className="w-3.5 h-3.5 mr-1" /> : <Square className="w-3 h-3 mr-1" />}
                         {account.openaiRegistrationUsed ? '已用' : account.openaiRegistrationFailed ? '注册失败' : '未用'} · {account.openaiRegistrationUseCount || 0}/1
@@ -402,9 +402,9 @@ export const MailAccountList: React.FC<MailAccountListProps> = ({
                     <td className={`py-3 px-3 text-center font-mono text-xs ${theme.textSecondary}`}>{account.createdTime || '-'}</td>
                     <td className="py-3 px-3 text-center">
                       {!refresh && <span className={theme.textSecondary}>未刷新</span>}
-                      {refresh?.status === 'loading' && <span className="text-amber-600 inline-flex items-center gap-1"><RefreshCw className="w-3.5 h-3.5 animate-spin" />刷新中</span>}
-                      {refresh?.status === 'success' && <span className="text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-full text-xs font-bold">刷新成功</span>}
-                      {refresh?.status === 'error' && <span title={refresh.message} className="text-rose-700 bg-rose-50 border border-rose-200 px-2.5 py-1 rounded-full text-xs font-bold">刷新失败</span>}
+                      {refresh?.status === 'loading' && <span className={`inline-flex items-center gap-1 ${isDark ? 'text-amber-300' : 'text-amber-600'}`}><RefreshCw className="w-3.5 h-3.5 animate-spin" />刷新中</span>}
+                      {refresh?.status === 'success' && <span className={`px-2.5 py-1 rounded-full text-xs font-bold border ${isDark ? 'text-emerald-300 bg-emerald-400/15 border-emerald-400/40' : 'text-emerald-700 bg-emerald-50 border-emerald-200'}`}>刷新成功</span>}
+                      {refresh?.status === 'error' && <span title={refresh.message} className={`px-2.5 py-1 rounded-full text-xs font-bold border ${isDark ? 'text-rose-300 bg-rose-400/15 border-rose-400/40' : 'text-rose-700 bg-rose-50 border-rose-200'}`}>刷新失败</span>}
                     </td>
                     <td className={`py-3 px-3 text-center sticky right-0 backdrop-blur-md ${isDark ? 'bg-black/10 group-hover:bg-white/5' : 'bg-white/40 group-hover:bg-white/65'}`}>
                       <div className="flex items-center justify-center gap-3 text-xs whitespace-nowrap">
