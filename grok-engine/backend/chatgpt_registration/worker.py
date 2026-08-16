@@ -4,6 +4,48 @@ from __future__ import annotations
 
 from typing import Any
 
+from chatgpt_registration.diagnostics import capture_registration_incident
+
+
+def _capture_worker_incident(
+    ctx,
+    sid: str,
+    email: str,
+    *,
+    stage: str,
+    outcome: str,
+    reason: str,
+    extra: dict[str, Any] | None = None,
+) -> None:
+    """Persist a log/ incident folder for worker-level failures.
+
+    Used only after the browser flow has finished (page already closed),
+    so no screenshot is available — log.txt only, best-effort.
+    """
+    try:
+        record = capture_registration_incident(
+            stage=stage,
+            outcome=outcome,
+            email=email,
+            session_id=sid,
+            reason=reason,
+            extra=extra,
+        )
+        if not record.get("ok"):
+            try:
+                with ctx._lock:
+                    current = ctx._sessions.get(sid)
+                    if isinstance(current, dict):
+                        ctx._append_session_event(
+                            current,
+                            "diagnostics_failed",
+                            str(record.get("reason") or ""),
+                        )
+            except Exception:
+                pass
+    except Exception:
+        pass
+
 
 def _pick_checkout_proxy(ctx, pipeline_cfg, sess):
     if not pipeline_cfg.get("checkout_probe_enabled"):
@@ -304,6 +346,14 @@ def _run_registration(ctx, sid, proxy, receiver, browser_runtime=None):
             )
         except Exception:
             error_msg = "ChatGPT 原始 Session 保存失败，已停止转换和导入"
+            _capture_worker_incident(
+                ctx,
+                sid,
+                email,
+                stage="registration-error",
+                outcome="session_save_failed",
+                reason=error_msg,
+            )
             update("error", error_msg, error="session_save_failed")
             return
         trial_status = str(plus_trial.get("status") or "unknown").lower()
@@ -336,6 +386,14 @@ def _run_registration(ctx, sid, proxy, receiver, browser_runtime=None):
         update("cancelled", "registration cancelled", error="cancelled")
     except Exception as e:
         msg = str(e)[:300]
+        _capture_worker_incident(
+            ctx,
+            sid,
+            email,
+            stage="registration-error",
+            outcome="worker_exception",
+            reason=f"{type(e).__name__}: {msg}",
+        )
         update("error", f"注册流程失败：{msg}", error=msg)
     finally:
         hotmail_account_id = str(sess.get("_hotmail_account_id") or "")

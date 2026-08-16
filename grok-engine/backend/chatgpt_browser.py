@@ -680,6 +680,12 @@ def _profile_visible(page: Any) -> bool:
         'input[autocomplete="name"]',
         'input[name="age"]',
         'input[name="birthday"]',
+        'input[name="birthdate"]',
+        'input[autocomplete="bday"]',
+        'input[type="date"]',
+        'input[aria-label*="date of birth" i]',
+        'input[aria-label*="出生日期"]',
+        'input[aria-label*="年龄"]',
         '[role="spinbutton"][data-type="year"]',
     ]
     return _first_visible(page, selectors) is not None
@@ -860,75 +866,116 @@ def _fill_profile_fields(
             raise ChatGPTRegistrationError(f"未找到姓名输入框: {page.url}")
         name.fill(full_name)
 
-    age = _first_visible(page, ['input[name="age"]'])
-    if age:
-        age.fill(str(max(18, datetime.now().year - int(birthdate["year"]))))
+    # OpenAI currently serves two profile variants: name + full birthdate, or
+    # name + numeric age. Always inspect date controls first. Some transitions
+    # briefly leave an age input mounted beside the newer date widget; choosing
+    # age first would put values such as "24" into the wrong profile variant.
+    combined_birthday = _first_visible(
+        page,
+        [
+            'input[name="birthday"]',
+            'input[name="birthdate"]',
+            'input[name="dateOfBirth"]',
+            'input[autocomplete="bday"]',
+            'input[type="date"]',
+            'input[aria-label*="date of birth" i]',
+            'input[aria-label*="birth date" i]',
+            'input[aria-label*="birthday" i]',
+            'input[aria-label*="出生日期"]',
+            'input[aria-label*="生日"]',
+            'input[aria-label*="生年月日"]',
+            'input[aria-label*="date de naissance" i]',
+            'input[placeholder*="YYYY" i]',
+        ],
+    )
+    part_values = {
+        "year": birthdate["year"],
+        "month": birthdate["month"].zfill(2),
+        "day": birthdate["day"].zfill(2),
+    }
+    part_labels = {
+        "year": ("year", "年份", "年"),
+        "month": ("month", "月份", "月"),
+        "day": ("day", "日期", "日"),
+    }
+    date_parts: dict[str, Any] = {}
+    if not combined_birthday:
+        for key, labels in part_labels.items():
+            date_parts[key] = _first_visible(
+                page,
+                [
+                    f'[role="spinbutton"][data-type="{key}"]',
+                    f'[role="spinbutton"][aria-label*="{labels[0]}" i]',
+                    f'[role="spinbutton"][aria-label*="{labels[1]}"]',
+                    f'[role="spinbutton"][aria-label="{labels[2]}"]',
+                    f'input[name="{key}"]',
+                    f'input[name="birth-{key}"]',
+                    f'input[name="birth{key}"]',
+                    f'input[aria-label*="{labels[0]}" i]',
+                    f'input[aria-label*="{labels[1]}"]',
+                    f'input[aria-label="{labels[2]}"]',
+                    f'select[name="{key}"]',
+                    f'select[name="birth-{key}"]',
+                    f'select[aria-label*="{labels[0]}" i]',
+                    f'select[aria-label*="{labels[1]}"]',
+                    f'select[aria-label="{labels[2]}"]',
+                ],
+            )
+
+    if combined_birthday:
+        birthdate_order = _detect_birthdate_input_order(combined_birthday)
+        _replace_birthdate_input(
+            combined_birthday,
+            birthdate["iso"],
+            order=birthdate_order,
+        )
+    elif all(date_parts.values()):
+        for key, element in date_parts.items():
+            value = part_values[key]
+            tag = str(element.evaluate("el => el.tagName.toLowerCase()"))
+            if tag == "select":
+                try:
+                    element.select_option(value)
+                except Exception:
+                    element.select_option(str(int(value)))
+            else:
+                try:
+                    element.fill(value)
+                except Exception:
+                    element.click()
+                    element.press("Control+A")
+                    element.type(value)
+        hidden_birthday = page.query_selector(
+            'input[name="birthday"], input[name="birthdate"], input[name="dateOfBirth"]'
+        )
+        if hidden_birthday:
+            hidden_birthday.evaluate(
+                "(el, value) => { el.value=value; el.dispatchEvent(new Event('input',{bubbles:true})); "
+                "el.dispatchEvent(new Event('change',{bubbles:true})); }",
+                birthdate["iso"],
+            )
+    elif any(date_parts.values()):
+        missing = ", ".join(key for key, element in date_parts.items() if not element)
+        raise ChatGPTRegistrationError(
+            f"出生日期输入项不完整，缺少 {missing}: {page.url}"
+        )
     else:
-        # Newer /about-you pages render one controlled birthday input and may
-        # prefill it with today's date. Handle this variant before the older
-        # three-part date controls. HTML date inputs always accept ISO values;
-        # the browser itself displays them as YYYY/MM/DD on Japanese systems.
-        combined_birthday = _first_visible(
+        age = _first_visible(
             page,
             [
-                'input[name="birthday"]',
-                'input[autocomplete="bday"]',
-                'input[type="date"]',
-                'input[aria-label*="birth" i]',
-                'input[aria-label*="生年月日"]',
-                'input[aria-label*="date de naissance" i]',
+                'input[name="age"]',
+                'input[id*="age" i]',
+                'input[aria-label="age" i]',
+                'input[aria-label*="年龄"]',
+                'input[placeholder="age" i]',
+                'input[placeholder*="年龄"]',
             ],
         )
-        if combined_birthday:
-            birthdate_order = _detect_birthdate_input_order(combined_birthday)
-            _replace_birthdate_input(
-                combined_birthday,
-                birthdate["iso"],
-                order=birthdate_order,
+        if not age:
+            raise ChatGPTRegistrationError(
+                f"未找到完整的出生日期或年龄输入项: {page.url}"
             )
-        else:
-            parts = {
-                "year": birthdate["year"],
-                "month": birthdate["month"].zfill(2),
-                "day": birthdate["day"].zfill(2),
-            }
-            filled_parts = 0
-            for key, value in parts.items():
-                element = _first_visible(
-                    page,
-                    [
-                        f'[role="spinbutton"][data-type="{key}"]',
-                        f'input[name="{key}"]',
-                        f'input[aria-label*="{key}" i]',
-                        f'select[name="{key}"]',
-                        f'select[aria-label*="{key}" i]',
-                    ],
-                )
-                if not element:
-                    continue
-                tag = str(element.evaluate("el => el.tagName.toLowerCase()"))
-                if tag == "select":
-                    element.select_option(str(int(value)))
-                else:
-                    try:
-                        element.fill(value)
-                    except Exception:
-                        element.click()
-                        element.press("Control+A")
-                        element.type(value)
-                filled_parts += 1
-
-            hidden_birthday = page.query_selector('input[name="birthday"]')
-            if hidden_birthday:
-                hidden_birthday.evaluate(
-                    "(el, value) => { el.value=value; el.dispatchEvent(new Event('input',{bubbles:true})); "
-                    "el.dispatchEvent(new Event('change',{bubbles:true})); }",
-                    birthdate["iso"],
-                )
-            if filled_parts < 3 and not hidden_birthday:
-                raise ChatGPTRegistrationError(
-                    f"未找到完整的生日或年龄输入项: {page.url}"
-                )
+        age.fill("24")
 
     for checkbox in _visible_elements(page, 'input[type="checkbox"]'):
         try:

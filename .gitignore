@@ -11,5 +11,6 @@ data/*.json
 grok-engine/runtime/
 grok-engine/config/config.json
 grok-engine/vendor/turnstile-solver/proxies.txt
+log/
 .env*
 !.env.example

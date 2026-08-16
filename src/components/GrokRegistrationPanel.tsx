@@ -139,6 +139,80 @@ const FAILURE_STATUSES = new Set(['error', 'failed', 'protocol_error', 'protocol
 const SUCCESS_STATUSES = new Set(['imported', 'success', 'completed', 'done', 'probe_complete']);
 const WARNING_STATUSES = new Set(['waiting_solver', 'solving_turnstile', 'waiting_email', 'queued', 'starting', 'paused', 'pausing', 'probe_queued', 'import_queued', 'probe_retry_pending', 'probe_uncertain']);
 
+type NaturalflowerRowStatus = 'success' | 'failed' | 'running' | 'cancelled' | 'unused';
+
+const NATURALFLOWER_PAGE_SIZE = 10;
+
+const NATURALFLOWER_FILTER_OPTIONS: StyledSelectOption[] = [
+  { value: 'all', label: '全部邮箱' },
+  { value: 'failed', label: '仅看失败' },
+  { value: 'success', label: '仅看成功' },
+  { value: 'running', label: '仅看进行中' },
+  { value: 'cancelled', label: '仅看已取消' },
+  { value: 'unused', label: '仅看未使用' },
+];
+
+const NATURALFLOWER_STATUS_META: Record<NaturalflowerRowStatus, { label: string; badge: string; dot: string }> = {
+  success: { label: '成功', badge: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600', dot: 'bg-emerald-400' },
+  failed: { label: '失败', badge: 'border-rose-500/30 bg-rose-500/10 text-rose-600', dot: 'bg-rose-500' },
+  running: { label: '进行中', badge: 'border-blue-500/30 bg-blue-500/10 text-blue-600', dot: 'bg-blue-400' },
+  cancelled: { label: '已取消', badge: 'border-slate-500/30 bg-slate-500/10 text-slate-500', dot: 'bg-slate-400' },
+  unused: { label: '未使用', badge: 'border-amber-500/30 bg-amber-500/10 text-amber-600', dot: 'bg-amber-400' },
+};
+
+function parseNaturalflowerMailboxLines(text: string): Array<{ email: string; pickupUrl: string; lineIndex: number }> {
+  const rows: Array<{ email: string; pickupUrl: string; lineIndex: number }> = [];
+  text.split(/\r?\n/).forEach((raw, index) => {
+    const line = raw.trim();
+    if (!line) return;
+    const match = line.match(/^(\S+)\s+(\S.+)$/);
+    if (!match) return;
+    rows.push({ email: match[1].trim().toLowerCase(), pickupUrl: match[2].trim(), lineIndex: index });
+  });
+  return rows;
+}
+
+function classifyNaturalflowerSession(session?: GrokMonitor['sessions'][number]): NaturalflowerRowStatus {
+  if (!session) return 'unused';
+  const status = String(session.status || '').toLowerCase();
+  if (session.access_token_available || SUCCESS_STATUSES.has(status)) return 'success';
+  if (['cancelled', 'stopped', 'stopping'].includes(status)) return 'cancelled';
+  if (FAILURE_STATUSES.has(status)) return 'failed';
+  return 'running';
+}
+
+const CHATGPT_MAIL_TYPE_OPTIONS: StyledSelectOption[] = [
+  { value: 'all', label: '全部类型' },
+  { value: 'icloud', label: 'iCloud' },
+  { value: 'gmail', label: 'Gmail' },
+  { value: 'microsoft', label: 'Microsoft' },
+  { value: 'other', label: '其他' },
+];
+
+const CHATGPT_PLUS_TRIAL_OPTIONS: StyledSelectOption[] = [
+  { value: 'all', label: '全部资格' },
+  { value: 'eligible', label: '有资格' },
+  { value: 'ineligible', label: '无资格' },
+  { value: 'unknown', label: '未知' },
+];
+
+const CHATGPT_CHECKOUT_OPTIONS: StyledSelectOption[] = [
+  { value: 'all', label: '全部类型' },
+  { value: 'oaics', label: 'oaics' },
+  { value: 'cs_live', label: 'cs_live' },
+  { value: 'cs_test', label: 'cs_test' },
+  { value: 'disabled', label: '未开启' },
+  { value: 'unknown', label: '未知' },
+];
+
+function chatgptMailTypeOf(email: string): string {
+  const domain = (email.split('@')[1] || '').toLowerCase();
+  if (domain === 'icloud.com' || domain === 'me.com') return 'icloud';
+  if (domain === 'gmail.com' || domain === 'googlemail.com') return 'gmail';
+  if (domain === 'outlook.com' || domain === 'hotmail.com' || domain === 'live.com' || domain === 'msn.com') return 'microsoft';
+  return 'other';
+}
+
 interface HotmailVerificationEntry {
   status?: string;
   code?: string;
@@ -637,6 +711,8 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
   const [hotmailStatus, setHotmailStatus] = useState('');
   const [hotmailKeyword, setHotmailKeyword] = useState('');
   const [hotmailSelected, setHotmailSelected] = useState<string[]>([]);
+  const [naturalflowerFilter, setNaturalflowerFilter] = useState<'all' | NaturalflowerRowStatus>('all');
+  const [naturalflowerPage, setNaturalflowerPage] = useState(1);
   const [restoreUsesDialog, setRestoreUsesDialog] = useState<{ account: HotmailAccount; count: number } | null>(null);
   const [groups, setGroups] = useState<Array<{ id: number; name: string; platform?: string }>>([]);
   const [rotation, setRotation] = useState<RotationList>(EMPTY_ROTATION);
@@ -647,6 +723,10 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
   const [rotationSelected, setRotationSelected] = useState<string[]>([]);
   const [rotationLoading, setRotationLoading] = useState(false);
   const [chatgptAccounts, setChatgptAccounts] = useState<ChatGPTAccountRecord[]>([]);
+  const [chatgptAccountKeyword, setChatgptAccountKeyword] = useState('');
+  const [chatgptAccountMailType, setChatgptAccountMailType] = useState('all');
+  const [chatgptAccountPlusTrial, setChatgptAccountPlusTrial] = useState('all');
+  const [chatgptAccountCheckout, setChatgptAccountCheckout] = useState('all');
   const [chatgptAccountSelected, setChatgptAccountSelected] = useState<string[]>([]);
   const [visibleChatgptPasswords, setVisibleChatgptPasswords] = useState<Set<string>>(() => new Set());
   const [chatgptAccountsLoading, setChatgptAccountsLoading] = useState(false);
@@ -658,6 +738,7 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
   const [smsbowerBalance, setSmsbowerBalance] = useState<{ ok: boolean; balance?: number; count?: number; currency?: string; error?: string } | null>(null);
   const rotationPageRef = useRef(1);
   const logContainerRef = useRef<HTMLDivElement | null>(null);
+  const logPinnedToBottomRef = useRef(true);
 
   const fieldClass = `w-full px-3 py-2 text-xs rounded-lg border outline-none transition focus:ring-2 focus:ring-blue-500/40 ${
     isDark ? 'bg-white/[0.035] border-white/10 text-slate-100 placeholder-slate-500' : 'bg-black/[0.025] border-black/10 text-slate-800 placeholder-slate-400'
@@ -1303,6 +1384,29 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
       && String(session.batch_id || '') === currentChatgptBatchId
       && session.access_token_available)
     .sort((a, b) => sessionTimestamp(b) - sessionTimestamp(a)), [monitor.sessions, currentChatgptBatchId]);
+  const filteredChatgptAccounts = useMemo(() => {
+    const keyword = chatgptAccountKeyword.trim().toLowerCase();
+    return chatgptAccounts.filter((item) => {
+      const email = String(item.email || '').toLowerCase();
+      if (keyword && !email.includes(keyword)) return false;
+      if (chatgptAccountMailType !== 'all' && chatgptMailTypeOf(email) !== chatgptAccountMailType) return false;
+      const plusStatus = item.plus_trial?.status === 'eligible' || item.plus_trial?.status === 'ineligible'
+        ? item.plus_trial.status
+        : 'unknown';
+      if (chatgptAccountPlusTrial !== 'all' && plusStatus !== chatgptAccountPlusTrial) return false;
+      const checkout = item.checkout_probe?.kind === 'oaics' || item.checkout_probe?.kind === 'cs_live' || item.checkout_probe?.kind === 'cs_test'
+        ? item.checkout_probe.kind
+        : item.checkout_probe?.status === 'disabled' ? 'disabled' : 'unknown';
+      if (chatgptAccountCheckout !== 'all' && checkout !== chatgptAccountCheckout) return false;
+      return true;
+    });
+  }, [chatgptAccounts, chatgptAccountKeyword, chatgptAccountMailType, chatgptAccountPlusTrial, chatgptAccountCheckout]);
+  const resetChatgptAccountFilters = () => {
+    setChatgptAccountKeyword('');
+    setChatgptAccountMailType('all');
+    setChatgptAccountPlusTrial('all');
+    setChatgptAccountCheckout('all');
+  };
   const logs = useMemo<RegistrationLog[]>(() => {
     const entries: RegistrationLog[] = [...archivedLogs];
     monitor.batches.forEach((batch) => {
@@ -1377,7 +1481,15 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
     });
   }, [hotmailPool]);
 
+  const handleLogScroll = () => {
+    const container = logContainerRef.current;
+    if (!container) return;
+    const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+    logPinnedToBottomRef.current = distanceFromBottom < 40;
+  };
+
   useEffect(() => {
+    if (!logPinnedToBottomRef.current) return;
     const frame = window.requestAnimationFrame(() => {
       const container = logContainerRef.current;
       if (container) container.scrollTop = container.scrollHeight;
@@ -1394,6 +1506,49 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
   const naturalflowerMailboxLines = config.naturalflower_mailboxes.split(/\r?\n/).filter((line) => line.trim());
   const naturalflowerMailboxCount = naturalflowerMailboxLines.length;
   const naturalflowerMailboxesValid = naturalflowerMailboxCount > 0 && naturalflowerMailboxLines.every((line) => /^[^\s@]+@[^\s@]+\.[^\s@]+\s+https:\/\/pickup\.naturalflower\.cn\/(?:\?token=|p\/)[^\s]+$/i.test(line.trim()));
+  const naturalflowerRows = useMemo(() => {
+    const parsed = parseNaturalflowerMailboxLines(config.naturalflower_mailboxes);
+    const latestByEmail = new Map<string, GrokMonitor['sessions'][number]>();
+    monitor.sessions.forEach((session) => {
+      if (registrationTargetOf(session) !== 'chatgpt') return;
+      const email = String(session.email || '').trim().toLowerCase();
+      if (!email) return;
+      const existing = latestByEmail.get(email);
+      if (!existing || sessionTimestamp(session) >= sessionTimestamp(existing)) {
+        latestByEmail.set(email, session);
+      }
+    });
+    return parsed.map((row) => {
+      const session = latestByEmail.get(row.email);
+      return { ...row, session, status: classifyNaturalflowerSession(session) };
+    });
+  }, [config.naturalflower_mailboxes, monitor.sessions]);
+  const naturalflowerStatusCounts = useMemo(() => {
+    const counts: Record<NaturalflowerRowStatus, number> = { success: 0, failed: 0, running: 0, cancelled: 0, unused: 0 };
+    naturalflowerRows.forEach((row) => { counts[row.status] += 1; });
+    return counts;
+  }, [naturalflowerRows]);
+  const naturalflowerFilteredRows = useMemo(
+    () => naturalflowerRows.filter((row) => naturalflowerFilter === 'all' || row.status === naturalflowerFilter),
+    [naturalflowerRows, naturalflowerFilter],
+  );
+  const naturalflowerTotalPages = Math.max(1, Math.ceil(naturalflowerFilteredRows.length / NATURALFLOWER_PAGE_SIZE));
+  const naturalflowerCurrentPage = Math.min(Math.max(1, naturalflowerPage), naturalflowerTotalPages);
+  const naturalflowerPageRows = naturalflowerFilteredRows.slice(
+    (naturalflowerCurrentPage - 1) * NATURALFLOWER_PAGE_SIZE,
+    naturalflowerCurrentPage * NATURALFLOWER_PAGE_SIZE,
+  );
+  const reRegisterFailedNaturalflower = async () => {
+    const failed = naturalflowerRows.filter((row) => row.status === 'failed');
+    if (!failed.length) return;
+    const subset = failed.map((row) => `${row.email} ${row.pickupUrl}`).join('\n');
+    const settings: GrokConfig = { ...normalizedConfig(), naturalflower_mailboxes: subset, count: failed.length };
+    if (settings.concurrency > 3 && !concurrencyWarningRemembered()) {
+      setPendingStartConfig(settings);
+      return;
+    }
+    await runStart(settings);
+  };
   const registrationRounds = Math.ceil(Math.max(1, Number(config.count) || 1) / Math.max(1, Number(config.concurrency) || 1));
   const mailReady = config.mail_provider === 'hotmail_local'
     ? Boolean(config.hotmail_local_base_url.trim() && hotmailAvailableSlots > 0)
@@ -1656,6 +1811,44 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
                         <textarea rows={10} value={config.naturalflower_mailboxes} onChange={(e) => setField('naturalflower_mailboxes', e.target.value)} placeholder="crabber.veils7s@icloud.com https://pickup.naturalflower.cn/?token=..." className={`${fieldClass} font-mono`} />
                       </Field>
                       <div className="col-span-2"><div className={`rounded-lg border px-4 py-3 ${naturalflowerMailboxesValid ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-amber-500/30 bg-amber-500/5'}`}><span className={`text-xs font-bold ${naturalflowerMailboxesValid ? 'text-emerald-600' : 'text-amber-600'}`}>{naturalflowerMailboxesValid ? `格式检查通过 · 共 ${naturalflowerMailboxCount} 个邮箱` : '请检查每行是否同时包含有效邮箱和完整 Naturalflower 取件 URL'}</span></div></div>
+                      <div className="col-span-2">
+                        <div className={`rounded-xl border overflow-hidden ${theme.border} ${isDark ? 'bg-slate-900/40' : 'bg-slate-50'}`}>
+                          <div className={`p-3 border-b ${theme.border}`}>
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <div className="min-w-0">
+                                <strong className={`text-xs ${theme.textPrimary}`}>Naturalflower 邮箱状态</strong>
+                                <p className={`text-[10px] mt-0.5 ${theme.textSecondary}`}>共 {naturalflowerRows.length} · 成功 {naturalflowerStatusCounts.success} · 失败 {naturalflowerStatusCounts.failed} · 进行中 {naturalflowerStatusCounts.running} · 已取消 {naturalflowerStatusCounts.cancelled} · 未使用 {naturalflowerStatusCounts.unused}</p>
+                              </div>
+                              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                                <StyledSelect ariaLabel="Naturalflower 邮箱状态筛选" value={naturalflowerFilter} onChange={(value) => setNaturalflowerFilter(value as 'all' | NaturalflowerRowStatus)} options={NATURALFLOWER_FILTER_OPTIONS} isDark={isDark} />
+                                <button onClick={() => void reRegisterFailedNaturalflower()} disabled={!!busy || naturalflowerStatusCounts.failed === 0} className="px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-[11px] font-bold flex items-center gap-1.5 disabled:opacity-40">{busy === 'start' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}重新注册失败{naturalflowerStatusCounts.failed ? `（${naturalflowerStatusCounts.failed}）` : ''}</button>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="max-h-[340px] overflow-auto">
+                            <table className="w-full min-w-[640px] text-left text-[10px]">
+                              <thead className={`sticky top-0 z-10 ${isDark ? 'bg-slate-800 text-slate-400' : 'bg-slate-200 text-slate-500'}`}><tr><th className="px-4 py-2.5 text-center">邮箱账号</th><th className="px-3 py-2.5 text-center">取件地址</th><th className="px-3 py-2.5 text-center">状态</th></tr></thead>
+                              <tbody className={`divide-y ${isDark ? 'divide-slate-800' : 'divide-slate-200'}`}>
+                                {naturalflowerPageRows.length ? naturalflowerPageRows.map((row) => {
+                                  const meta = NATURALFLOWER_STATUS_META[row.status];
+                                  return <tr key={`${row.lineIndex}-${row.email}`} className={isDark ? 'hover:bg-white/[0.025]' : 'hover:bg-black/[0.025]'}>
+                                    <td className="px-4 py-3 max-w-[220px]"><div className="flex items-center justify-center gap-2 min-w-0"><span className={`w-2 h-2 rounded-full shrink-0 ${meta.dot}`} /><strong className={`truncate text-[11px] ${theme.textPrimary}`} title={row.email}>{row.email}</strong></div>{row.status === 'failed' && row.session?.error && <p className="mt-1 truncate text-center text-rose-500" title={row.session.error}>失败原因：{row.session.error}</p>}</td>
+                                    <td className="px-3 py-3 max-w-[240px]"><a href={row.pickupUrl} target="_blank" rel="noopener noreferrer" className={`block truncate text-[11px] text-blue-500 hover:text-blue-400 hover:underline`} title={`打开取件地址：${row.pickupUrl}`}>{row.pickupUrl}</a></td>
+                                    <td className="px-3 py-3 text-center"><span className={`inline-flex px-2 py-1 rounded-md border font-bold ${meta.badge}`}>{meta.label}</span></td>
+                                  </tr>;
+                                }) : <tr><td colSpan={3} className={`px-4 py-8 text-center ${theme.textSecondary}`}>当前筛选条件下暂无邮箱</td></tr>}
+                              </tbody>
+                            </table>
+                          </div>
+                          <div className={`p-2.5 border-t ${theme.border} flex items-center justify-between gap-2`}>
+                            <span className={`text-[10px] ${theme.textSecondary}`}>第 {naturalflowerCurrentPage} / {naturalflowerTotalPages} 页 · 共 {naturalflowerFilteredRows.length} 个</span>
+                            <div className="flex items-center gap-1.5">
+                              <button onClick={() => setNaturalflowerPage((p) => Math.max(1, p - 1))} disabled={naturalflowerCurrentPage <= 1} className={`px-2.5 py-1 rounded-md border text-[10px] font-bold disabled:opacity-40 ${theme.border} ${theme.textPrimary}`}>上一页</button>
+                              <button onClick={() => setNaturalflowerPage((p) => Math.min(naturalflowerTotalPages, p + 1))} disabled={naturalflowerCurrentPage >= naturalflowerTotalPages} className={`px-2.5 py-1 rounded-md border text-[10px] font-bold disabled:opacity-40 ${theme.border} ${theme.textPrimary}`}>下一页</button>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
                     </> : <>
                       <div className="space-y-1.5"><span className={`block text-xs font-bold ${theme.textPrimary}`}>账号来源</span><StyledSelect ariaLabel="微软邮箱账号来源" value={config.hotmail_account_source} onChange={(value) => setField('hotmail_account_source', value as GrokConfig['hotmail_account_source'])} options={HOTMAIL_ACCOUNT_SOURCE_OPTIONS.map((option) => option.value === 'mail_management' ? { ...option, description: config.registration_target === 'chatgpt' ? '仅使用邮箱管理中 OpenAI 状态为 0/1 的账号' : '仅使用邮箱管理中 Grok 状态为 0/3、1/3、2/3 的账号' } : option)} isDark={isDark} /></div>
                       <Field label="本地助手地址"><div className="flex gap-2"><input value={config.hotmail_local_base_url} onChange={(e) => setField('hotmail_local_base_url', e.target.value)} className={fieldClass} /><button onClick={() => void testHotmail()} disabled={!!busy} className="px-3 rounded-lg bg-slate-600 text-white text-xs font-bold min-w-max flex items-center gap-1.5 disabled:opacity-50">{busy === 'hotmail-test' && <Loader2 className="w-3.5 h-3.5 animate-spin" />}检测助手</button></div></Field>
@@ -1664,10 +1857,6 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
                   </div>
                   {config.mail_provider === 'smsbower' && <div className={`rounded-xl border p-4 ${theme.border} ${isDark ? 'bg-slate-900/40' : 'bg-slate-50'}`}>
                     <div className="flex items-center justify-between gap-3"><div className="min-w-0"><strong className={`text-xs ${theme.textPrimary}`}>SMSBower Gmail 邮箱</strong><p className={`text-[10px] mt-1 leading-5 ${theme.textSecondary}`}>每次注册前通过 SMSBower API 临时购买一个 Gmail 邮箱，注册完成后释放。验证码通过 SMSBower 接口自动获取。{smsbowerBalance?.ok && <span className="text-emerald-600"> · 单价 ${smsbowerBalance.balance ?? '--'} · 库存 {smsbowerBalance.count ?? '--'} 个</span>}</p></div></div>
-                  </div>}
-                  {config.mail_provider === 'naturalflower' && <div className={`rounded-xl border p-4 ${theme.border} ${isDark ? 'bg-slate-900/40' : 'bg-slate-50'}`}>
-                    <strong className={`text-xs ${theme.textPrimary}`}>Naturalflower 专属取件链接</strong>
-                    <p className={`text-[10px] mt-1 leading-5 ${theme.textSecondary}`}>启动任务时会校验邮箱与取件链接的绑定关系；OpenAI 发出验证码后，后端直接轮询对应 JSON 接口。每个任务固定使用一行，不会在并发任务间串号。</p>
                   </div>}
                   {config.mail_provider === 'hotmail_local' && <div className={`rounded-xl border overflow-hidden ${theme.border} ${isDark ? 'bg-slate-900/40' : 'bg-slate-50'}`}>
                     <div className={`p-4 border-b ${theme.border}`}>
@@ -1810,21 +1999,34 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
                 {tab === 'rotation' && (config.registration_target === 'chatgpt' ? <div className="space-y-4">
                   <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
                     <div className={`p-4 rounded-xl border ${theme.border} ${isDark ? 'bg-slate-900/50' : 'bg-slate-50'}`}><span className={`text-[11px] ${theme.textSecondary}`}>OpenAI 账号总数</span><strong className={`block text-2xl mt-1 ${theme.textPrimary}`}>{chatgptAccounts.length}</strong></div>
-                    <div className="p-4 rounded-xl border border-emerald-500/20 bg-emerald-500/10"><span className="text-[11px] text-emerald-600 dark:text-emerald-300">可复制 AT</span><strong className="block text-2xl mt-1 text-emerald-600 dark:text-emerald-300">{chatgptAccounts.filter((item) => item.access_token_available).length}</strong></div>
-                    <div className="p-4 rounded-xl border border-blue-500/20 bg-blue-500/10"><span className="text-[11px] text-blue-600 dark:text-blue-300">已选择</span><strong className="block text-2xl mt-1 text-blue-600 dark:text-blue-300">{chatgptAccountSelected.length}</strong></div>
-                    <div className="p-4 rounded-xl border border-violet-500/20 bg-violet-500/10"><span className="text-[11px] text-violet-600 dark:text-violet-300">Plus 试用资格</span><strong className="block text-2xl mt-1 text-violet-600 dark:text-violet-300">{chatgptAccounts.filter((item) => item.plus_trial?.status === 'eligible').length}</strong></div>
+                    <div className={`p-4 rounded-xl border ${isDark ? 'border-emerald-400/40 bg-emerald-400/15' : 'border-emerald-500/30 bg-emerald-500/10'}`}><span className={`text-[11px] ${isDark ? 'text-emerald-300' : 'text-emerald-700'}`}>可复制 AT</span><strong className={`block text-2xl mt-1 ${isDark ? 'text-emerald-300' : 'text-emerald-700'}`}>{chatgptAccounts.filter((item) => item.access_token_available).length}</strong></div>
+                    <div className={`p-4 rounded-xl border ${isDark ? 'border-blue-400/40 bg-blue-400/15' : 'border-blue-500/30 bg-blue-500/10'}`}><span className={`text-[11px] ${isDark ? 'text-blue-300' : 'text-blue-700'}`}>已选择</span><strong className={`block text-2xl mt-1 ${isDark ? 'text-blue-300' : 'text-blue-700'}`}>{chatgptAccountSelected.length}</strong></div>
+                    <div className={`p-4 rounded-xl border ${isDark ? 'border-violet-400/40 bg-violet-400/15' : 'border-violet-500/30 bg-violet-500/10'}`}><span className={`text-[11px] ${isDark ? 'text-violet-300' : 'text-violet-700'}`}>Plus 试用资格</span><strong className={`block text-2xl mt-1 ${isDark ? 'text-violet-300' : 'text-violet-700'}`}>{chatgptAccounts.filter((item) => item.plus_trial?.status === 'eligible').length}</strong></div>
+                  </div>
+
+                  <div className={`p-3 rounded-xl border ${theme.border} flex flex-col xl:flex-row xl:items-end gap-3`}>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3 flex-1">
+                      <Field label="邮箱搜索"><div className="relative"><Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" /><input value={chatgptAccountKeyword} onChange={(event) => setChatgptAccountKeyword(event.target.value)} placeholder="按邮箱模糊搜索" className={`${fieldClass} pl-8`} /></div></Field>
+                      <Field label="邮箱类型"><StyledSelect ariaLabel="邮箱类型筛选" value={chatgptAccountMailType} onChange={setChatgptAccountMailType} options={CHATGPT_MAIL_TYPE_OPTIONS} isDark={isDark} /></Field>
+                      <Field label="Plus 试用资格"><StyledSelect ariaLabel="Plus 试用资格筛选" value={chatgptAccountPlusTrial} onChange={setChatgptAccountPlusTrial} options={CHATGPT_PLUS_TRIAL_OPTIONS} isDark={isDark} /></Field>
+                      <Field label="Checkout 类型"><StyledSelect ariaLabel="Checkout 类型筛选" value={chatgptAccountCheckout} onChange={setChatgptAccountCheckout} options={CHATGPT_CHECKOUT_OPTIONS} isDark={isDark} /></Field>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <span className={`text-[11px] ${theme.textSecondary}`}>筛选后 {filteredChatgptAccounts.length} 个</span>
+                      <button onClick={resetChatgptAccountFilters} className={`px-4 py-2 rounded-lg border text-xs font-bold ${theme.border} ${theme.textPrimary}`}>重置</button>
+                    </div>
                   </div>
 
                   <div className={`overflow-x-auto rounded-xl border ${theme.border}`}>
                     <table className="w-full min-w-[1020px] text-left text-[11px]">
                       <thead className={isDark ? 'bg-slate-900 text-slate-400' : 'bg-slate-100 text-slate-500'}>
                         <tr>
-                          <th className="p-3 w-10"><input type="checkbox" aria-label="选择全部 OpenAI 账号" checked={chatgptAccounts.length > 0 && chatgptAccounts.every((item) => chatgptAccountSelected.includes(item.id))} ref={(input) => { if (input) input.indeterminate = chatgptAccounts.some((item) => chatgptAccountSelected.includes(item.id)) && !chatgptAccounts.every((item) => chatgptAccountSelected.includes(item.id)); }} onChange={(event) => setChatgptAccountSelected(event.target.checked ? chatgptAccounts.map((item) => item.id) : [])} className="accent-blue-600" /></th>
+                          <th className="p-3 w-10"><input type="checkbox" aria-label="选择全部 OpenAI 账号" checked={filteredChatgptAccounts.length > 0 && filteredChatgptAccounts.every((item) => chatgptAccountSelected.includes(item.id))} ref={(input) => { if (input) input.indeterminate = filteredChatgptAccounts.some((item) => chatgptAccountSelected.includes(item.id)) && !filteredChatgptAccounts.every((item) => chatgptAccountSelected.includes(item.id)); }} onChange={(event) => { const ids = filteredChatgptAccounts.map((item) => item.id); setChatgptAccountSelected((previous) => event.target.checked ? Array.from(new Set([...previous, ...ids])) : previous.filter((id) => !ids.includes(id))); }} className="accent-blue-600" /></th>
                           <th className="p-3 text-center">邮箱</th><th className="p-3 text-center">密码</th><th className="p-3 text-center">AT 状态</th><th className="p-3 text-center">Plus 试用</th><th className="p-3 text-center">Checkout 类型</th><th className="p-3 text-center">保存时间</th><th className="p-3 text-center">操作</th>
                         </tr>
                       </thead>
                       <tbody className={`divide-y ${isDark ? 'divide-slate-800' : 'divide-slate-200'}`}>
-                        {chatgptAccounts.map((item) => {
+                        {filteredChatgptAccounts.map((item) => {
                           const selected = chatgptAccountSelected.includes(item.id);
                           const passwordVisible = visibleChatgptPasswords.has(item.id);
                           const registrationPassword = String(item.password || '');
@@ -1832,14 +2034,14 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
                             <td className="p-3"><input type="checkbox" aria-label={`选择 ${item.email || 'OpenAI 账号'}`} checked={selected} onChange={(event) => setChatgptAccountSelected((previous) => event.target.checked ? [...new Set([...previous, item.id])] : previous.filter((id) => id !== item.id))} className="accent-blue-600" /></td>
                             <td className={`p-3 text-center font-bold ${theme.textPrimary}`}>{item.email || '未记录邮箱'}</td>
                             <td className="p-3"><div className="flex items-center justify-center gap-1.5">{registrationPassword ? <><span className={`font-mono ${theme.textPrimary}`}>{passwordVisible ? registrationPassword : '••••••••••••'}</span><button type="button" aria-label={passwordVisible ? `隐藏 ${item.email} 的密码` : `显示 ${item.email} 的密码`} title={passwordVisible ? '隐藏密码' : '显示密码'} onClick={() => setVisibleChatgptPasswords((previous) => { const next = new Set(previous); if (next.has(item.id)) next.delete(item.id); else next.add(item.id); return next; })} className={`p-1 rounded transition hover:bg-blue-500/10 ${theme.textSecondary}`}>{passwordVisible ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}</button></> : <span className={theme.textSecondary}>-</span>}</div></td>
-                            <td className="p-3 text-center"><span className="inline-flex px-2 py-1 rounded-full bg-emerald-500/10 text-emerald-600 font-bold">已保存</span></td>
-                            <td className="p-3 text-center">{item.plus_trial?.status === 'eligible' ? <span title={item.plus_trial.reason || ''} className="inline-flex px-2 py-1 rounded-full bg-violet-500/10 text-violet-600 font-bold">有资格</span> : item.plus_trial?.status === 'ineligible' ? <span title={item.plus_trial.reason || ''} className="inline-flex px-2 py-1 rounded-full border border-rose-500/40 bg-rose-500/15 text-rose-600 dark:text-rose-400 font-extrabold shadow-sm">无资格</span> : <span title={item.plus_trial?.reason || '尚未检测'} className="inline-flex px-2 py-1 rounded-full bg-amber-500/10 text-amber-600 font-bold">未知</span>}</td>
-                            <td className="p-3 text-center">{item.checkout_probe?.kind === 'oaics' ? <span title={item.checkout_probe.reason || ''} className="inline-flex px-2 py-1 rounded-full bg-cyan-500/10 text-cyan-600 font-bold">oaics</span> : item.checkout_probe?.kind === 'cs_live' ? <span title={item.checkout_probe.reason || ''} className="inline-flex px-2 py-1 rounded-full bg-emerald-500/10 text-emerald-600 font-bold">cs_live</span> : item.checkout_probe?.status === 'disabled' ? <span title={item.checkout_probe.reason || ''} className="inline-flex px-2 py-1 rounded-full bg-slate-500/10 text-slate-500 font-bold">未开启</span> : <span title={item.checkout_probe?.reason || '尚未检测'} className="inline-flex px-2 py-1 rounded-full bg-amber-500/10 text-amber-600 font-bold">未知</span>}</td>
+                            <td className="p-3 text-center"><span className={`inline-flex px-2 py-1 rounded-full font-bold ${isDark ? 'bg-emerald-400/20 text-emerald-200' : 'bg-emerald-500/15 text-emerald-700'}`}>已保存</span></td>
+                            <td className="p-3 text-center">{item.plus_trial?.status === 'eligible' ? <span title={item.plus_trial.reason || ''} className={`inline-flex px-2 py-1 rounded-full font-bold ${isDark ? 'bg-violet-400/20 text-violet-200' : 'bg-violet-500/15 text-violet-700'}`}>有资格</span> : item.plus_trial?.status === 'ineligible' ? <span title={item.plus_trial.reason || ''} className={`inline-flex px-2 py-1 rounded-full border font-extrabold shadow-sm ${isDark ? 'border-rose-400/50 bg-rose-400/20 text-rose-200' : 'border-rose-500/40 bg-rose-500/15 text-rose-700'}`}>无资格</span> : <span title={item.plus_trial?.reason || '尚未检测'} className={`inline-flex px-2 py-1 rounded-full font-bold ${isDark ? 'bg-amber-400/20 text-amber-200' : 'bg-amber-500/15 text-amber-700'}`}>未知</span>}</td>
+                            <td className="p-3 text-center">{item.checkout_probe?.kind === 'oaics' ? <span title={item.checkout_probe.reason || ''} className={`inline-flex px-2 py-1 rounded-full font-bold ${isDark ? 'bg-cyan-400/20 text-cyan-200' : 'bg-cyan-500/15 text-cyan-700'}`}>oaics</span> : item.checkout_probe?.kind === 'cs_live' ? <span title={item.checkout_probe.reason || ''} className={`inline-flex px-2 py-1 rounded-full font-bold ${isDark ? 'bg-emerald-400/20 text-emerald-200' : 'bg-emerald-500/15 text-emerald-700'}`}>cs_live</span> : item.checkout_probe?.status === 'disabled' ? <span title={item.checkout_probe.reason || ''} className={`inline-flex px-2 py-1 rounded-full font-bold ${isDark ? 'bg-slate-400/20 text-slate-200' : 'bg-slate-500/15 text-slate-600'}`}>未开启</span> : <span title={item.checkout_probe?.reason || '尚未检测'} className={`inline-flex px-2 py-1 rounded-full font-bold ${isDark ? 'bg-amber-400/20 text-amber-200' : 'bg-amber-500/15 text-amber-700'}`}>未知</span>}</td>
                             <td className={`p-3 text-center ${theme.textSecondary}`}>{rotationDate(item.created_at)}</td>
                             <td className="p-3 text-center"><button onClick={() => void copyChatgptAccountTokens([item.id])} disabled={!!busy} className="px-3 py-1.5 rounded-md bg-blue-600 text-white font-bold disabled:opacity-40 inline-flex items-center gap-1">{busy === 'copy-selected-at' ? <Loader2 className="w-3 h-3 animate-spin" /> : <Copy className="w-3 h-3" />}复制 AT</button></td>
                           </tr>;
                         })}
-                        {!chatgptAccounts.length && <tr><td colSpan={8} className={`p-12 text-center ${theme.textSecondary}`}>{chatgptAccountsLoading ? '正在读取本地 OpenAI 账号…' : '尚未保存包含 AT 的 OpenAI 账号'}</td></tr>}
+                        {!filteredChatgptAccounts.length && <tr><td colSpan={8} className={`p-12 text-center ${theme.textSecondary}`}>{chatgptAccountsLoading ? '正在读取本地 OpenAI 账号…' : chatgptAccounts.length ? '没有符合筛选条件的账号' : '尚未保存包含 AT 的 OpenAI 账号'}</td></tr>}
                       </tbody>
                     </table>
                   </div>
@@ -1847,8 +2049,8 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
                 </div> : <div className="space-y-4">
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     <div className={`p-4 rounded-xl border ${theme.border} ${isDark ? 'bg-slate-900/50' : 'bg-slate-50'}`}><span className={`text-[11px] ${theme.textSecondary}`}>账号总数</span><strong className={`block text-2xl mt-1 ${theme.textPrimary}`}>{rotation.summary.total}</strong></div>
-                    <div className="p-4 rounded-xl border border-emerald-500/20 bg-emerald-500/10"><span className="text-[11px] text-emerald-600 dark:text-emerald-300">状态正常</span><strong className="block text-2xl mt-1 text-emerald-600 dark:text-emerald-300">{rotation.summary.normal}</strong></div>
-                    <div className="p-4 rounded-xl border border-rose-500/20 bg-rose-500/10"><span className="text-[11px] text-rose-600 dark:text-rose-300">状态异常</span><strong className="block text-2xl mt-1 text-rose-600 dark:text-rose-300">{rotation.summary.error}</strong></div>
+                    <div className={`p-4 rounded-xl border ${isDark ? 'border-emerald-400/40 bg-emerald-400/15' : 'border-emerald-500/30 bg-emerald-500/10'}`}><span className={`text-[11px] ${isDark ? 'text-emerald-300' : 'text-emerald-700'}`}>状态正常</span><strong className={`block text-2xl mt-1 ${isDark ? 'text-emerald-300' : 'text-emerald-700'}`}>{rotation.summary.normal}</strong></div>
+                    <div className={`p-4 rounded-xl border ${isDark ? 'border-rose-400/40 bg-rose-400/15' : 'border-rose-500/30 bg-rose-500/10'}`}><span className={`text-[11px] ${isDark ? 'text-rose-300' : 'text-rose-700'}`}>状态异常</span><strong className={`block text-2xl mt-1 ${isDark ? 'text-rose-300' : 'text-rose-700'}`}>{rotation.summary.error}</strong></div>
                   </div>
 
                   <div className={`p-3 rounded-xl border ${theme.border} flex flex-col lg:flex-row lg:items-end gap-3`}>
@@ -1939,18 +2141,18 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
             </div>
           </section>
 
-          <section className="order-1 min-h-0 overflow-hidden flex flex-col rounded-xl border border-slate-700/80 bg-[#0d1117] shadow-[0_10px_30px_rgba(15,23,42,0.12)]">
-            <div className="px-4 py-3 border-b border-[#30363d] bg-[#161b22] flex items-center justify-between">
+          <section className="order-1 shrink-0 overflow-hidden flex flex-col rounded-xl border border-slate-700/80 bg-[#0d1117] shadow-[0_10px_30px_rgba(15,23,42,0.12)]">
+            <div className="shrink-0 px-4 py-3 border-b border-[#30363d] bg-[#161b22] flex items-center justify-between">
               <div className="flex items-center gap-2.5">
                 <span className="flex items-center gap-1.5" aria-hidden="true"><i className="w-2 h-2 rounded-full bg-rose-500/90" /><i className="w-2 h-2 rounded-full bg-amber-400/90" /><i className="w-2 h-2 rounded-full bg-emerald-500/90" /></span>
                 <FileText className="w-3.5 h-3.5 text-slate-400" /><h3 className="text-xs font-semibold font-mono tracking-wide text-slate-200">日志</h3>
               </div>
               <div className="flex items-center gap-1.5">
                 <span className="px-2 py-0.5 rounded-md border border-slate-700 bg-slate-800/80 font-mono text-[10px] text-slate-400">{logs.length} 条</span>
-                <button type="button" onClick={() => setLogClearBefore(Math.max(Date.now() / 1000, ...logs.map((log) => log.at)))} disabled={!logs.length} className="inline-flex items-center gap-1 rounded-md border border-rose-500/30 bg-rose-500/10 px-2 py-1 text-[10px] font-bold text-rose-400 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-40"><Trash2 className="h-3 w-3" />清理日志</button>
+                <button type="button" onClick={() => { logPinnedToBottomRef.current = true; setLogClearBefore(Math.max(Date.now() / 1000, ...logs.map((log) => log.at))); }} disabled={!logs.length} className="inline-flex items-center gap-1 rounded-md border border-rose-500/30 bg-rose-500/10 px-2 py-1 text-[10px] font-bold text-rose-400 transition hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-40"><Trash2 className="h-3 w-3" />清理日志</button>
               </div>
             </div>
-            <div ref={logContainerRef} className={`p-3 flex-1 min-h-0 max-h-[420px] overflow-y-auto bg-[#0d1117] font-mono [scrollbar-color:#475569_#0d1117] [scrollbar-width:thin] ${tab === 'registration' ? '' : 'xl:max-h-none'}`}>
+            <div ref={logContainerRef} onScroll={handleLogScroll} style={{ height: 420, minHeight: 420, maxHeight: 420 }} className="flex-none overflow-y-auto bg-[#0d1117] p-3 font-mono [scrollbar-color:#475569_#0d1117] [scrollbar-width:thin]">
               {logs.length ? <div className="space-y-1">{logs.map((log) => {
                 const toneStyle = log.tone === 'success'
                   ? 'border-emerald-500/20 bg-emerald-500/[0.07] text-emerald-400'
@@ -1963,7 +2165,7 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
                   <p className="break-words"><time className="opacity-50 mr-2">{log.at ? new Date(log.at * 1000).toLocaleTimeString('zh-CN', { hour12: false }) : '--'}</time><b>步骤 {log.step}：</b>{log.message}</p>
                   {log.requiresVisibleBrowser && <div className="mt-2 flex justify-end"><button type="button" onClick={() => void openVisibleRegistrationBrowser()} disabled={!!busy} className="inline-flex items-center gap-1.5 rounded-md border border-amber-400/40 bg-amber-400/10 px-2.5 py-1.5 text-[10px] font-bold text-amber-200 transition hover:bg-amber-400/20 disabled:opacity-50"><Play className="h-3 w-3" />打开验证浏览器</button></div>}
                 </div>;
-              })}</div> : <div className="min-h-44 flex items-center justify-center text-center text-[11px] leading-5 text-slate-500"><span className="mr-2 text-emerald-500">$</span>注册日志将在这里自动滚动显示<span className="ml-1 inline-block w-1.5 h-3 bg-slate-500/70 animate-pulse" aria-hidden="true" /></div>}
+              })}</div> : <div className="h-full flex items-center justify-center text-center text-[11px] leading-5 text-slate-500"><span className="mr-2 text-emerald-500">$</span>注册日志将在这里自动滚动显示<span className="ml-1 inline-block w-1.5 h-3 bg-slate-500/70 animate-pulse" aria-hidden="true" /></div>}
             </div>
           </section>
 

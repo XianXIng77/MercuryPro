@@ -4,6 +4,49 @@ from __future__ import annotations
 
 from typing import Any
 
+from chatgpt_registration.diagnostics import capture_registration_incident
+
+
+def _capture_diagnostics(
+    *,
+    stage: str,
+    outcome: str,
+    email: str,
+    reason: str = "",
+    page=None,
+    steps=None,
+    extra: dict[str, Any] | None = None,
+    on_progress=None,
+) -> None:
+    """Persist one timestamped log/ incident folder (screenshot + log.txt).
+
+    Best-effort: failures are reported through on_progress only and never
+    propagate into the registration flow.
+    """
+    try:
+        record = capture_registration_incident(
+            stage=stage,
+            outcome=outcome,
+            email=email,
+            reason=reason,
+            page=page,
+            steps=list(steps or []),
+            extra=extra,
+        )
+        if on_progress is not None:
+            if record.get("ok"):
+                on_progress(
+                    f"[chatgpt] diagnostics: saved {stage}:{outcome} -> "
+                    f"{record.get('dir')}"
+                )
+            else:
+                on_progress(
+                    f"[chatgpt] diagnostics: {stage}:{outcome} 保存失败 "
+                    f"({record.get('reason') or '未知原因'})"
+                )
+    except Exception:
+        pass
+
 
 def _wait_for_password_transition(ctx, page, check_cancel, timeout=12.0):
     """Wait until React has replaced the submitted password form.
@@ -812,6 +855,16 @@ def register_chatgpt_account(
             amount=plus_trial.get("amount_text"),
             reason=plus_trial.get("reason"),
         )
+        _capture_diagnostics(
+            stage="plus-trial",
+            outcome=plus_trial_status,
+            email=email,
+            reason=str(plus_trial.get("reason") or ""),
+            page=page,
+            steps=steps,
+            extra={"plus_trial": plus_trial},
+            on_progress=on_progress,
+        )
         if checkout_probe_enabled:
             _step("checkout_kind", "checking")
             checkout_probe = ctx._check_checkout_kind(
@@ -823,6 +876,25 @@ def register_chatgpt_account(
                 proxy=str(checkout_proxy or ""),
             )
             checkout_kind = str(checkout_probe.get("kind") or "unknown")
+            _capture_diagnostics(
+                stage="checkout-kind",
+                outcome=(
+                    checkout_kind
+                    if str(checkout_probe.get("status") or "") == "detected"
+                    else str(checkout_probe.get("status") or "unknown")
+                ),
+                email=email,
+                reason=str(checkout_probe.get("reason") or ""),
+                page=page,
+                steps=steps,
+                extra={
+                    "checkout_probe": checkout_probe,
+                    "checkout_proxy_configured": bool(
+                        str(checkout_proxy or "").strip()
+                    ),
+                },
+                on_progress=on_progress,
+            )
         else:
             checkout_probe = {
                 "status": "disabled",
@@ -857,6 +929,16 @@ def register_chatgpt_account(
         }
     except ctx.ChatGPTRegistrationError as e:
         _step("flow", "error", error=str(e)[:200])
+        _capture_diagnostics(
+            stage="registration-error",
+            outcome="error",
+            email=email,
+            reason=str(e),
+            page=page,
+            steps=steps,
+            extra={"url": getattr(page, "url", "") or ""},
+            on_progress=on_progress,
+        )
         _hold_visible_failure()
         return {"ok": False, "email": email, "error": str(e), "steps": steps}
     except Exception as e:
@@ -865,6 +947,19 @@ def register_chatgpt_account(
             "exception",
             error=str(e)[:200],
             traceback=ctx.traceback.format_exc()[-500:],
+        )
+        _capture_diagnostics(
+            stage="registration-error",
+            outcome="exception",
+            email=email,
+            reason=f"{type(e).__name__}: {e}",
+            page=page,
+            steps=steps,
+            extra={
+                "url": getattr(page, "url", "") or "",
+                "traceback": ctx.traceback.format_exc()[-1500:],
+            },
+            on_progress=on_progress,
         )
         _hold_visible_failure()
         return {
