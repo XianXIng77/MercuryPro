@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { motion } from 'motion/react';
 import {
   Mail,
+  ScrollText,
   UserPlus,
 } from 'lucide-react';
 import { NavTab, StylePreset } from '../types';
@@ -39,6 +40,11 @@ export const WorkbenchSidebarNav: React.FC<WorkbenchSidebarNavProps> = ({
       id: 'register',
       label: '注册',
       icon: <UserPlus className="w-5 h-5" />,
+    },
+    {
+      id: 'logs',
+      label: '日志',
+      icon: <ScrollText className="w-5 h-5" />,
     },
   ];
 

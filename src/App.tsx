@@ -13,39 +13,51 @@ import { MailAccountList } from './components/MailAccountList';
 import { MailboxInboxView } from './components/MailboxInboxView';
 import { Navbar } from './components/Navbar';
 import { WorkbenchSidebarNav } from './components/WorkbenchSidebarNav';
+import { authApi } from './api/auth';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<NavTab>('email');
   const [activeAccount, setActiveAccount] = useState<MailAccount | null>(null);
-  const [sessionUser, setSessionUser] = useState<string | null>(() => {
-    try {
-      return window.localStorage.getItem('mercurypro-session-user');
-    } catch {
-      return null;
-    }
-  });
+  const [sessionUser, setSessionUser] = useState<string | null>(null);
+  const [authChecked, setAuthChecked] = useState(false);
   const [currentPresetId, setCurrentPresetId] = useState<StylePresetId>(() => {
     const saved = typeof window === 'undefined' ? '' : window.localStorage.getItem('mercurypro-style-preset');
     return STYLE_PRESETS.some((preset) => preset.id === saved) ? String(saved) : 'mist-blue-gray';
   });
 
+  // 启动时向后端查询当前会话(HttpOnly Cookie 携带,自动恢复登录态)
+  useEffect(() => {
+    let cancelled = false;
+    authApi
+      .me()
+      .then(({ user }) => {
+        if (!cancelled && user?.email) setSessionUser(user.email);
+      })
+      .catch(() => {
+        /* 未登录,停留登录页 */
+      })
+      .finally(() => {
+        if (!cancelled) setAuthChecked(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const handleLoginSuccess = (email: string) => {
-    try {
-      window.localStorage.setItem('mercurypro-session-user', email);
-    } catch {
-      /* 隐私模式下忽略持久化失败 */
-    }
     setSessionUser(email);
   };
 
   const handleLogout = () => {
-    try {
-      window.localStorage.removeItem('mercurypro-session-user');
-    } catch {
-      /* ignore */
-    }
-    setSessionUser(null);
-    setActiveAccount(null);
+    authApi
+      .logout()
+      .catch(() => {
+        /* 后端不可达时也直接本地退出 */
+      })
+      .finally(() => {
+        setSessionUser(null);
+        setActiveAccount(null);
+      });
   };
 
   const currentPreset = useMemo(
@@ -61,7 +73,12 @@ export default function App() {
     alert('请先进入具体邮箱并获取邮件后，再执行 AI 智能分类。');
   };
 
-  // 未登录:渲染登录页(演示模式,后续接入 fastapi-users 后替换为真实校验)
+  // 会话检查中:先不渲染,避免已登录用户刷新时闪现登录页
+  if (!authChecked) {
+    return null;
+  }
+
+  // 未登录:渲染登录页(会话由后端 /api/auth 的 HttpOnly Cookie 维护)
   if (!sessionUser) {
     return <LoginView currentPreset={currentPreset} onLoginSuccess={handleLoginSuccess} />;
   }

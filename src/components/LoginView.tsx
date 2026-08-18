@@ -1,7 +1,8 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Eye, EyeOff, Github, Loader2, Lock, Mail, Sparkles, User } from 'lucide-react';
 import type { StylePreset } from '../types';
+import { authApi } from '../api/auth';
 
 interface LoginViewProps {
   currentPreset: StylePreset;
@@ -48,23 +49,24 @@ const QqLogo: React.FC<{ className?: string }> = ({ className }) => (
 );
 
 /**
- * 高互动登录页:
+ * 登录页:
  * - 呼吸光晕 + 视差网格背景 + 漂浮粒子
  * - 玻璃拟态卡片,输入框聚焦时高亮 + 图标动效
  * - 密码可见切换、记住我、错误抖动、成功过渡动画
+ * - 邮箱+密码登录/注册,走后端 /api/auth/*;第三方登录暂未接入
  */
 export const LoginView: React.FC<LoginViewProps> = ({ currentPreset, onLoginSuccess }) => {
   const isDark = currentPreset.mode === 'dark';
 
   const [mode, setMode] = useState<'login' | 'register'>('login');
-  const [email, setEmail] = useState('');
+  // 默认填充内置管理员账号,可直接登录
+  const [email, setEmail] = useState('m@xianxing.art');
   const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
+  const [password, setPassword] = useState('xianxing1');
   const [showPassword, setShowPassword] = useState(false);
   const [remember, setRemember] = useState(true);
   const [error, setError] = useState('');
   const [status, setStatus] = useState<'idle' | 'submitting' | 'success'>('idle');
-  const [oauthProvider, setOauthProvider] = useState<'google' | 'github' | 'wechat' | 'qq' | null>(null);
 
   // ── 漂浮粒子背景 ─────────────────────────────────────────────
   const particles = useMemo(
@@ -81,36 +83,14 @@ export const LoginView: React.FC<LoginViewProps> = ({ currentPreset, onLoginSucc
     [],
   );
 
-  // ── 提交 ─────────────────────────────────────────────────────
-  useEffect(() => {
-    if (status !== 'submitting') return;
-    // 演示模式:模拟网络延迟后直接成功
-    const timer = window.setTimeout(() => {
-      setStatus('success');
-      window.setTimeout(() => onLoginSuccess(email || 'demo@mercury.pro'), 900);
-    }, 1100);
-    return () => window.clearTimeout(timer);
-  }, [status, email, onLoginSuccess]);
-
-  // ── OAuth 第三方登录(演示模式:模拟跳转回调) ────────────────────
-  useEffect(() => {
-    if (!oauthProvider) return;
-    // 接入 fastapi-users 后,这里改为 window.location.href = `/api/v1/auth/oauth/${oauthProvider}/authorize`
-    const demoEmails = { google: 'user@gmail.com', github: 'user@github', wechat: 'user@wechat', qq: 'user@qq.com' } as const;
-    const timer = window.setTimeout(() => {
-      setStatus('success');
-      window.setTimeout(() => onLoginSuccess(demoEmails[oauthProvider]), 900);
-    }, 1300);
-    return () => window.clearTimeout(timer);
-  }, [oauthProvider, onLoginSuccess]);
-
-  const handleOauthClick = (provider: 'google' | 'github' | 'wechat' | 'qq') => {
-    if (status !== 'idle' || oauthProvider) return;
-    setError('');
-    setOauthProvider(provider);
+  // ── OAuth 第三方登录(暂未接入,点击提示) ────────────────────
+  const handleOauthClick = () => {
+    if (status !== 'idle') return;
+    setError('第三方登录暂未接入,请使用邮箱登录');
   };
 
-  const handleSubmit = (event: React.FormEvent) => {
+  // ── 提交(登录/注册调用后端 /api/auth/*) ─────────────────────
+  const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (status !== 'idle') return;
     setError('');
@@ -124,10 +104,21 @@ export const LoginView: React.FC<LoginViewProps> = ({ currentPreset, onLoginSucc
       return;
     }
     if (password.length < 8) {
-      setError(mode === 'login' ? '密码至少 8 位（演示模式：任意邮箱 + 8 位以上密码即可进入）' : '密码至少需要 8 个字符');
+      setError(mode === 'login' ? '密码至少 8 位' : '密码至少需要 8 个字符');
       return;
     }
     setStatus('submitting');
+    try {
+      const { user } =
+        mode === 'login'
+          ? await authApi.login(email.trim(), password, remember)
+          : await authApi.register(email.trim(), password, username.trim(), remember);
+      setStatus('success');
+      window.setTimeout(() => onLoginSuccess(user.email), 900);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '网络错误,请稍后重试');
+      setStatus('idle');
+    }
   };
 
   const inputBase =
@@ -335,7 +326,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ currentPreset, onLoginSucc
           </motion.button>
         </form>
 
-        {/* 第三方登录 */}
+        {/* 第三方登录(暂未接入,点击提示) */}
         <div className={`mt-5 border-t pt-4 ${isDark ? 'border-slate-700/60' : 'border-slate-200/80'}`}>
           <p className="mb-3 text-center text-[10px] font-bold uppercase tracking-wider text-slate-400">
             或使用第三方账号登录
@@ -343,51 +334,51 @@ export const LoginView: React.FC<LoginViewProps> = ({ currentPreset, onLoginSucc
           <div className="flex items-center justify-center gap-4">
             <button
               type="button"
-              onClick={() => handleOauthClick('google')}
-              disabled={status !== 'idle' || !!oauthProvider}
-              title="谷歌邮箱登录"
-              aria-label="谷歌邮箱登录"
+              onClick={handleOauthClick}
+              disabled={status !== 'idle'}
+              title="谷歌邮箱登录（暂未接入）"
+              aria-label="谷歌邮箱登录（暂未接入）"
               className={`flex h-11 w-11 items-center justify-center rounded-full border transition-all hover:-translate-y-0.5 hover:border-blue-500/50 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0 ${
                 isDark ? 'border-slate-600/70 bg-slate-800/60 text-slate-200 hover:bg-slate-800' : 'border-slate-200 bg-white/80 text-slate-700 hover:bg-white'
               }`}
             >
-              {oauthProvider === 'google' ? <Loader2 className="h-5 w-5 animate-spin" /> : <GoogleLogo className="h-5 w-5" />}
+              <GoogleLogo className="h-5 w-5" />
             </button>
             <button
               type="button"
-              onClick={() => handleOauthClick('github')}
-              disabled={status !== 'idle' || !!oauthProvider}
-              title="GitHub 登录"
-              aria-label="GitHub 登录"
+              onClick={handleOauthClick}
+              disabled={status !== 'idle'}
+              title="GitHub 登录（暂未接入）"
+              aria-label="GitHub 登录（暂未接入）"
               className={`flex h-11 w-11 items-center justify-center rounded-full border transition-all hover:-translate-y-0.5 hover:border-blue-500/50 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0 ${
                 isDark ? 'border-slate-600/70 bg-slate-800/60 text-slate-200 hover:bg-slate-800' : 'border-slate-200 bg-white/80 text-slate-700 hover:bg-white'
               }`}
             >
-              {oauthProvider === 'github' ? <Loader2 className="h-5 w-5 animate-spin" /> : <Github className="h-5 w-5" />}
+              <Github className="h-5 w-5" />
             </button>
             <button
               type="button"
-              onClick={() => handleOauthClick('wechat')}
-              disabled={status !== 'idle' || !!oauthProvider}
-              title="微信登录"
-              aria-label="微信登录"
+              onClick={handleOauthClick}
+              disabled={status !== 'idle'}
+              title="微信登录（暂未接入）"
+              aria-label="微信登录（暂未接入）"
               className={`flex h-11 w-11 items-center justify-center rounded-full border transition-all hover:-translate-y-0.5 hover:border-blue-500/50 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0 ${
                 isDark ? 'border-slate-600/70 bg-slate-800/60 text-slate-200 hover:bg-slate-800' : 'border-slate-200 bg-white/80 text-slate-700 hover:bg-white'
               }`}
             >
-              {oauthProvider === 'wechat' ? <Loader2 className="h-5 w-5 animate-spin" /> : <WechatLogo className="h-5 w-5" />}
+              <WechatLogo className="h-5 w-5" />
             </button>
             <button
               type="button"
-              onClick={() => handleOauthClick('qq')}
-              disabled={status !== 'idle' || !!oauthProvider}
-              title="QQ 登录"
-              aria-label="QQ 登录"
+              onClick={handleOauthClick}
+              disabled={status !== 'idle'}
+              title="QQ 登录（暂未接入）"
+              aria-label="QQ 登录（暂未接入）"
               className={`flex h-11 w-11 items-center justify-center rounded-full border transition-all hover:-translate-y-0.5 hover:border-blue-500/50 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0 ${
                 isDark ? 'border-slate-600/70 bg-slate-800/60 text-slate-200 hover:bg-slate-800' : 'border-slate-200 bg-white/80 text-slate-700 hover:bg-white'
               }`}
             >
-              {oauthProvider === 'qq' ? <Loader2 className="h-5 w-5 animate-spin" /> : <QqLogo className="h-5 w-5" />}
+              <QqLogo className="h-5 w-5" />
             </button>
           </div>
         </div>

@@ -91,7 +91,7 @@ export interface StylePreset {
   };
 }
 
-export type NavTab = 'email' | 'register' | 'calendar' | 'contacts' | 'analytics' | 'tickets' | 'settings';
+export type NavTab = 'email' | 'register' | 'logs' | 'calendar' | 'contacts' | 'analytics' | 'tickets' | 'settings';
 
 export interface MailAccount {
   id: string;
@@ -126,3 +126,41 @@ export interface MailAccount {
   refreshResult: '未刷新' | '刷新成功' | '刷新失败';
   messages: Email[];
 }
+
+export interface DomainEmailConfig {
+  id: string;
+  accountId?: number | string;
+  accountName: string;
+  emailAddress: string;
+  domain: string;           // 用户填的域名，比如 example.com
+  qqAuthCode: string;       // 用户填的 QQ 授权码
+  useRandomPrefix?: boolean; // 是否使用随机前缀
+  protocol: 'IMAP' | 'POP3' | 'Exchange';
+  serverHost: string;
+  status: 'active' | 'syncing' | 'error' | 'idle';
+  unreadCount: number;
+  totalMails: number;
+  lastSyncTime: string;
+  tags: string[];
+  department?: string;
+  clientId?: string;
+  refreshToken?: string;
+  accessToken?: string;
+  scope?: string;
+  grantType?: string;
+  backendStatus?: string;
+  usageStatus: '未用' | '使用中' | '已用';
+  registrationUseCount?: number;
+  registrationUseLimit?: number;
+  grokRegistrationUseCount?: number;
+  grokRegistrationUseLimit?: number;
+  openaiRegistrationUseCount?: number;
+  openaiRegistrationUseLimit?: number;
+  openaiRegistrationUsed?: boolean;
+  openaiRegistrationFailed?: boolean;
+  openaiRegistrationFailureReason?: string;
+  createdTime: string;
+  refreshResult: '未刷新' | '刷新成功' | '刷新失败';
+  messages: Email[];
+}
+

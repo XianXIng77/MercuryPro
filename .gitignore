@@ -8,6 +8,7 @@ __pycache__/
 .update-backups/
 *.log
 data/*.json
+data/jwt-secret.txt
 grok-engine/runtime/
 grok-engine/config/config.json
 grok-engine/vendor/turnstile-solver/proxies.txt

@@ -45,6 +45,20 @@ def normalize_mail_provider(provider: str | None, *, base_url: str | None = None
     base = (base_url or "").strip().lower()
     if p in {"imap", "imaps", "imap_mail", "imap-mail"}:
         return "imap"
+    if p in {
+        "domain_qq",
+        "domain-qq",
+        "qq_domain",
+        "qqdomain",
+        "qq_forward",
+        "domain_mail_qq",
+        "domain_email",
+        "domain-email",
+        "domain_mail",
+        "cloudflare_forward",
+        "cloudflare-forward",
+    }:
+        return "imap"
     if p in {"yyds", "yydsmail", "yyds_mail", "vip215", "215", "maliapi"}:
         return "yyds"
     if p in {"custom", "selfhosted", "self-hosted", "自定义"}:

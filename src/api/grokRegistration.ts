@@ -15,7 +15,7 @@ export interface GrokConfig {
   captcha_provider: 'local' | 'yescaptcha';
   local_solver_url: string;
   yescaptcha_key: string;
-  mail_provider: 'custom' | 'hotmail_local' | 'smsbower' | 'naturalflower';
+  mail_provider: 'custom' | 'hotmail_local' | 'smsbower' | 'naturalflower' | 'domain_email';
   mail_base_url: string;
   mail_api_key: string;
   mail_domain: string;
@@ -24,6 +24,9 @@ export interface GrokConfig {
   smsbower_api_key: string;
   smsbower_base_url: string;
   naturalflower_mailboxes: string;
+  domain_email_domain: string;
+  domain_email_qq: string;
+  domain_email_auth_code: string;
   hotmail_local_base_url: string;
   hotmail_account_source: 'mail_management' | 'manual';
   proxy: string;
@@ -174,6 +177,16 @@ export interface BrowserDebugStatus {
   viewer_url: string;
 }
 
+export interface DomainMailTestResult {
+  ok: boolean;
+  host?: string;
+  port?: number;
+  username?: string;
+  folder?: string;
+  domain?: string;
+  error?: string;
+}
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
     headers: { 'Content-Type': 'application/json' },
@@ -226,6 +239,10 @@ export const grokRegistrationApi = {
   deleteHotmailUsed: (registrationTarget: GrokConfig['registration_target']) => request<Record<string, any>>(`/api/grok/mail/hotmail/accounts/used?registration_target=${encodeURIComponent(registrationTarget)}`, { method: 'DELETE' }),
   deleteHotmailUnhealthy: () => request<Record<string, any>>('/api/grok/mail/hotmail/accounts/unhealthy', { method: 'DELETE' }),
   testHotmail: (config: GrokConfig) => request<Record<string, any>>('/api/grok/mail/hotmail/test', { method: 'POST', body: JSON.stringify(config) }),
+  domainMailTest: (payload: { domain: string; qq_email: string; qq_auth_code: string }) => request<DomainMailTestResult>('/api/grok/mail/domain/test', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }),
   rotation: (params: { status?: string; keyword?: string; page?: number; pageSize?: number }) => {
     const query = new URLSearchParams({
       page: String(params.page || 1),

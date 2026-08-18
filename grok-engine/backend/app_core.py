@@ -41,6 +41,7 @@ def load_config(ctx):
                 "hotmail_local",
                 "smsbower",
                 "naturalflower",
+                "domain_email",
             }
             else "custom"
         )
@@ -135,6 +136,13 @@ def save_config(ctx, data):
             "mail_api_key": str(clean.get("smsbower_api_key") or ""),
             "mail_domain": "",
         }
+    elif active_provider == "domain_email":
+        # 组合参数:mail_api_key = "QQ邮箱:授权码",mail_base_url = IMAP 地址。
+        profiles["domain_email"] = {
+            "mail_base_url": "imaps://imap.qq.com/INBOX",
+            "mail_api_key": _domain_email_imap_key(clean),
+            "mail_domain": str(clean.get("domain_email_domain") or ""),
+        }
     clean["mail_provider_configs"] = profiles
     selected_format = str(clean.get("registration_json_format") or "cpa").lower()
     clean["registration_json_format"] = (
@@ -163,11 +171,27 @@ def save_config(ctx, data):
     return clean
 
 
+def _domain_email_imap_key(cfg) -> str:
+    """Compose the IMAP credential string `qq邮箱:授权码` for domain email."""
+    qq = str(cfg.get("domain_email_qq") or "").strip()
+    code = str(cfg.get("domain_email_auth_code") or "").strip()
+    if qq and code:
+        return f"{qq}:{code}"
+    return ""
+
+
 def _normalize_mail_provider_configs(ctx, value):
     raw = value if isinstance(value, dict) else {}
     result: dict[str, dict[str, str]] = {}
     defaults = ctx.DEFAULT_CONFIG.get("mail_provider_configs") or {}
-    for provider in ("yyds", "custom", "cloudflare_grokfree", "stalwart", "smsbower"):
+    for provider in (
+        "yyds",
+        "custom",
+        "cloudflare_grokfree",
+        "stalwart",
+        "smsbower",
+        "domain_email",
+    ):
         item = raw.get(provider) if isinstance(raw.get(provider), dict) else {}
         fallback = (
             defaults.get(provider) if isinstance(defaults.get(provider), dict) else {}

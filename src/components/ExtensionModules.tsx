@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Calendar, Users, BarChart3, Settings, Plus, Clock, Shield, Bell } from 'lucide-react';
 import { NavTab, StylePreset } from '../types';
 import { GrokRegistrationPanel } from './GrokRegistrationPanel';
+import { RegistrationLogsPanel } from './RegistrationLogsPanel';
 
 interface ExtensionModulesProps {
   activeTab: NavTab;
@@ -17,6 +18,10 @@ export const ExtensionModules: React.FC<ExtensionModulesProps> = ({
 
   if (activeTab === 'register') {
     return <GrokRegistrationPanel currentPreset={currentPreset} />;
+  }
+
+  if (activeTab === 'logs') {
+    return <RegistrationLogsPanel currentPreset={currentPreset} />;
   }
 
   if (activeTab === 'calendar') {

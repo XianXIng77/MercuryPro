@@ -112,6 +112,12 @@ def mail_provider_presets(ctx, response):
                 "available": True,
                 "naturalflower_mailboxes": "",
             },
+            "domain_email": {
+                "available": True,
+                "domain_email_domain": "",
+                "domain_email_qq": "",
+                "domain_email_auth_code": "",
+            },
         }
     }
 
@@ -250,6 +256,26 @@ def hotmail_test(ctx, settings=None):
         raise ctx.HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+def domain_mail_test(ctx, request):
+    """Verify Cloudflare 转发域名 + QQ 邮箱授权码(IMAP)连接是否可用。"""
+    from mail_protocols.imap_mail import imap_test_connection
+
+    domain = str(request.domain or "").strip().lstrip("@").strip(".").lower()
+    qq_email = str(request.qq_email or "").strip()
+    qq_auth_code = str(request.qq_auth_code or "").strip()
+    if not domain:
+        return {"ok": False, "error": "请填写 Cloudflare 转发域名(如 example.com)"}
+    if not qq_email or not qq_auth_code:
+        return {"ok": False, "error": "请填写 QQ 邮箱与授权码"}
+    result = imap_test_connection(
+        base_url="imaps://imap.qq.com/INBOX",
+        api_key=f"{qq_email}:{qq_auth_code}",
+    )
+    if result.get("ok"):
+        result["domain"] = domain
+    return result
+
+
 def put_config(ctx, settings):
     return {"ok": True, "config": ctx.save_config(settings.model_dump())}
 
@@ -331,6 +357,33 @@ def start_register(ctx, settings=None, paused=False):
             raise ctx.HTTPException(status_code=400, detail="SMSBower API 地址未填写，请在邮箱配置中填写")
         if int(cfg.get("count") or 0) < 1:
             raise ctx.HTTPException(status_code=400, detail="注册数量必须大于 0")
+    elif cfg.get("mail_provider") == "domain_email":
+        # 域名邮箱:Cloudflare 域名转发到 QQ 邮箱。注册时随机生成
+        # 中文拼音前缀(如 chenjiahao2001@example.com),验证码经 QQ IMAP 收取。
+        if target != "chatgpt":
+            raise ctx.HTTPException(
+                status_code=400, detail="域名邮箱(Cloudflare 转发)仅支持 OpenAI/ChatGPT 注册"
+            )
+        domain_email_domain = str(
+            cfg.get("domain_email_domain") or ""
+        ).strip().lstrip("@").strip(".").lower()
+        domain_email_qq = str(cfg.get("domain_email_qq") or "").strip()
+        domain_email_auth_code = str(
+            cfg.get("domain_email_auth_code") or ""
+        ).strip()
+        if not domain_email_domain:
+            raise ctx.HTTPException(
+                status_code=400, detail="请填写 Cloudflare 转发域名(如 example.com)"
+            )
+        if not domain_email_qq:
+            raise ctx.HTTPException(status_code=400, detail="请填写接收转发的 QQ 邮箱")
+        if not domain_email_auth_code:
+            raise ctx.HTTPException(status_code=400, detail="请填写 QQ 邮箱授权码(IMAP/SMTP)")
+        if int(cfg.get("count") or 0) < 1:
+            raise ctx.HTTPException(status_code=400, detail="注册数量必须大于 0")
+        cfg["mail_domain"] = domain_email_domain
+        cfg["mail_api_key"] = f"{domain_email_qq}:{domain_email_auth_code}"
+        cfg["mail_base_url"] = "imaps://imap.qq.com/INBOX"
     elif int(cfg.get("count") or 0) < 1:
         raise ctx.HTTPException(status_code=400, detail="注册数量必须大于 0")
     cfg["concurrency"] = _effective_registration_concurrency(cfg, target)

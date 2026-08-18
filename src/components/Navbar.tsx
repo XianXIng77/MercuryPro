@@ -46,6 +46,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             }`}>
               {activeTab === 'email' && '邮箱管理'}
               {activeTab === 'register' && '注册'}
+              {activeTab === 'logs' && '注册诊断日志'}
             </span>
           </div>
         </div>

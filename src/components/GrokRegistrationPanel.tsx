@@ -64,6 +64,9 @@ const DEFAULT_CONFIG: GrokConfig = {
   smsbower_api_key: '',
   smsbower_base_url: '',
   naturalflower_mailboxes: '',
+  domain_email_domain: '',
+  domain_email_qq: '',
+  domain_email_auth_code: '',
   hotmail_local_base_url: 'http://127.0.0.1:17373',
   hotmail_account_source: 'mail_management',
   proxy: '',
@@ -87,6 +90,7 @@ const DEFAULT_CONFIG: GrokConfig = {
 const FINISHED = new Set(['done', 'success', 'completed', 'partial', 'error', 'failed', 'cancelled', 'stopped']);
 const COMPLETED_BATCH = new Set(['done', 'success', 'completed', 'partial', 'error', 'failed']);
 const CONCURRENCY_WARNING_KEY = 'mercurypro_grok_concurrency_warning_ack';
+const DOMAIN_EMAIL_STORAGE_KEY = 'mercurypro_domain_email_config';
 const EMPTY_ROTATION: RotationList = {
   items: [], total: 0, page: 1, page_size: 20, pages: 1,
   summary: { total: 0, normal: 0, error: 0 }, poll: {},
@@ -108,6 +112,7 @@ function mergeConfig(value: Partial<GrokConfig>): GrokConfig {
   const mailProvider = value.mail_provider === 'hotmail_local' ? 'hotmail_local'
     : value.mail_provider === 'smsbower' && value.registration_target === 'chatgpt' ? 'smsbower'
     : value.mail_provider === 'naturalflower' && value.registration_target === 'chatgpt' ? 'naturalflower'
+    : value.mail_provider === 'domain_email' && value.registration_target === 'chatgpt' ? 'domain_email'
     : 'custom';
   return {
     ...DEFAULT_CONFIG,
@@ -438,6 +443,8 @@ function translateStructuredChatgptMessage(text: string): string {
     detected: '已检测到 Cookie 弹窗',
     clicking: '正在点击“全部接受”',
     accepted: '已点击“Accept all”',
+    accepted_after_click: '已点击“Accept all”，弹窗残留但不影响继续',
+    click_attempted: '已尝试点击，页面响应异常但授权通常已生效，继续注册',
     click_not_applied: '点击后弹窗仍存在，正在重试',
     unsupported: '已检测到弹窗，但未识别接受按钮',
     not_present: '未出现 Cookie 弹窗，无需处理',
@@ -693,7 +700,26 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
   const theme = currentPreset.themeClasses;
   const isDark = currentPreset.mode === 'dark';
   const [tab, setTab] = useState<ConfigTab>('registration');
-  const [config, setConfig] = useState<GrokConfig>(DEFAULT_CONFIG);
+  // 域名邮箱配置:初始化时先用浏览器记住的域名 / QQ 邮箱 / 授权码填充,
+  // 避免加载后端配置前被默认空值覆盖本地缓存。
+  const [config, setConfig] = useState<GrokConfig>(() => {
+    let remembered: Partial<GrokConfig> = {};
+    try {
+      const saved = window.localStorage.getItem(DOMAIN_EMAIL_STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved) as Partial<GrokConfig>;
+        if (parsed && typeof parsed === 'object') remembered = parsed;
+      }
+    } catch {
+      /* 忽略损坏的本地缓存 */
+    }
+    return {
+      ...DEFAULT_CONFIG,
+      domain_email_domain: String(remembered.domain_email_domain || ''),
+      domain_email_qq: String(remembered.domain_email_qq || ''),
+      domain_email_auth_code: String(remembered.domain_email_auth_code || ''),
+    };
+  });
   const [monitor, setMonitor] = useState<GrokMonitor>({ batches: [], sessions: [] });
   const [serviceOnline, setServiceOnline] = useState<boolean | null>(null);
   const [performanceProfile, setPerformanceProfile] = useState<RegistrationPerformanceProfile | null>(null);
@@ -736,6 +762,7 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
   const [debugBrowserKey, setDebugBrowserKey] = useState(0);
   const [browserDebugStatus, setBrowserDebugStatus] = useState<BrowserDebugStatus | null>(null);
   const [smsbowerBalance, setSmsbowerBalance] = useState<{ ok: boolean; balance?: number; count?: number; currency?: string; error?: string } | null>(null);
+  const [domainMailTest, setDomainMailTest] = useState<{ ok: boolean; host?: string; folder?: string; domain?: string; error?: string } | null>(null);
   const rotationPageRef = useRef(1);
   const logContainerRef = useRef<HTMLDivElement | null>(null);
   const logPinnedToBottomRef = useRef(true);
@@ -758,14 +785,15 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
     if (config.registration_target === 'chatgpt') {
       options.push({ value: 'smsbower', label: 'SMSBower（购买 Gmail 邮箱）', description: '每次注册前通过 SMSBower 临时购买 Gmail 邮箱并接取验证码' });
       options.push({ value: 'naturalflower', label: 'Naturalflower 取件邮箱', description: '逐行填写 iCloud 邮箱与专属取件 URL' });
+      options.push({ value: 'domain_email', label: '域名邮箱（Cloudflare 转发）', description: '域名转发到 QQ 邮箱，随机生成美式人名前缀（如 james.smith87）注册 OpenAI 并自动接码' });
     }
     return options;
   }, [config.registration_target]);
   const visibleBrowserRequested = config.registration_target === 'chatgpt' ? !config.chatgpt_headless : !config.grok_headless;
   const debugBrowserEnabled = !!browserDebugStatus?.enabled;
   const debugBrowserAvailable = debugBrowserEnabled && !!browserDebugStatus?.viewer_available;
-  const debugBrowserVisible = visibleBrowserRequested;
-  const debugBrowserDisabledReason = !visibleBrowserRequested ? '请先在注册配置中开启”显示注册浏览器”' : '';
+  // 内置"显示浏览器"标签与右侧小浏览器始终可用,不受"显示注册浏览器"开关影响;
+  // 该开关只决定注册时是否在桌面弹出浏览器窗口(无头模式)。
   const browserViewerUrl = browserDebugStatus?.viewer_url || NOVNC_DEBUG_URL;
 
   const setField = <K extends keyof GrokConfig>(key: K, value: GrokConfig[K]) => {
@@ -789,6 +817,36 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
       setBusy(null);
     }
   }, [config.smsbower_api_key, config.smsbower_base_url]);
+
+  const checkDomainMail = useCallback(async () => {
+    const domain = (config.domain_email_domain || '').trim();
+    const qqEmail = (config.domain_email_qq || '').trim();
+    const authCode = (config.domain_email_auth_code || '').trim();
+    if (!domain || !qqEmail || !authCode) return;
+    setBusy('domain-mail-test');
+    try {
+      const result = await grokRegistrationApi.domainMailTest({ domain, qq_email: qqEmail, qq_auth_code: authCode });
+      setDomainMailTest(result);
+    } catch (err: unknown) {
+      setDomainMailTest({ ok: false, error: err instanceof Error ? err.message : '检测失败' });
+    } finally {
+      setBusy(null);
+    }
+  }, [config.domain_email_domain, config.domain_email_qq, config.domain_email_auth_code]);
+
+  // 域名邮箱配置:浏览器记住之前填过的域名 / QQ 邮箱 / 授权码
+  useEffect(() => {
+    try {
+      const payload = {
+        domain_email_domain: config.domain_email_domain || '',
+        domain_email_qq: config.domain_email_qq || '',
+        domain_email_auth_code: config.domain_email_auth_code || '',
+      };
+      window.localStorage.setItem(DOMAIN_EMAIL_STORAGE_KEY, JSON.stringify(payload));
+    } catch {
+      /* 隐私模式下忽略持久化失败 */
+    }
+  }, [config.domain_email_domain, config.domain_email_qq, config.domain_email_auth_code]);
 
   const refreshMonitor = async () => {
     try {
@@ -845,7 +903,23 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
         grokRegistrationApi.config(),
         grokRegistrationApi.browserDebugStatus().catch(() => null),
       ]);
-      setConfig(mergeConfig(loaded));
+      // 用浏览器记住的域名邮箱配置补齐后端配置(后端未保存过时仍保留上次填写)
+      let remembered: Partial<GrokConfig> = {};
+      try {
+        const saved = window.localStorage.getItem(DOMAIN_EMAIL_STORAGE_KEY);
+        if (saved) {
+          const parsed = JSON.parse(saved) as Partial<GrokConfig>;
+          if (parsed && typeof parsed === 'object') remembered = parsed;
+        }
+      } catch {
+        /* 忽略损坏的本地缓存 */
+      }
+      setConfig(mergeConfig({
+        ...loaded,
+        domain_email_domain: String(remembered.domain_email_domain || loaded.domain_email_domain || ''),
+        domain_email_qq: String(remembered.domain_email_qq || loaded.domain_email_qq || ''),
+        domain_email_auth_code: String(remembered.domain_email_auth_code || loaded.domain_email_auth_code || ''),
+      }));
       setBrowserDebugStatus(debugStatus);
       setServiceOnline(true);
       await refreshMonitor();
@@ -1348,7 +1422,7 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
 
   const tabs: Array<{ id: ConfigTab; label: string; icon: React.ReactNode; disabled?: boolean }> = [
     { id: 'registration', label: '注册配置', icon: <Settings2 className="w-4 h-4" /> },
-    { id: 'browser', label: '显示浏览器', icon: <Globe2 className="w-4 h-4" />, disabled: !debugBrowserVisible },
+    { id: 'browser', label: '显示浏览器', icon: <Globe2 className="w-4 h-4" /> },
     { id: 'mail', label: '邮箱配置', icon: <Mail className="w-4 h-4" /> },
     { id: 'proxy', label: '代理配置', icon: <Globe2 className="w-4 h-4" /> },
     { id: 'import', label: config.registration_target === 'chatgpt' ? '自动导入（暂不启用）' : '自动导入配置', icon: <UploadCloud className="w-4 h-4" /> },
@@ -1556,7 +1630,9 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
       ? Boolean(config.smsbower_api_key.trim() && config.smsbower_base_url.trim() && smsbowerBalance?.ok)
       : config.mail_provider === 'naturalflower'
         ? naturalflowerMailboxesValid
-      : Boolean(config.mail_base_url.trim() && config.mail_api_key.trim());
+        : config.mail_provider === 'domain_email'
+          ? Boolean(config.domain_email_domain.trim() && config.domain_email_qq.trim() && config.domain_email_auth_code.trim())
+          : Boolean(config.mail_base_url.trim() && config.mail_api_key.trim());
   const checkoutProbeReady = config.registration_target !== 'chatgpt'
     || !config.chatgpt_checkout_probe_enabled
     || checkoutProxyCount > 0;
@@ -1571,7 +1647,7 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
     config.registration_target === 'chatgpt'
       ? { label: 'OpenAI 浏览器环境', detail: '使用独立 Camoufox 指纹与全新隐私上下文', ready: serviceOnline === true }
       : { label: '验证码服务', detail: config.captcha_provider === 'local' ? `本地 Solver：${solverState}` : captchaReady ? 'YesCaptcha 密钥已填写' : '等待填写 YesCaptcha 密钥', ready: captchaReady },
-    { label: '注册邮箱', detail: mailReady ? (config.mail_provider === 'hotmail_local' ? '微软邮箱账户池已配置' : config.mail_provider === 'smsbower' ? `SMSBower 余额正常 · 将临时购买 Gmail` : config.mail_provider === 'naturalflower' ? `Naturalflower 已填写 ${naturalflowerMailboxCount} 个邮箱` : '自定义邮箱 API 已配置') : (config.mail_provider === 'smsbower' ? '请填写 SMSBower API Key / 地址并查询余额' : config.mail_provider === 'naturalflower' ? '请按“邮箱 + 取件 URL”逐行填写' : '请先完成邮箱配置'), ready: mailReady },
+    { label: '注册邮箱', detail: mailReady ? (config.mail_provider === 'hotmail_local' ? '微软邮箱账户池已配置' : config.mail_provider === 'smsbower' ? `SMSBower 余额正常 · 将临时购买 Gmail` : config.mail_provider === 'naturalflower' ? `Naturalflower 已填写 ${naturalflowerMailboxCount} 个邮箱` : config.mail_provider === 'domain_email' ? `域名 ${config.domain_email_domain || '--'} → QQ 邮箱已配置，将随机生成美式人名前缀` : '自定义邮箱 API 已配置') : (config.mail_provider === 'smsbower' ? '请填写 SMSBower API Key / 地址并查询余额' : config.mail_provider === 'naturalflower' ? '请按“邮箱 + 取件 URL”逐行填写' : config.mail_provider === 'domain_email' ? '请填写 Cloudflare 转发域名、QQ 邮箱与授权码' : '请先完成邮箱配置'), ready: mailReady },
     ...(config.registration_target === 'chatgpt' ? [{
       label: 'Checkout 类型检测',
       detail: !config.chatgpt_checkout_probe_enabled ? '当前关闭，注册后跳过 oaics / cs_live 查询' : checkoutProbeReady ? `将轮换使用 ${checkoutProxyCount} 条 Checkout 检查代理（DE / EUR）` : '已开启，请到代理配置填写 Checkout 检查代理池',
@@ -1660,7 +1736,7 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
 
         <div className={`${cardClass} p-1.5 flex gap-1 overflow-x-auto`}>
           {tabs.map((item) => (
-            <button key={item.id} type="button" disabled={item.disabled} title={item.id === 'browser' && item.disabled ? debugBrowserDisabledReason : undefined} onClick={() => setTab(item.id)} className={`min-w-max flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-bold transition disabled:cursor-not-allowed ${tab === item.id ? 'bg-blue-600 text-white shadow-sm' : item.disabled ? `${theme.textSecondary} opacity-35` : `${theme.textSecondary} hover:bg-slate-500/10`}`}>
+            <button key={item.id} type="button" disabled={item.disabled} onClick={() => setTab(item.id)} className={`min-w-max flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-bold transition disabled:cursor-not-allowed ${tab === item.id ? 'bg-blue-600 text-white shadow-sm' : item.disabled ? `${theme.textSecondary} opacity-35` : `${theme.textSecondary} hover:bg-slate-500/10`}`}>
               {item.icon}{item.label}
             </button>
           ))}
@@ -1849,6 +1925,20 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
                           </div>
                         </div>
                       </div>
+                    </> : config.mail_provider === 'domain_email' ? <>
+                      <Field label="Cloudflare 转发域名" hint="在 Cloudflare Email Routing 中把该域名的所有邮件转发到下方 QQ 邮箱">
+                        <input value={config.domain_email_domain} onChange={(e) => setField('domain_email_domain', e.target.value)} placeholder="example.com" className={fieldClass} />
+                      </Field>
+                      <Field label="QQ 邮箱" hint="接收转发的 QQ 邮箱，用于 IMAP 收取验证码">
+                        <input value={config.domain_email_qq} onChange={(e) => setField('domain_email_qq', e.target.value)} placeholder="123456789@qq.com" className={fieldClass} />
+                      </Field>
+                      <Field label="QQ 授权码" hint="QQ 邮箱设置 → 账号 → 开启 IMAP/SMTP 服务后生成">
+                        <div className="flex gap-2">
+                          <input type="password" value={config.domain_email_auth_code} onChange={(e) => setField('domain_email_auth_code', e.target.value)} placeholder="16 位授权码，非 QQ 登录密码" className={fieldClass} />
+                          <button onClick={() => void checkDomainMail()} disabled={!!busy || !config.domain_email_domain.trim() || !config.domain_email_qq.trim() || !config.domain_email_auth_code.trim()} className="px-3 rounded-lg bg-slate-600 text-white text-xs font-bold min-w-max flex items-center gap-1.5 disabled:opacity-50">{busy === 'domain-mail-test' && <Loader2 className="w-3.5 h-3.5 animate-spin" />}检测授权</button>
+                        </div>
+                      </Field>
+                      {domainMailTest !== null && <div className="col-span-2"><div className={`rounded-lg border px-4 py-3 ${domainMailTest.ok ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-rose-500/30 bg-rose-500/5'}`}><span className={`text-xs font-bold ${domainMailTest.ok ? 'text-emerald-600' : 'text-rose-600'}`}>{domainMailTest.ok ? `QQ 授权可用 · 已连接 ${domainMailTest.host || 'imap.qq.com'}（${domainMailTest.folder || 'INBOX'}）· 域名 ${domainMailTest.domain || config.domain_email_domain}` : `授权检测失败：${domainMailTest.error || '未知错误'}`}</span></div></div>}
                     </> : <>
                       <div className="space-y-1.5"><span className={`block text-xs font-bold ${theme.textPrimary}`}>账号来源</span><StyledSelect ariaLabel="微软邮箱账号来源" value={config.hotmail_account_source} onChange={(value) => setField('hotmail_account_source', value as GrokConfig['hotmail_account_source'])} options={HOTMAIL_ACCOUNT_SOURCE_OPTIONS.map((option) => option.value === 'mail_management' ? { ...option, description: config.registration_target === 'chatgpt' ? '仅使用邮箱管理中 OpenAI 状态为 0/1 的账号' : '仅使用邮箱管理中 Grok 状态为 0/3、1/3、2/3 的账号' } : option)} isDark={isDark} /></div>
                       <Field label="本地助手地址"><div className="flex gap-2"><input value={config.hotmail_local_base_url} onChange={(e) => setField('hotmail_local_base_url', e.target.value)} className={fieldClass} /><button onClick={() => void testHotmail()} disabled={!!busy} className="px-3 rounded-lg bg-slate-600 text-white text-xs font-bold min-w-max flex items-center gap-1.5 disabled:opacity-50">{busy === 'hotmail-test' && <Loader2 className="w-3.5 h-3.5 animate-spin" />}检测助手</button></div></Field>
@@ -1857,6 +1947,16 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
                   </div>
                   {config.mail_provider === 'smsbower' && <div className={`rounded-xl border p-4 ${theme.border} ${isDark ? 'bg-slate-900/40' : 'bg-slate-50'}`}>
                     <div className="flex items-center justify-between gap-3"><div className="min-w-0"><strong className={`text-xs ${theme.textPrimary}`}>SMSBower Gmail 邮箱</strong><p className={`text-[10px] mt-1 leading-5 ${theme.textSecondary}`}>每次注册前通过 SMSBower API 临时购买一个 Gmail 邮箱，注册完成后释放。验证码通过 SMSBower 接口自动获取。{smsbowerBalance?.ok && <span className="text-emerald-600"> · 单价 ${smsbowerBalance.balance ?? '--'} · 库存 {smsbowerBalance.count ?? '--'} 个</span>}</p></div></div>
+                  </div>}
+                  {config.mail_provider === 'domain_email' && <div className={`rounded-xl border p-4 ${theme.border} ${isDark ? 'bg-slate-900/40' : 'bg-slate-50'}`}>
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <strong className={`text-xs ${theme.textPrimary}`}>域名邮箱（Cloudflare 转发）</strong>
+                        <p className={`text-[10px] mt-1 leading-5 ${theme.textSecondary}`}>
+                          注册时随机生成美式人名风格前缀（如 james.smith87、emily_johnson2001、x7k2p9q3r），组成 <span className="font-mono">前缀@{config.domain_email_domain || '你的域名'}</span> 用于 OpenAI 注册；Cloudflare 会把验证邮件转发到 QQ 邮箱，引擎通过 IMAP + 授权码自动读取验证码。请先在 Cloudflare Email Routing 中开启“Catch-all 转发到 QQ 邮箱”，并在 QQ 邮箱设置中开启 IMAP 服务。
+                        </p>
+                      </div>
+                    </div>
                   </div>}
                   {config.mail_provider === 'hotmail_local' && <div className={`rounded-xl border overflow-hidden ${theme.border} ${isDark ? 'bg-slate-900/40' : 'bg-slate-50'}`}>
                     <div className={`p-4 border-b ${theme.border}`}>
@@ -1964,14 +2064,14 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
                 </div>}
 
                 {tab === 'browser' && <div className="h-[calc(100vh-330px)] min-h-[560px] overflow-hidden rounded-xl border border-slate-700 bg-black shadow-inner">
-                  {debugBrowserAvailable ? (
+                  {debugBrowserAvailable && visibleBrowserRequested ? (
                     <iframe key={debugBrowserKey} src={browserViewerUrl} title="注册浏览器实时画面" allow="clipboard-read; clipboard-write; fullscreen" allowFullScreen className="block h-full w-full border-0 bg-black" />
                   ) : (
                     <div className="flex items-center justify-center h-full">
                       <div className="text-center space-y-3 px-6">
                         <Globe2 className="w-12 h-12 mx-auto text-slate-500" />
-                        <p className="text-sm font-bold text-slate-300">浏览器窗口已显示在桌面上</p>
-                        <p className="text-xs text-slate-500 leading-5 max-w-md">当前环境未启用 noVNC 远程画面（仅 Docker / Linux 支持）。{'\n'}注册浏览器正以非无头模式运行，请直接查看桌面上的 Camoufox 浏览器窗口。</p>
+                        <p className="text-sm font-bold text-slate-300">{visibleBrowserRequested ? '浏览器窗口已显示在桌面上' : '注册浏览器当前以无头模式运行'}</p>
+                        <p className="text-xs text-slate-500 leading-5 max-w-md">{visibleBrowserRequested ? '当前环境未启用 noVNC 远程画面（仅 Docker / Linux 支持）。注册浏览器正以非无头模式运行，请直接查看桌面上的 Camoufox 浏览器窗口。' : '“显示注册浏览器”已关闭，注册时不会在桌面弹出浏览器窗口，因此这里没有实时画面。如需在下方观看注册过程，请在注册配置中开启“显示注册浏览器”。'}</p>
                         <button onClick={() => setDebugBrowserKey((k) => k + 1)} className="mt-2 px-4 py-2 rounded-lg bg-slate-700 text-white text-xs font-bold hover:bg-slate-600 transition"><RefreshCw className="w-3.5 h-3.5 inline mr-1.5" />刷新检测</button>
                       </div>
                     </div>
@@ -2169,7 +2269,7 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
             </div>
           </section>
 
-          {tab === 'registration' && debugBrowserVisible && <section className="order-2 min-h-0 overflow-hidden rounded-xl border border-slate-700/80 bg-[#0d1117] shadow-[0_10px_30px_rgba(15,23,42,0.12)]">
+          {tab === 'registration' && <section className="order-2 min-h-0 overflow-hidden rounded-xl border border-slate-700/80 bg-[#0d1117] shadow-[0_10px_30px_rgba(15,23,42,0.12)]">
             <div className="px-3 py-2.5 border-b border-[#30363d] bg-[#161b22] flex items-center justify-between gap-2">
               <div className="flex items-center gap-2 min-w-0">
                 <Globe2 className="w-4 h-4 shrink-0 text-blue-400" />
@@ -2181,14 +2281,14 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
               </div>
             </div>
             <div className="aspect-video min-h-[202px] bg-black">
-              {debugBrowserAvailable ? (
+              {debugBrowserAvailable && visibleBrowserRequested ? (
                 <iframe key={`embedded-${debugBrowserKey}`} src={browserViewerUrl} title="注册配置中的浏览器实时画面" allow="clipboard-read; clipboard-write; fullscreen" allowFullScreen className="block h-full w-full border-0 bg-black" />
               ) : (
                 <div className="flex h-full items-center justify-center px-5 text-center">
                   <div className="space-y-2">
                     <Globe2 className="mx-auto h-8 w-8 text-slate-600" />
-                    <p className="text-[11px] font-bold text-slate-300">浏览器窗口已显示在桌面上</p>
-                    <p className="text-[9px] leading-4 text-slate-500">当前环境没有 noVNC 远程画面，请查看桌面上的 Camoufox 浏览器。</p>
+                    <p className="text-[11px] font-bold text-slate-300">{visibleBrowserRequested ? '浏览器窗口已显示在桌面上' : '注册浏览器以无头模式运行'}</p>
+                    <p className="text-[9px] leading-4 text-slate-500">{visibleBrowserRequested ? '当前环境没有 noVNC 远程画面，请查看桌面上的 Camoufox 浏览器。' : '未弹出桌面窗口；开启“显示注册浏览器”后即可在下方观看实时画面。'}</p>
                   </div>
                 </div>
               )}

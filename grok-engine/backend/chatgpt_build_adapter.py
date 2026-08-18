@@ -510,8 +510,12 @@ def _make_email_receiver(
     else:
         dom = (domain or MOEMAIL_DOMAIN or "").strip().lstrip("@").strip(".")
 
-    alphabet = string.ascii_lowercase + string.digits
-    pre = "".join(secrets.choice(alphabet) for _ in range(12))
+    if prov == "imap":
+        # IMAP catch-all generates a human-looking local part itself.
+        pre = None
+    else:
+        alphabet = string.ascii_lowercase + string.digits
+        pre = "".join(secrets.choice(alphabet) for _ in range(12))
 
     mailbox = create_mailbox(
         provider=prov,

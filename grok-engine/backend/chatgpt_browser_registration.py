@@ -216,6 +216,13 @@ def register_chatgpt_account(
             '[data-testid="cookie-policy-manage-dialog-accept-button"]',
             '#onetrust-accept-btn-handler',
         )
+        prompt_pattern = ctx.re.compile(
+            r"we\s+use\s+cookies|cookie\s+preferences|"
+            r"nous\s+utilisons\s+des\s+cookies|préférences.*cookies|"
+            r"cookie.*(?:を使用|の使用|設定)|クッキー.*(?:使用|設定)|"
+            r"我们使用.*cookie|我們使用.*cookie|cookie.*偏好",
+            ctx.re.I,
+        )
 
         def _language_for_text(value: str) -> str:
             text = str(value or "").lower()
@@ -237,14 +244,13 @@ def register_chatgpt_account(
                 return "es"
             return "unknown"
 
-        def _visible_prompt_language(frame: Any) -> str:
-            prompt_pattern = ctx.re.compile(
-                r"we\s+use\s+cookies|cookie\s+preferences|"
-                r"nous\s+utilisons\s+des\s+cookies|préférences.*cookies|"
-                r"cookie.*(?:を使用|の使用|設定)|クッキー.*(?:使用|設定)|"
-                r"我们使用.*cookie|我們使用.*cookie|cookie.*偏好",
-                ctx.re.I,
-            )
+        def _prompt_language(frame: Any) -> tuple[str, bool]:
+            """Return (language, found_in_dialog).
+
+            Dialog containers are checked first; the body-text fallback exists
+            only for initial detection and must never drive disappearance
+            checks (page footers often still contain cookie wording).
+            """
             for selector in (
                 '[role="dialog"]',
                 '[aria-modal="true"]',
@@ -259,23 +265,50 @@ def register_chatgpt_account(
                             continue
                         text = str(dialog.inner_text() or "")
                         if prompt_pattern.search(text):
-                            return _language_for_text(text)
+                            return _language_for_text(text), True
                 except Exception:
                     continue
             try:
                 body_text = str(frame.locator("body").inner_text() or "")[:4000]
                 if prompt_pattern.search(body_text):
-                    return _language_for_text(body_text)
+                    return _language_for_text(body_text), False
             except Exception:
                 pass
-            return ""
+            return "", False
+
+        def _modal_prompt_visible(frame: Any) -> bool:
+            """Strict disappearance check: only true modal/banner containers.
+
+            Deliberately excludes ``[data-testid*="cookie"]``: sites keep a
+            persistent "cookie settings" control visible after accepting, so
+            matching it would keep reporting the dialog as present forever
+            even after the accept button was successfully clicked.
+            """
+            for selector in (
+                '[role="dialog"]',
+                '[aria-modal="true"]',
+                '#onetrust-banner-sdk',
+            ):
+                try:
+                    dialogs = frame.locator(selector)
+                    for index in range(dialogs.count()):
+                        dialog = dialogs.nth(index)
+                        if not dialog.is_visible():
+                            continue
+                        text = str(dialog.inner_text() or "")
+                        if prompt_pattern.search(text):
+                            return True
+                except Exception:
+                    continue
+            return False
 
         consent_deadline = min(deadline, ctx.time.time() + timeout_sec)
         detected_language = ""
+        clicked_any = False
         while ctx.time.time() < consent_deadline:
             _cancel_check()
             for frame in list(page.frames):
-                language = _visible_prompt_language(frame)
+                language, _from_dialog = _prompt_language(frame)
                 if language and not detected_language:
                     detected_language = language
                     _step("cookie_consent", "detected", language=language)
@@ -307,34 +340,69 @@ def register_chatgpt_account(
                                 language=language,
                                 label=label,
                             )
-                            candidate.click(timeout=1500)
+                            # 只要找到可见的"全部接受"按钮并尝试点击,就视为授权动作
+                            # 已执行;点击过程中元素被移除(弹窗关闭导致)或点击被拦截,
+                            # 都不再让整个注册失败。
+                            clicked_any = True
+                            try:
+                                candidate.click(timeout=1500)
+                            except Exception as click_exc:
+                                _step(
+                                    "cookie_consent",
+                                    "click_attempted",
+                                    language=language,
+                                    error=str(click_exc)[:120],
+                                )
+                            # 点击后等待"接受按钮消失"或"真正的弹窗容器消失"。
+                            # 页面残留的 cookie 设置入口/按钮不算弹窗,不会导致误判。
                             disappearance_deadline = min(
-                                deadline, ctx.time.time() + 2.0
+                                deadline, ctx.time.time() + 2.5
                             )
                             while ctx.time.time() < disappearance_deadline:
                                 _cancel_check()
-                                if not any(
-                                    _visible_prompt_language(current_frame)
+                                try:
+                                    button_gone = not candidate.is_visible()
+                                except Exception:
+                                    button_gone = True
+                                modal_gone = not any(
+                                    _modal_prompt_visible(current_frame)
                                     for current_frame in list(page.frames)
-                                ):
+                                )
+                                if button_gone or modal_gone:
                                     break
                                 page.wait_for_timeout(100)
-                            if any(
-                                _visible_prompt_language(current_frame)
+                            try:
+                                button_gone = not candidate.is_visible()
+                            except Exception:
+                                button_gone = True
+                            modal_gone = not any(
+                                _modal_prompt_visible(current_frame)
                                 for current_frame in list(page.frames)
-                            ):
-                                _step(
-                                    "cookie_consent",
-                                    "click_not_applied",
-                                    language=language,
-                                )
-                                continue
-                            _step("cookie_consent", "accepted", language=language)
-                            return True
+                            )
+                            if button_gone or modal_gone:
+                                _step("cookie_consent", "accepted", language=language)
+                                return True
+                            # 按钮和容器都还在:点击可能被拦截,重试其他候选按钮。
+                            _step(
+                                "cookie_consent",
+                                "click_not_applied",
+                                language=language,
+                            )
                     except Exception:
                         continue
             page.wait_for_timeout(150)
+        if clicked_any:
+            # 已成功点击过"全部接受"按钮:授权动作已执行,即使页面仍有残留
+            # 弹窗元素(动画/折叠后的设置栏等),也不再让整个注册失败。
+            # 若后续真的被遮挡,后续步骤会以更明确的错误暴露。
+            _step(
+                "cookie_consent",
+                "accepted_after_click",
+                language=detected_language or "unknown",
+            )
+            return True
         if detected_language:
+            # 检测到 Cookie 文案但从未找到可点击的接受按钮。
             _step(
                 "cookie_consent",
                 "unsupported",
@@ -343,6 +411,8 @@ def register_chatgpt_account(
             raise ctx.ChatGPTRegistrationError(
                 f"检测到 {detected_language} Cookie 弹窗，但未能点击全部接受按钮"
             )
+        # 仅在页面正文里匹配到 cookie 文案、没有真实弹窗时,视为无需处理,
+        # 不再误报失败(例如页面底部隐私链接包含 cookie 字样)。
         _step("cookie_consent", "not_present")
         return False
 
@@ -904,6 +974,16 @@ def register_chatgpt_account(
                 "reason": "Checkout 类型检测未开启",
             }
             checkout_kind = "skipped"
+            _capture_diagnostics(
+                stage="checkout-kind",
+                outcome="disabled",
+                email=email,
+                reason=str(checkout_probe["reason"]),
+                page=page,
+                steps=steps,
+                extra={"checkout_probe": checkout_probe},
+                on_progress=on_progress,
+            )
         _step(
             "checkout_kind",
             checkout_kind,

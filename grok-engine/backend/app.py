@@ -70,6 +70,12 @@ import app_network as _app_network
 import app_routes as _app_routes
 from mercury_ai import router as mercury_ai_router
 from mercury_mail import router as mercury_mail_router
+from mercury_auth import (
+    ensure_default_admin,
+    has_valid_session,
+    router as mercury_auth_router,
+)
+from mercury_logs import router as mercury_logs_router
 from browser_debug import router as browser_debug_router
 
 BACKEND_DIR = Path(__file__).resolve().parent
@@ -108,6 +114,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "smsbower_api_key": "",
     "smsbower_base_url": "",
     "naturalflower_mailboxes": "",
+    "domain_email_domain": "",
+    "domain_email_qq": "",
+    "domain_email_auth_code": "",
     "mail_provider_configs": {
         "yyds": {
             "mail_base_url": "",
@@ -131,6 +140,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
         },
         "smsbower": {
             "mail_base_url": "",
+            "mail_api_key": "",
+            "mail_domain": "",
+        },
+        "domain_email": {
+            "mail_base_url": "imaps://imap.qq.com/INBOX",
             "mail_api_key": "",
             "mail_domain": "",
         },
@@ -234,6 +248,7 @@ class Settings(BaseModel):
         "hotmail_local",
         "smsbower",
         "naturalflower",
+        "domain_email",
     ] = "hotmail_local"
     mail_api_key: str = ""
     mail_base_url: str = ""
@@ -244,6 +259,9 @@ class Settings(BaseModel):
     smsbower_api_key: str = ""
     smsbower_base_url: str = ""
     naturalflower_mailboxes: str = ""
+    domain_email_domain: str = ""
+    domain_email_qq: str = ""
+    domain_email_auth_code: str = ""
     hotmail_local_base_url: str = "http://127.0.0.1:17373"
     hotmail_account_source: Literal["mail_management", "manual"] = "mail_management"
     captcha_provider: Literal["local", "yescaptcha"] = "local"
@@ -314,6 +332,12 @@ class HotmailProbeRequest(BaseModel):
     source: Literal["mail_management", "manual"] | None = None
 
 
+class DomainMailTestRequest(BaseModel):
+    domain: str = ""
+    qq_email: str = ""
+    qq_auth_code: str = ""
+
+
 class ProxyCheckRequest(BaseModel):
     proxy: str = ""
 
@@ -365,9 +389,14 @@ def _normalize_import_record_for_registration_target(
 
 app = FastAPI(title="MercuryPro", version="2.0.0")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+app.include_router(mercury_auth_router)
+app.include_router(mercury_logs_router)
 app.include_router(mercury_mail_router)
 app.include_router(mercury_ai_router)
 app.include_router(browser_debug_router)
+
+# 首次启动落盘内置管理员账号(m@xianxing.art)
+ensure_default_admin()
 
 
 @app.middleware("http")
@@ -401,6 +430,25 @@ async def prepare_embedded_services(request: Request, call_next):
     if target_path != path:
         request.scope["path"] = target_path
         request.scope["raw_path"] = target_path.encode("utf-8")
+    return await call_next(request)
+
+
+@app.middleware("http")
+async def enforce_auth_guard(request: Request, call_next):
+    """登录守卫(最外层):/api/*(除 /api/auth/*)与 /browser-debug/* 需要有效会话。
+
+    注意 Starlette 中间件为后定义先执行,此守卫定义在 prepare_embedded_services
+    之后,因此未登录请求不会触发内置服务拉起。
+    """
+
+    path = request.scope.get("path", "")
+    is_api = path == "/api" or path.startswith("/api/")
+    is_auth_path = path == "/api/auth" or path.startswith("/api/auth/")
+    if (is_api and not is_auth_path or path.startswith("/browser-debug")) and not has_valid_session(request):
+        return JSONResponse(
+            status_code=401,
+            content={"code": 401, "error": "未登录或会话已过期"},
+        )
     return await call_next(request)
 
 
@@ -644,6 +692,12 @@ def hotmail_delete(account_id: str) -> dict[str, Any]:
 @app.post("/api/mail/hotmail/test")
 def hotmail_test(settings: Settings | None = None) -> dict[str, Any]:
     return _app_routes.hotmail_test(_app_context(), settings)
+
+
+@app.post("/api/mail/domain/test")
+def domain_mail_test(request: DomainMailTestRequest) -> dict[str, Any]:
+    """Verify the Cloudflare 转发域名 + QQ 邮箱授权码 IMAP 连接可用。"""
+    return _app_routes.domain_mail_test(_app_context(), request)
 
 
 @app.post("/api/smsbower/balance")
