@@ -39,8 +39,8 @@ RUN python -m pip install --no-cache-dir \
        -r /app/grok-engine/vendor/turnstile-solver/requirements.txt
 
 RUN useradd --create-home --uid 1000 mercury \
-    && mkdir -p /app/data /app/grok-engine/runtime /app/grok-engine/config \
-    && chown -R mercury:mercury /app/data /app/grok-engine/runtime /app/grok-engine/config /app/grok-engine/vendor/turnstile-solver
+    && mkdir -p /app/data /app/log /app/grok-engine/runtime /app/grok-engine/config \
+    && chown -R mercury:mercury /app/data /app/log /app/grok-engine/runtime /app/grok-engine/config /app/grok-engine/vendor/turnstile-solver
 
 USER mercury
 

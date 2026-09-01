@@ -27,6 +27,7 @@ def _capture_diagnostics(
         record = capture_registration_incident(
             stage=stage,
             outcome=outcome,
+            registration_target="openai",
             email=email,
             reason=reason,
             page=page,
@@ -919,11 +920,18 @@ def register_chatgpt_account(
             str(session.get("accessToken") or ""),
         )
         plus_trial_status = str(plus_trial.get("status") or "unknown")
+        payment_methods = list(plus_trial.get("payment_methods") or [])
         _step(
             "plus_trial",
             plus_trial_status,
             amount=plus_trial.get("amount_text"),
             reason=plus_trial.get("reason"),
+        )
+        _step(
+            "payment_methods",
+            "detected" if payment_methods else "none",
+            methods=payment_methods,
+            methods_text=", ".join(payment_methods) if payment_methods else "未检测到专属方式",
         )
         _capture_diagnostics(
             stage="plus-trial",
@@ -932,7 +940,7 @@ def register_chatgpt_account(
             reason=str(plus_trial.get("reason") or ""),
             page=page,
             steps=steps,
-            extra={"plus_trial": plus_trial},
+            extra={"plus_trial": plus_trial, "payment_methods": payment_methods},
             on_progress=on_progress,
         )
         if checkout_probe_enabled:
@@ -995,6 +1003,7 @@ def register_chatgpt_account(
             "session": session,
             "plus_trial": plus_trial,
             "checkout_probe": checkout_probe,
+            "payment_methods": payment_methods,
             "name": f"{first_name} {last_name}",
             "steps": steps,
         }

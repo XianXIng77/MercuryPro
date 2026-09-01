@@ -6,6 +6,7 @@ from typing import Any
 
 from .flow import RegistrationContext
 from .worker_lifecycle import WorkerSessionLifecycle
+from chatgpt_registration.diagnostics import capture_registration_incident
 
 
 def _run_registration(
@@ -52,6 +53,14 @@ def _run_registration(
             "error",
             "xAI 注册任务缺少邮箱或密码",
             error="missing email or password",
+        )
+        capture_registration_incident(
+            registration_target="grok",
+            stage="registration-error",
+            outcome="error",
+            email=email,
+            session_id=sid,
+            reason="xAI 注册任务缺少邮箱或密码",
         )
         return
 
@@ -292,8 +301,6 @@ def _run_registration(
     except Exception as exc:  # noqa: BLE001
         try:
             _check_cancel()
-            if browser_session is not None:
-                browser_session.hold_failure()
             error_detail = str(exc).strip()
             error_summary = (error_detail.splitlines()[0] if error_detail else type(exc).__name__)[:500]
             update(
@@ -301,6 +308,23 @@ def _run_registration(
                 f"xAI 浏览器注册失败：{error_summary}",
                 error=error_detail,
             )
+            capture_registration_incident(
+                registration_target="grok",
+                stage="registration-error",
+                outcome="error",
+                email=email,
+                session_id=sid,
+                reason=error_detail or error_summary,
+                page=getattr(browser_session, "page", None),
+                steps=list(getattr(browser_session, "steps", None) or []),
+                extra={
+                    "url": getattr(
+                        getattr(browser_session, "page", None), "url", ""
+                    )
+                },
+            )
+            if browser_session is not None:
+                browser_session.hold_failure()
         except ctx._RegPaused as paused_exc:
             with ctx._lock:
                 cur = ctx._sessions.get(sid) or sess

@@ -126,6 +126,195 @@ class ChatGPTRegistrationCancelled(ChatGPTRegistrationError):
 
 
 _PLUS_TRIAL_CHECKOUT_URL = "https://chatgpt.com/backend-api/payments/checkout"
+
+_PAYMENT_METHODS_PROBE_JS = r"""
+() => {
+  const norm = (v) => String(v || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const detected = new Set();
+
+  const selectorMappings = [
+    { pattern: /apple[_-]?pay/i, method: 'apple_pay' },
+    { pattern: /google[_-]?pay|gpay/i, method: 'google_pay' },
+    { pattern: /paypal/i, method: 'paypal' },
+    { pattern: /gcash/i, method: 'gcash' },
+    { pattern: /gopay|go[_-]?pay/i, method: 'gopay' },
+    { pattern: /credit|debit|card|银行卡|信用卡|kartu\s+kredit/i, method: 'card' },
+    { pattern: /\blink\b/i, method: 'link' },
+    { pattern: /alipay|支付宝/i, method: 'alipay' },
+    { pattern: /wechat|wxpay|微信支付/i, method: 'wechat_pay' },
+    { pattern: /cash[_-]?app/i, method: 'cashapp' },
+    { pattern: /grab[_-]?pay/i, method: 'grabpay' },
+    { pattern: /kakao/i, method: 'kakaopay' },
+    { pattern: /\bideal\b/i, method: 'ideal' },
+    { pattern: /bancontact/i, method: 'bancontact' },
+    { pattern: /sofort/i, method: 'sofort' },
+    { pattern: /klarna/i, method: 'klarna' },
+    { pattern: /\bsepa\b/i, method: 'sepa_debit' },
+    { pattern: /revolut/i, method: 'revolut_pay' },
+    { pattern: /paypay/i, method: 'paypay' },
+  ];
+
+  // 1. Inspect window globals (Stripe Initial State / session config)
+  try {
+    const globals = [
+      window.__INITIAL_STATE__,
+      window.__stripe_checkout_state,
+      window.checkoutSession,
+      window.__NEXT_DATA__
+    ];
+    for (const g of globals) {
+      if (!g) continue;
+      const str = typeof g === 'string' ? g : JSON.stringify(g);
+      for (const { pattern, method } of selectorMappings) {
+        if (new RegExp(`["':_](${pattern.source})["',}]`, 'i').test(str)) {
+          detected.add(method);
+        }
+      }
+    }
+  } catch (e) {}
+
+  // 2. Check all input elements, radios, tabs, buttons, labels (even custom/styled ones)
+  const inputs = Array.from(document.querySelectorAll('input, button, [role="radio"], [role="tab"], [data-test], [data-testid], [data-pm], label, [class*="PaymentMethod"], [class*="payment-method"], [class*="ExpressCheckout"]'));
+  for (const el of inputs) {
+    const val = [
+      el.getAttribute('value'),
+      el.getAttribute('name'),
+      el.getAttribute('id'),
+      el.getAttribute('data-test'),
+      el.getAttribute('data-testid'),
+      el.getAttribute('data-pm'),
+      el.getAttribute('data-payment-method'),
+      el.getAttribute('aria-label'),
+      el.innerText || el.textContent
+    ].map(norm).join(' ');
+
+    for (const { pattern, method } of selectorMappings) {
+      if (pattern.test(val)) {
+        detected.add(method);
+      }
+    }
+  }
+
+  // 3. Inspect all script tags in HTML
+  try {
+    const scripts = Array.from(document.querySelectorAll('script'));
+    for (const s of scripts) {
+      const text = s.textContent || '';
+      if (text.length > 20 && text.length < 1000000 && (text.includes('payment') || text.includes('Payment') || text.includes('method') || text.includes('session'))) {
+        for (const { pattern, method } of selectorMappings) {
+          if (new RegExp(`["':_](${pattern.source})["',}]`, 'i').test(text)) {
+            detected.add(method);
+          }
+        }
+      }
+    }
+  } catch (e) {}
+
+  // 4. Check iframes (Stripe Elements / Express Checkout)
+  const iframes = Array.from(document.querySelectorAll('iframe'));
+  for (const iframe of iframes) {
+    const src = norm(iframe.getAttribute('src') || '');
+    const title = norm(iframe.getAttribute('title') || iframe.getAttribute('name') || '');
+    const combined = `${src} ${title}`;
+    for (const { pattern, method } of selectorMappings) {
+      if (pattern.test(combined)) {
+        detected.add(method);
+      }
+    }
+    if (src.includes('stripe') || combined.includes('stripe') || combined.includes('elements')) {
+      detected.add('card');
+    }
+  }
+
+  // 5. Default baseline on Checkout Page: if on checkout.stripe.com or has payment form, card is supported
+  const pageUrl = window.location.href || '';
+  if (pageUrl.includes('checkout.stripe.com') || pageUrl.includes('chatgpt.com/checkout') || document.querySelector('#OrderDetails-TotalAmount, #ProductSummary-totalAmount, [class*="PaymentMethod"]')) {
+    detected.add('card');
+  }
+
+  return Array.from(detected);
+}
+"""
+
+_CANONICAL_PAYMENT_METHODS: dict[str, str] = {
+    "apple_pay": "apple_pay",
+    "applepay": "apple_pay",
+    "apple": "apple_pay",
+    "google_pay": "google_pay",
+    "googlepay": "google_pay",
+    "gpay": "google_pay",
+    "paypal": "paypal",
+    "gcash": "gcash",
+    "gopay": "gopay",
+    "go_pay": "gopay",
+    "card": "card",
+    "cards": "card",
+    "credit_card": "card",
+    "debit_card": "card",
+    "link": "link",
+    "alipay": "alipay",
+    "wechat_pay": "wechat_pay",
+    "wechatpay": "wechat_pay",
+    "wxpay": "wechat_pay",
+    "cashapp": "cashapp",
+    "cash_app": "cashapp",
+    "grabpay": "grabpay",
+    "kakaopay": "kakaopay",
+    "ideal": "ideal",
+    "bancontact": "bancontact",
+    "sofort": "sofort",
+    "klarna": "klarna",
+    "sepa_debit": "sepa_debit",
+    "sepa": "sepa_debit",
+    "revolut_pay": "revolut_pay",
+    "revolut": "revolut_pay",
+    "paypay": "paypay",
+}
+
+
+def _canonicalize_payment_methods(methods: Any) -> list[str]:
+    """Normalize and deduplicate payment method identifiers."""
+    if not methods:
+        return []
+    if isinstance(methods, str):
+        methods = [methods]
+    if not isinstance(methods, (list, tuple, set)):
+        return []
+    result: list[str] = []
+    seen: set[str] = set()
+    for item in methods:
+        raw = str(item or "").strip().lower().replace("-", "_")
+        if not raw:
+            continue
+        canonical = _CANONICAL_PAYMENT_METHODS.get(raw, raw)
+        if canonical not in seen:
+            seen.add(canonical)
+            result.append(canonical)
+    return result
+
+
+def _extract_api_payment_methods(data: dict[str, Any] | None) -> list[str]:
+    """Extract payment methods from checkout API response payload if available."""
+    if not isinstance(data, dict):
+        return []
+    candidates = []
+    for key in (
+        "payment_method_types",
+        "payment_methods",
+        "available_payment_methods",
+        "supported_payment_methods",
+        "payment_options",
+    ):
+        val = data.get(key)
+        if isinstance(val, list):
+            for item in val:
+                if isinstance(item, str):
+                    candidates.append(item)
+                elif isinstance(item, dict) and item.get("type"):
+                    candidates.append(str(item.get("type")))
+    return _canonicalize_payment_methods(candidates)
+
+
 _PLUS_TRIAL_AMOUNT_PROBE_JS = r"""
 () => {
   const visible = (el) => {
@@ -302,25 +491,49 @@ def _check_plus_trial_eligibility(
             response_data = response.json()
         except Exception:
             response_data = {}
-        if response.status < 200 or response.status >= 300:
-            if re.search(r"not.?eligible|ineligible|promo.*(?:invalid|unavailable)", response_text, re.I):
-                return {
-                    "status": "ineligible",
-                    "eligible": False,
-                    "checked_at": time.time(),
-                    "source": "checkout_api",
-                    "reason": "Plus 免费试用活动不适用于该账号",
-                    "http_status": response.status,
-                }
-            return {
-                "status": "unknown",
-                "eligible": None,
+
+        plus_trial_override: dict[str, Any] | None = None
+        data: dict[str, Any] = {}
+        if 200 <= response.status < 300 and isinstance(response_data, dict):
+            data = response_data
+        else:
+            # Promo checkout rejected/expired (e.g. HTTP 400); mark Plus trial as ineligible
+            plus_trial_override = {
+                "status": "ineligible",
+                "eligible": False,
                 "checked_at": time.time(),
                 "source": "checkout_api",
-                "reason": f"资格接口返回 HTTP {response.status}",
+                "reason": "Plus 免费试用活动不适用于该账号",
                 "http_status": response.status,
             }
-        data = response_data if isinstance(response_data, dict) else {}
+            # Fallback to standard checkout to retrieve checkout page and payment methods
+            try:
+                standard_payload = {
+                    "entry_point": "all_plans_pricing_modal",
+                    "plan_name": "chatgptplusplan",
+                    "billing_details": {"country": country, "currency": currency},
+                    "checkout_ui_mode": "hosted",
+                }
+                standard_response = context.request.post(
+                    _PLUS_TRIAL_CHECKOUT_URL,
+                    headers={
+                        "Authorization": f"Bearer {access_token}",
+                        "Content-Type": "application/json",
+                        "oai-language": locale,
+                    },
+                    data=json.dumps(standard_payload),
+                    timeout=min(max(timeout_sec, 5.0), 30.0) * 1000,
+                )
+                if 200 <= standard_response.status < 300:
+                    try:
+                        std_json = standard_response.json()
+                        if isinstance(std_json, dict):
+                            data = std_json
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
         checkout_url = str(
             data.get("url") or data.get("stripe_hosted_url") or data.get("checkout_url") or ""
         ).strip()
@@ -328,29 +541,54 @@ def _check_plus_trial_eligibility(
             checkout_id = str(data.get("checkout_session_id") or data.get("cs_id") or "").strip()
             if checkout_id:
                 checkout_url = f"https://chatgpt.com/checkout/openai_llc/{checkout_id}"
+
         if not checkout_url:
-            return {
+            base_res = plus_trial_override or {
                 "status": "unknown",
                 "eligible": None,
                 "checked_at": time.time(),
                 "source": "checkout_api",
-                "reason": "资格接口未返回结账页面",
+                "reason": f"资格接口返回 HTTP {response.status}" if response.status != 200 else "资格接口未返回结账页面",
+                "http_status": response.status,
             }
+            base_res.update({
+                "locale": locale,
+                "country": country,
+                "currency": currency,
+                "payment_methods": [],
+            })
+            return base_res
+
         page.goto(checkout_url, wait_until="domcontentloaded", timeout=30000)
         check_deadline = time.time() + max(5.0, min(timeout_sec, 25.0))
         last_probe: dict[str, Any] = {}
+        detected_methods: list[str] = _extract_api_payment_methods(data)
         body_text = ""
         while time.time() < check_deadline:
             try:
                 last_probe = page.evaluate(_PLUS_TRIAL_AMOUNT_PROBE_JS) or {}
             except Exception:
                 last_probe = {}
+            try:
+                dom_methods = page.evaluate(_PAYMENT_METHODS_PROBE_JS) or []
+                if isinstance(dom_methods, list) and dom_methods:
+                    for m in dom_methods:
+                        if m not in detected_methods:
+                            detected_methods.append(m)
+            except Exception:
+                pass
             body_text = _safe_page_text(page)
-            if isinstance(last_probe, dict) and last_probe.get("has_today_due"):
+            if isinstance(last_probe, dict) and last_probe.get("has_today_due") and detected_methods:
                 break
             page.wait_for_timeout(250)
-        result = _classify_plus_trial_probe(last_probe, body_text)
-        result.update({"locale": locale, "country": country, "currency": currency})
+
+        result = plus_trial_override if plus_trial_override is not None else _classify_plus_trial_probe(last_probe, body_text)
+        result.update({
+            "locale": locale,
+            "country": country,
+            "currency": currency,
+            "payment_methods": _canonicalize_payment_methods(detected_methods),
+        })
         return result
     except Exception as exc:
         return {

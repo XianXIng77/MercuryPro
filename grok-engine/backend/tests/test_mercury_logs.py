@@ -17,6 +17,7 @@ def _make_incident(
     root: Path, name: str, *, log_text: str | None = None, screenshot: bool = False
 ) -> Path:
     directory = root / name
+    directory.parent.mkdir(parents=True, exist_ok=True)
     directory.mkdir(parents=True)
     if log_text is not None:
         (directory / "log.txt").write_text(log_text, encoding="utf-8")
@@ -79,6 +80,47 @@ class MercuryLogsTests(unittest.TestCase):
         )
         self.assertIn("plus-trial", result["stages"])
 
+
+    def test_list_reads_target_subdirectories_and_filters(self) -> None:
+        import asyncio
+
+        _make_incident(
+            self.root / "openai",
+            "20260816-010000.000_plus-trial_eligible_openai-example.com",
+            log_text="目标: openai\n邮箱: openai@example.com\n",
+        )
+        _make_incident(
+            self.root / "grok",
+            "20260816-020000.000_registration-error_error_grok-example.com",
+            log_text="目标: grok\n邮箱: grok@example.com\n",
+        )
+
+        result = asyncio.run(
+            mercury_logs.list_logs(email="", stage="", outcome="", target="")
+        )
+        self.assertEqual(result["total"], 2)
+        self.assertEqual(set(result["registrationTargets"]), {"grok", "openai"})
+        by_target = {item["registrationTarget"]: item for item in result["items"]}
+        self.assertEqual(
+            by_target["openai"]["id"],
+            "openai--20260816-010000.000_plus-trial_eligible_openai-example.com",
+        )
+        self.assertEqual(
+            by_target["grok"]["id"],
+            "grok--20260816-020000.000_registration-error_error_grok-example.com",
+        )
+
+        grok_only = asyncio.run(
+            mercury_logs.list_logs(email="", stage="", outcome="", target="grok")
+        )
+        self.assertEqual(grok_only["total"], 1)
+        self.assertEqual(grok_only["items"][0]["registrationTarget"], "grok")
+
+        invalid = asyncio.run(
+            mercury_logs.list_logs(email="", stage="", outcome="", target="not-a-target")
+        )
+        self.assertEqual(invalid["total"], 0)
+
     def test_list_filters_by_email_stage_outcome(self) -> None:
         import asyncio
 
@@ -138,12 +180,32 @@ class MercuryLogsTests(unittest.TestCase):
         )
         self.assertEqual(response.media_type, "image/png")
 
+
+    def test_target_prefixed_ids_resolve_detail_files(self) -> None:
+        import asyncio
+
+        folder_name = "20260816-040000.000_registration-error_error_grok-example.com"
+        _make_incident(
+            self.root / "grok",
+            folder_name,
+            log_text="目标: grok\n详细内容",
+            screenshot=True,
+        )
+        response = asyncio.run(
+            mercury_logs.get_log_text(f"grok--{folder_name}")
+        )
+        self.assertIn("详细内容", response.body.decode("utf-8"))
+        image = asyncio.run(
+            mercury_logs.get_log_screenshot(f"grok--{folder_name}")
+        )
+        self.assertEqual(image.media_type, "image/png")
+
     def test_invalid_ids_are_rejected(self) -> None:
         import asyncio
 
         from fastapi import HTTPException
 
-        for bad in ("..", "a/b", "log\\secret", "no-such-id"):
+        for bad in ("..", "a/b", "log\\secret", "no-such-id", "grok--..", "grok--"):
             with self.assertRaises(HTTPException) as ctx:
                 asyncio.run(mercury_logs.get_log_text(bad))
             self.assertEqual(ctx.exception.status_code, 404)

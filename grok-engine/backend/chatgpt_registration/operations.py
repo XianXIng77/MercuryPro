@@ -372,6 +372,20 @@ def _saved_account_rows(ctx, *, include_tokens: bool = False):
                 if isinstance(payload.get("mercuryCheckoutProbe"), dict)
                 else {"status": "unknown", "kind": "unknown", "reason": "尚未检测"}
             )
+            raw_payment_methods = payload.get("mercuryPaymentMethods")
+            if raw_payment_methods is None and isinstance(payload.get("mercuryPlusTrialEligibility"), dict):
+                raw_payment_methods = payload.get("mercuryPlusTrialEligibility", {}).get("payment_methods")
+            payment_methods = [
+                str(m).strip().lower().replace("-", "_")
+                for m in (raw_payment_methods if isinstance(raw_payment_methods, list) else [])
+                if str(m).strip()
+            ]
+            seen_pm: set[str] = set()
+            deduped_payment_methods: list[str] = []
+            for m in payment_methods:
+                if m not in seen_pm:
+                    seen_pm.add(m)
+                    deduped_payment_methods.append(m)
             registration_password = str(
                 payload.get("mercuryRegistrationPassword") or ""
             )
@@ -385,6 +399,7 @@ def _saved_account_rows(ctx, *, include_tokens: bool = False):
             "access_token_available": True,
             "plus_trial": plus_trial,
             "checkout_probe": checkout_probe,
+            "payment_methods": deduped_payment_methods,
             "password": registration_password,
             "password_available": bool(registration_password),
         }

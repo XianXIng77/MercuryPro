@@ -3,6 +3,8 @@ dist
 build
 coverage
 data
+log
+browser-screenshots
 grok-engine/runtime
 grok-engine/config/config.json
 grok-engine/vendor/turnstile-solver/proxies.txt

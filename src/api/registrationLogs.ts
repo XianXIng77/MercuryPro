@@ -1,4 +1,4 @@
-/** 注册诊断日志 API(/api/logs/*)。数据来自后端 log/ 目录下的事件文件夹。 */
+/** 注册诊断日志 API(/api/logs/*)。数据来自目标子目录下的事件文件夹。 */
 
 export interface RegistrationLogItem {
   id: string;
@@ -6,6 +6,7 @@ export interface RegistrationLogItem {
   stage: string;
   outcome: string;
   email: string;
+  registrationTarget: 'grok' | 'openai';
   hasScreenshot: boolean;
 }
 
@@ -13,12 +14,14 @@ export interface RegistrationLogListResult {
   items: RegistrationLogItem[];
   total: number;
   stages: string[];
+  registrationTargets: Array<'grok' | 'openai'>;
 }
 
 export interface RegistrationLogQuery {
   email?: string;
   stage?: string;
   outcome?: string;
+  registrationTarget?: 'grok' | 'openai';
   limit?: number;
   offset?: number;
 }
@@ -48,6 +51,7 @@ export const registrationLogsApi = {
     if (query.email) params.set('email', query.email);
     if (query.stage) params.set('stage', query.stage);
     if (query.outcome) params.set('outcome', query.outcome);
+    if (query.registrationTarget) params.set('target', query.registrationTarget);
     if (query.limit !== undefined) params.set('limit', String(query.limit));
     if (query.offset !== undefined) params.set('offset', String(query.offset));
     return request<RegistrationLogListResult>(`?${params.toString()}`);

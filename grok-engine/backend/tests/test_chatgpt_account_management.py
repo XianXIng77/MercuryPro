@@ -33,6 +33,7 @@ class ChatGPTAccountManagementTests(unittest.TestCase):
                         "kind": "oaics",
                         "reason": "检测到 oaics checkout",
                     },
+                    "mercuryPaymentMethods": ["apple_pay", "paypal", "gcash", "gopay"],
                     "mercuryRegistrationPassword": "OpenAI-secret-123!",
                 }),
                 encoding="utf-8",
@@ -47,6 +48,10 @@ class ChatGPTAccountManagementTests(unittest.TestCase):
             )
             self.assertEqual(
                 listed["accounts"][0]["checkout_probe"]["kind"], "oaics"
+            )
+            self.assertEqual(
+                listed["accounts"][0]["payment_methods"],
+                ["apple_pay", "paypal", "gcash", "gopay"],
             )
             self.assertNotIn("access_token", listed["accounts"][0])
             self.assertTrue(listed["accounts"][0]["password_available"])

@@ -11,15 +11,41 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from chatgpt_browser import (  # noqa: E402
+    _PAYMENT_METHODS_PROBE_JS,
     _PLUS_TRIAL_AMOUNT_PROBE_JS,
+    _canonicalize_payment_methods,
     _check_checkout_kind,
     _classify_checkout_session_id,
     _classify_plus_trial_probe,
+    _extract_api_payment_methods,
 )
 from proxy_pool import parse_proxy_pool  # noqa: E402
 
 
 class ChatGPTPlusTrialEligibilityTests(unittest.TestCase):
+    def test_payment_methods_probe_contains_expected_selectors(self) -> None:
+        self.assertIn("apple", _PAYMENT_METHODS_PROBE_JS)
+        self.assertIn("paypal", _PAYMENT_METHODS_PROBE_JS)
+        self.assertIn("gcash", _PAYMENT_METHODS_PROBE_JS)
+        self.assertIn("gopay", _PAYMENT_METHODS_PROBE_JS)
+        self.assertIn("alipay", _PAYMENT_METHODS_PROBE_JS)
+
+    def test_canonicalize_payment_methods(self) -> None:
+        methods = ["Apple-Pay", "paypal", "GCASH", "Go-Pay", "card", "link", "unknown_pm", "PayPal"]
+        canonical = _canonicalize_payment_methods(methods)
+        self.assertEqual(
+            ["apple_pay", "paypal", "gcash", "gopay", "card", "link", "unknown_pm"],
+            canonical,
+        )
+
+    def test_extract_api_payment_methods(self) -> None:
+        data = {
+            "payment_method_types": ["card", "paypal"],
+            "available_payment_methods": [{"type": "gcash"}, {"type": "gopay"}, "applepay"],
+        }
+        extracted = _extract_api_payment_methods(data)
+        self.assertEqual(["card", "paypal", "gcash", "gopay", "apple_pay"], extracted)
+
     def test_zero_due_today_is_eligible(self) -> None:
         result = _classify_plus_trial_probe(
             {

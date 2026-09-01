@@ -21,6 +21,15 @@ import { registrationLogsApi, RegistrationLogItem } from '../api/registrationLog
 interface RegistrationLogsPanelProps {
   currentPreset: StylePreset;
 }
+const TARGET_LABELS: Record<'grok' | 'openai', string> = {
+  grok: 'Grok（xAI）',
+  openai: 'OpenAI（ChatGPT）',
+};
+const TARGET_OPTIONS: StyledSelectOption[] = [
+  { value: '', label: '全部目标' },
+  { value: 'grok', label: TARGET_LABELS.grok },
+  { value: 'openai', label: TARGET_LABELS.openai },
+];
 
 const STAGE_LABELS: Record<string, string> = {
   'plus-trial': 'Plus 试用检查',
@@ -113,7 +122,7 @@ function outcomeTone(stage: string, outcome: string, isDark: boolean): string {
 
 /**
  * 注册诊断日志页(全高布局,同邮箱管理页):
- * - 顶部标题 + 筛选栏(邮箱/阶段/结果,结果筛选可独立使用)
+ * - 顶部标题 + 筛选栏(邮箱/目标/阶段/结果,结果筛选可独立使用)
  * - 撑满剩余高度的卡片内滚动展示事件列表,点击卡片展开日志内容(log.txt)
  * - 有截图的事件可查看 screenshot.png
  */
@@ -129,6 +138,7 @@ export const RegistrationLogsPanel: React.FC<RegistrationLogsPanelProps> = ({ cu
   const [emailFilter, setEmailFilter] = useState('');
   const [stageFilter, setStageFilter] = useState('');
   const [outcomeFilter, setOutcomeFilter] = useState('');
+  const [targetFilter, setTargetFilter] = useState<'' | 'grok' | 'openai'>('');
 
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [logText, setLogText] = useState('');
@@ -143,6 +153,7 @@ export const RegistrationLogsPanel: React.FC<RegistrationLogsPanelProps> = ({ cu
         email: emailFilter.trim() || undefined,
         stage: stageFilter || undefined,
         outcome: outcomeFilter || undefined,
+        registrationTarget: targetFilter || undefined,
       });
       setItems(result.items);
       setTotal(result.total);
@@ -153,7 +164,7 @@ export const RegistrationLogsPanel: React.FC<RegistrationLogsPanelProps> = ({ cu
     } finally {
       setLoading(false);
     }
-  }, [emailFilter, stageFilter, outcomeFilter]);
+  }, [emailFilter, stageFilter, outcomeFilter, targetFilter]);
 
   useEffect(() => {
     void refresh();
@@ -241,6 +252,15 @@ export const RegistrationLogsPanel: React.FC<RegistrationLogsPanelProps> = ({ cu
             onChange={(event) => setEmailFilter(event.target.value)}
             placeholder="按邮箱搜索…"
             className={`${inputClass} w-full pl-9`}
+          />
+        </div>
+        <div className="w-36">
+          <StyledSelect
+            ariaLabel="筛选注册目标"
+            value={targetFilter}
+            onChange={(value) => setTargetFilter(value as '' | 'grok' | 'openai')}
+            options={TARGET_OPTIONS}
+            isDark={isDark}
           />
         </div>
         <div className="w-36">
@@ -347,7 +367,16 @@ export const RegistrationLogsPanel: React.FC<RegistrationLogsPanelProps> = ({ cu
                         </span>
                       </div>
 
-                      {/* 阶段徽标 + Checkout 类型 + 邮箱 */}
+                      {/* 注册目标 + 阶段徽标 + Checkout 类型 + 邮箱 */}
+                      <span
+                        className={`inline-flex w-fit rounded-md px-1.5 py-0.5 text-[10px] font-bold ${
+                          item.registrationTarget === 'grok'
+                            ? 'bg-orange-500/15 text-orange-600 dark:text-orange-300'
+                            : 'bg-blue-500/15 text-blue-600 dark:text-blue-300'
+                        }`}
+                      >
+                        {TARGET_LABELS[item.registrationTarget] || item.registrationTarget}
+                      </span>
                       <div className="flex min-w-0 flex-1 flex-col gap-1">
                         <div className="flex flex-wrap items-center gap-1.5">
                           <span
@@ -454,7 +483,7 @@ export const RegistrationLogsPanel: React.FC<RegistrationLogsPanelProps> = ({ cu
         </div>
 
         <footer className={`px-4 py-2.5 border-t flex items-center justify-between gap-2 ${theme.navBg} ${theme.border}`}>
-          <span className={theme.textSecondary}>日志与截图来自本地 log/ 事件目录,注册流程自动写入</span>
+          <span className={theme.textSecondary}>日志与截图按目标分别写入配置目录下的 grok 与 openai 子目录</span>
           <span className={`hidden sm:inline ${theme.textSecondary}`}>最多展示前 200 条</span>
         </footer>
       </div>

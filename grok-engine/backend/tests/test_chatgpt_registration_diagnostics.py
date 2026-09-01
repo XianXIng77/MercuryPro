@@ -217,5 +217,25 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertLessEqual(log_text.count("x"), diagnostics._MAX_PAGE_TEXT_CHARS + 10)
 
 
+    def test_capture_separates_logs_by_registration_target(self) -> None:
+        for target in ("openai", "grok"):
+            record = capture_registration_incident(
+                stage="registration-error",
+                outcome="error",
+                email=f"{target}@example.com",
+                reason=f"{target} registration failed",
+                root=self.root,
+                registration_target=target,
+            )
+            self.assertTrue(record["ok"])
+            self.assertEqual(target, record["registration_target"])
+            folder = Path(record["dir"])
+            self.assertEqual(target, folder.parent.name)
+            log_text = (folder / "log.txt").read_text(encoding="utf-8")
+            self.assertIn(f"目标: {target}", log_text)
+            expected_brand = "Grok/xAI" if target == "grok" else "OpenAI/ChatGPT"
+            self.assertIn(f"MercuryPro {expected_brand} 注册诊断日志", log_text)
+
+
 if __name__ == "__main__":
     unittest.main()

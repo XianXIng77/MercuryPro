@@ -1,15 +1,21 @@
-"""Timestamped ChatGPT registration diagnostics under ``<repo>/log``.
+"""Registration diagnostics separated by target under <repo>/log.
 
-One folder per incident (Plus trial check / checkout-kind check /
-registration error), each containing ``log.txt`` and, when a live browser
-page is available, ``screenshot.png``. All helpers are best-effort and
-must never raise into the registration flow.
+Production callers store one folder per incident below log/grok or
+log/openai. Each incident contains log.txt and, when a live browser
+page is available, screenshot.png. Passing no registration target keeps
+the legacy root-level layout for backward compatibility and tests.
 
 Folder layout::
 
-    log/20260815-143025.123_plus-trial_eligible_user-example.com/
-        log.txt         timestamped metadata + step timeline + page snapshot
-        screenshot.png  browser screenshot at the moment of capture
+    log/
+        grok/20260815-143025.123_registration-error_error_user-example.com/
+            log.txt
+            screenshot.png
+        openai/20260815-143025.123_plus-trial_eligible_user-example.com/
+            log.txt
+            screenshot.png
+
+All helpers are best-effort and must never raise into a registration flow.
 """
 
 from __future__ import annotations
@@ -30,6 +36,20 @@ _LOG_FILENAME = "log.txt"
 _SCREENSHOT_FILENAME = "screenshot.png"
 _MAX_PAGE_TEXT_CHARS = 3000
 _MAX_EXTRA_CHARS = 4000
+
+REGISTRATION_TARGETS = ("grok", "openai")
+_TARGET_ALIASES = {
+    "grok": "grok",
+    "xai": "grok",
+    "openai": "openai",
+    "chatgpt": "openai",
+}
+
+
+def normalize_registration_target(value: Any, default: str = "openai") -> str:
+    """Return the stable log directory name for a registration target."""
+    normalized = str(value or "").strip().lower()
+    return _TARGET_ALIASES.get(normalized, default)
 
 
 def _log_root(root: Path | str | None) -> Path:
@@ -78,10 +98,14 @@ def create_incident_dir(
     email: str = "",
     at: float | None = None,
     root: Path | str | None = None,
+    registration_target: str | None = None,
 ) -> Path:
     """Create (and return) the timestamped folder for one incident."""
     when = float(at if at is not None else time.time())
-    directory = _log_root(root) / _folder_name(when, stage, outcome, email)
+    base = _log_root(root)
+    if registration_target is not None:
+        base = base / normalize_registration_target(registration_target)
+    directory = base / _folder_name(when, stage, outcome, email)
     directory.mkdir(parents=True, exist_ok=True)
     try:
         os.chmod(directory, 0o700)
@@ -167,10 +191,14 @@ def _write_incident_log(
     extra: dict[str, Any] | None,
     page: Any,
     screenshot: Path | None,
+    registration_target: str,
 ) -> None:
+    target = normalize_registration_target(registration_target)
+    brand = "Grok/xAI" if target == "grok" else "OpenAI/ChatGPT"
     lines: list[str] = [
-        "MercuryPro ChatGPT 注册诊断日志",
+        f"MercuryPro {brand} 注册诊断日志",
         "=" * 44,
+        f"目标: {target}",
         f"时间: {_format_local(when)}",
         f"阶段: {stage}",
         f"结果: {outcome}",
@@ -220,8 +248,9 @@ def capture_registration_incident(
     steps: list[dict[str, Any]] | None = None,
     extra: dict[str, Any] | None = None,
     root: Path | str | None = None,
+    registration_target: str | None = None,
 ) -> dict[str, Any]:
-    """Persist one timestamped incident folder (log.txt + screenshot.png).
+    """Persist one target-specific incident folder (log.txt + screenshot.png).
 
     Best-effort: returns ``{"ok": False, "reason": ...}`` on failure and
     never raises, so diagnostics cannot break the registration flow.
@@ -237,7 +266,8 @@ def capture_registration_incident(
     }
     try:
         directory = create_incident_dir(
-            stage=stage, outcome=outcome, email=email, at=when, root=root
+            stage=stage, outcome=outcome, email=email, at=when, root=root,
+            registration_target=registration_target,
         )
         screenshot = _save_screenshot(page, directory)
         _write_incident_log(
@@ -252,12 +282,16 @@ def capture_registration_incident(
             extra=extra,
             page=page,
             screenshot=screenshot,
+            registration_target=normalize_registration_target(
+                registration_target
+            ),
         )
         record.update(
             {
                 "ok": True,
                 "dir": str(directory),
                 "screenshot": str(screenshot) if screenshot else None,
+                "registration_target": normalize_registration_target(registration_target),
             }
         )
     except Exception as exc:

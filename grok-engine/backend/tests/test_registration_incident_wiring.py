@@ -23,7 +23,9 @@ class RegistrationDiagnosticsWiringTests(unittest.TestCase):
         cls.worker_source = (
             BACKEND_DIR / "chatgpt_registration" / "worker.py"
         ).read_text(encoding="utf-8")
-
+        cls.grok_worker_source = (
+            BACKEND_DIR / "grok_registration" / "worker.py"
+        ).read_text(encoding="utf-8")
     def test_plus_trial_check_persists_incident(self) -> None:
         self.assertIn('stage="plus-trial"', self.flow_source)
         # Captured right after the plus-trial step is recorded
@@ -52,6 +54,14 @@ class RegistrationDiagnosticsWiringTests(unittest.TestCase):
     def test_worker_covers_post_browser_failures(self) -> None:
         self.assertIn("session_save_failed", self.worker_source)
         self.assertIn('outcome="worker_exception"', self.worker_source)
+
+
+    def test_each_registration_target_uses_its_own_log_namespace(self) -> None:
+        self.assertIn('registration_target="openai"', self.flow_source)
+        self.assertIn('registration_target="openai"', self.worker_source)
+        self.assertGreaterEqual(
+            self.grok_worker_source.count('registration_target="grok"'), 2
+        )
 
     def test_diagnostics_dir_resolves_to_repo_log_folder(self) -> None:
         expected_root = BACKEND_DIR.parent.parent

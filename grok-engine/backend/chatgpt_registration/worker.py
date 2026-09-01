@@ -26,6 +26,7 @@ def _capture_worker_incident(
         record = capture_registration_incident(
             stage=stage,
             outcome=outcome,
+            registration_target="openai",
             email=email,
             session_id=sid,
             reason=reason,
@@ -327,9 +328,25 @@ def _run_registration(ctx, sid, proxy, receiver, browser_runtime=None):
                 "reason": "注册流程未返回结账类型检测结果",
             }
         )
+        raw_payment_methods = result.get("payment_methods")
+        if not raw_payment_methods and isinstance(plus_trial, dict):
+            raw_payment_methods = plus_trial.get("payment_methods")
+        payment_methods_list: list[str] = [
+            str(m).strip().lower().replace("-", "_")
+            for m in (raw_payment_methods if isinstance(raw_payment_methods, list) else [])
+            if str(m).strip()
+        ]
+        seen_pm: set[str] = set()
+        deduped_payment_methods: list[str] = []
+        for m in payment_methods_list:
+            if m not in seen_pm:
+                seen_pm.add(m)
+                deduped_payment_methods.append(m)
+
         session_data = dict(session_data)
         session_data["mercuryPlusTrialEligibility"] = plus_trial
         session_data["mercuryCheckoutProbe"] = checkout_probe
+        session_data["mercuryPaymentMethods"] = deduped_payment_methods
         password_was_set = any(
             isinstance(step, dict)
             and str(step.get("step") or "") == "password"
@@ -368,13 +385,19 @@ def _run_registration(ctx, sid, proxy, receiver, browser_runtime=None):
             if checkout_kind in {"oaics", "cs_live"}
             else "未检测" if checkout_status == "disabled" else "未知"
         )
+        pm_label = (
+            ", ".join(deduped_payment_methods)
+            if deduped_payment_methods
+            else "未检测到专属方式"
+        )
         update(
             "completed",
-            f"OpenAI 注册完成，Session 与 Access Token 已保存到本地；Plus 试用资格：{trial_label}；结账类型：{checkout_label}",
+            f"OpenAI 注册完成，Session 与 Access Token 已保存到本地；Plus 试用资格：{trial_label}；支付方式：{pm_label}；结账类型：{checkout_label}",
             session_data=session_data,
             session_file=session_file,
             plus_trial=plus_trial,
             checkout_probe=checkout_probe,
+            payment_methods=deduped_payment_methods,
             auto_import={
                 "enabled": False,
                 "ok": None,

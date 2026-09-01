@@ -80,6 +80,7 @@ export interface GrokSession {
   access_token_available?: boolean;
   plus_trial?: PlusTrialEligibility;
   checkout_probe?: CheckoutProbe;
+  payment_methods?: string[];
   events?: Array<{ at?: number; status?: string; message?: string }>;
   pre_import_probe_enabled?: boolean;
   registration_json_format?: 'sub2api' | 'cpa';
@@ -144,6 +145,7 @@ export interface ChatGPTAccountRecord {
   access_token_available?: boolean;
   plus_trial?: PlusTrialEligibility;
   checkout_probe?: CheckoutProbe;
+  payment_methods?: string[];
   password?: string;
   password_available?: boolean;
 }

@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Check,
   CheckCircle2,
   Activity,
   CircleDot,
@@ -108,6 +109,16 @@ function rotationDuration(start?: number, end?: number): string {
   return `${hours}h ${minutes}m`;
 }
 
+function formatAgeDuration(timestamp?: number): string {
+  if (!timestamp) return '--';
+  const now = Math.floor(Date.now() / 1000);
+  const diffSec = Math.max(0, now - Math.floor(timestamp));
+  const days = Math.floor(diffSec / 86400);
+  const hours = Math.floor((diffSec % 86400) / 3600);
+  const minutes = Math.floor((diffSec % 3600) / 60);
+  return `${days}d ${hours}h ${minutes}m`;
+}
+
 function mergeConfig(value: Partial<GrokConfig>): GrokConfig {
   const mailProvider = value.mail_provider === 'hotmail_local' ? 'hotmail_local'
     : value.mail_provider === 'smsbower' && value.registration_target === 'chatgpt' ? 'smsbower'
@@ -209,6 +220,137 @@ const CHATGPT_CHECKOUT_OPTIONS: StyledSelectOption[] = [
   { value: 'disabled', label: '未开启' },
   { value: 'unknown', label: '未知' },
 ];
+
+const CHATGPT_PAYMENT_METHOD_OPTIONS: StyledSelectOption[] = [
+  { value: 'all', label: '全部支付方式' },
+  { value: 'apple_pay', label: 'Apple Pay' },
+  { value: 'paypal', label: 'PayPal' },
+  { value: 'gcash', label: 'GCash' },
+  { value: 'gopay', label: 'GoPay' },
+  { value: 'card', label: '银行卡' },
+  { value: 'google_pay', label: 'Google Pay' },
+  { value: 'link', label: 'Link' },
+  { value: 'alipay', label: '支付宝' },
+  { value: 'wechat_pay', label: '微信支付' },
+  { value: 'other', label: '其他方式' },
+  { value: 'none', label: '未检测/无' },
+];
+
+export function getPaymentMethodInfo(method: string): { label: string; badgeClass: string } {
+  const norm = method.trim().toLowerCase().replace(/[-_]/g, '');
+  switch (norm) {
+    case 'applepay':
+    case 'apple':
+      return {
+        label: 'Apple Pay',
+        badgeClass: 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900 border border-zinc-700/60 dark:border-zinc-300/60 shadow-xs font-mono',
+      };
+    case 'paypal':
+      return {
+        label: 'PayPal',
+        badgeClass: 'bg-blue-500/15 text-blue-600 dark:text-blue-400 border border-blue-500/30',
+      };
+    case 'gcash':
+      return {
+        label: 'GCash',
+        badgeClass: 'bg-sky-500/15 text-sky-600 dark:text-sky-400 border border-sky-500/30',
+      };
+    case 'gopay':
+    case 'go':
+      return {
+        label: 'GoPay',
+        badgeClass: 'bg-cyan-500/15 text-cyan-600 dark:text-cyan-400 border border-cyan-500/30',
+      };
+    case 'googlepay':
+    case 'gpay':
+      return {
+        label: 'Google Pay',
+        badgeClass: 'bg-teal-500/15 text-teal-600 dark:text-teal-400 border border-teal-500/30',
+      };
+    case 'card':
+    case 'creditcard':
+    case 'debitcard':
+      return {
+        label: '银行卡',
+        badgeClass: 'bg-purple-500/15 text-purple-600 dark:text-purple-400 border border-purple-500/30',
+      };
+    case 'link':
+      return {
+        label: 'Link',
+        badgeClass: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30',
+      };
+    case 'alipay':
+      return {
+        label: '支付宝',
+        badgeClass: 'bg-blue-600/15 text-blue-700 dark:text-blue-300 border border-blue-600/30',
+      };
+    case 'wechatpay':
+    case 'wechat':
+    case 'wxpay':
+      return {
+        label: '微信支付',
+        badgeClass: 'bg-green-500/15 text-green-600 dark:text-green-400 border border-green-500/30',
+      };
+    case 'cashapp':
+      return {
+        label: 'Cash App',
+        badgeClass: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30',
+      };
+    case 'grabpay':
+      return {
+        label: 'GrabPay',
+        badgeClass: 'bg-lime-500/15 text-lime-600 dark:text-lime-400 border border-lime-500/30',
+      };
+    case 'kakaopay':
+    case 'kakao':
+      return {
+        label: 'Kakao Pay',
+        badgeClass: 'bg-yellow-500/15 text-yellow-700 dark:text-yellow-300 border border-yellow-500/30',
+      };
+    case 'klarna':
+      return {
+        label: 'Klarna',
+        badgeClass: 'bg-pink-500/15 text-pink-600 dark:text-pink-400 border border-pink-500/30',
+      };
+    case 'ideal':
+      return {
+        label: 'iDEAL',
+        badgeClass: 'bg-fuchsia-500/15 text-fuchsia-600 dark:text-fuchsia-400 border border-fuchsia-500/30',
+      };
+    case 'bancontact':
+      return {
+        label: 'Bancontact',
+        badgeClass: 'bg-indigo-500/15 text-indigo-600 dark:text-indigo-400 border border-indigo-500/30',
+      };
+    case 'sofort':
+      return {
+        label: 'Sofort',
+        badgeClass: 'bg-orange-500/15 text-orange-600 dark:text-orange-400 border border-orange-500/30',
+      };
+    case 'sepadebit':
+    case 'sepa':
+      return {
+        label: 'SEPA',
+        badgeClass: 'bg-violet-500/15 text-violet-600 dark:text-violet-400 border border-violet-500/30',
+      };
+    case 'revolutpay':
+    case 'revolut':
+      return {
+        label: 'Revolut Pay',
+        badgeClass: 'bg-rose-500/15 text-rose-600 dark:text-rose-400 border border-rose-500/30',
+      };
+    case 'paypay':
+      return {
+        label: 'PayPay',
+        badgeClass: 'bg-red-500/15 text-red-600 dark:text-red-400 border border-red-500/30',
+      };
+    default:
+      return {
+        label: method,
+        badgeClass: 'bg-slate-500/15 text-slate-600 dark:text-slate-300 border border-slate-500/30',
+      };
+  }
+}
 
 function chatgptMailTypeOf(email: string): string {
   const domain = (email.split('@')[1] || '').toLowerCase();
@@ -428,6 +570,7 @@ function translateStructuredChatgptMessage(text: string): string {
     passkey: '处理通行密钥',
     session: '获取 Session / AT',
     plus_trial: '检测 Plus 试用资格',
+    payment_methods: '检测可用支付方式',
     checkout_kind: '检测结账类型',
     flow: 'OpenAI 注册流程',
   };
@@ -440,7 +583,8 @@ function translateStructuredChatgptMessage(text: string): string {
     loading: '正在加载',
     checking: '正在检查',
     skipped: '未开启，已跳过',
-    detected: '已检测到 Cookie 弹窗',
+    detected: '已识别',
+    none: '未识别到专属方式',
     clicking: '正在点击“全部接受”',
     accepted: '已点击“Accept all”',
     accepted_after_click: '已点击“Accept all”，弹窗残留但不影响继续',
@@ -753,9 +897,11 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
   const [chatgptAccountMailType, setChatgptAccountMailType] = useState('all');
   const [chatgptAccountPlusTrial, setChatgptAccountPlusTrial] = useState('all');
   const [chatgptAccountCheckout, setChatgptAccountCheckout] = useState('all');
+  const [chatgptAccountPaymentMethod, setChatgptAccountPaymentMethod] = useState('all');
   const [chatgptAccountSelected, setChatgptAccountSelected] = useState<string[]>([]);
   const [visibleChatgptPasswords, setVisibleChatgptPasswords] = useState<Set<string>>(() => new Set());
   const [chatgptAccountsLoading, setChatgptAccountsLoading] = useState(false);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
   const [currentChatgptBatchId, setCurrentChatgptBatchId] = useState('');
   const [logClearBefore, setLogClearBefore] = useState(0);
   const [archivedLogs, setArchivedLogs] = useState<RegistrationLog[]>([]);
@@ -1249,6 +1395,10 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
         document.execCommand('copy');
         input.remove();
       }
+      if (sessionId) {
+        setCopiedId(sessionId);
+        setTimeout(() => setCopiedId((current) => (current === sessionId ? null : current)), 1800);
+      }
       setNotice({ tone: 'ok', text: `已复制 ${result.email || 'ChatGPT 账号'} 的 AT。` });
     } catch (error) {
       showError(error);
@@ -1294,6 +1444,11 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
         input.select();
         document.execCommand('copy');
         input.remove();
+      }
+      if (!allAccounts && ids.length === 1) {
+        const singleId = ids[0];
+        setCopiedId(singleId);
+        setTimeout(() => setCopiedId((current) => (current === singleId ? null : current)), 1800);
       }
       setNotice({ tone: 'ok', text: `已复制 ${result.total || 0} 个 OpenAI 账号的 AT，每行一个。` });
     } catch (error) {
@@ -1472,14 +1627,28 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
         ? item.checkout_probe.kind
         : item.checkout_probe?.status === 'disabled' ? 'disabled' : 'unknown';
       if (chatgptAccountCheckout !== 'all' && checkout !== chatgptAccountCheckout) return false;
+      if (chatgptAccountPaymentMethod !== 'all') {
+        const methods = (item.payment_methods || []).map((m) => m.toLowerCase().replace(/[-_]/g, ''));
+        if (chatgptAccountPaymentMethod === 'none') {
+          if (methods.length > 0) return false;
+        } else if (chatgptAccountPaymentMethod === 'other') {
+          const mainMethods = new Set(['applepay', 'paypal', 'gcash', 'gopay', 'card', 'googlepay', 'link', 'alipay', 'wechatpay']);
+          const hasOther = methods.some((m) => !mainMethods.has(m));
+          if (!hasOther) return false;
+        } else {
+          const targetNorm = chatgptAccountPaymentMethod.toLowerCase().replace(/[-_]/g, '');
+          if (!methods.includes(targetNorm)) return false;
+        }
+      }
       return true;
     });
-  }, [chatgptAccounts, chatgptAccountKeyword, chatgptAccountMailType, chatgptAccountPlusTrial, chatgptAccountCheckout]);
+  }, [chatgptAccounts, chatgptAccountKeyword, chatgptAccountMailType, chatgptAccountPlusTrial, chatgptAccountCheckout, chatgptAccountPaymentMethod]);
   const resetChatgptAccountFilters = () => {
     setChatgptAccountKeyword('');
     setChatgptAccountMailType('all');
     setChatgptAccountPlusTrial('all');
     setChatgptAccountCheckout('all');
+    setChatgptAccountPaymentMethod('all');
   };
   const logs = useMemo<RegistrationLog[]>(() => {
     const entries: RegistrationLog[] = [...archivedLogs];
@@ -1762,8 +1931,8 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
                 <button type="button" onClick={() => window.open(browserViewerUrl, '_blank', 'noopener,noreferrer')} className="px-3 py-2 rounded-lg bg-blue-600 text-white text-xs font-bold flex items-center gap-1.5"><Globe2 className="w-3.5 h-3.5" />新窗口打开</button>
               </> : tab === 'rotation' ? config.registration_target === 'chatgpt' ? <>
                 <button onClick={() => void loadChatgptAccounts()} disabled={chatgptAccountsLoading} className={`px-3 py-2 rounded-lg border text-xs font-bold flex items-center gap-1.5 ${theme.border} ${theme.textPrimary}`}><RefreshCw className={`w-3.5 h-3.5 ${chatgptAccountsLoading ? 'animate-spin' : ''}`} />刷新</button>
-                <button onClick={() => void copyChatgptAccountTokens(chatgptAccountSelected)} disabled={!!busy || !chatgptAccountSelected.length} className="px-3 py-2 rounded-lg bg-blue-600 text-white text-xs font-bold flex items-center gap-1.5 disabled:opacity-40">{busy === 'copy-selected-at' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Copy className="w-3.5 h-3.5" />}复制所选 AT</button>
-                <button onClick={() => void copyChatgptAccountTokens([], true)} disabled={!!busy || !chatgptAccounts.length} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-xs font-bold flex items-center gap-1.5 disabled:opacity-40">{busy === 'copy-all-at' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Copy className="w-3.5 h-3.5" />}复制全部 AT</button>
+                <button onClick={() => void copyChatgptAccountTokens(chatgptAccountSelected)} disabled={!!busy || !chatgptAccountSelected.length} className="px-3.5 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold flex items-center gap-1.5 shadow-xs transition-all active:scale-95 disabled:opacity-40">{busy === 'copy-selected-at' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Copy className="w-3.5 h-3.5" />}复制所选 AT</button>
+                <button onClick={() => void copyChatgptAccountTokens([], true)} disabled={!!busy || !chatgptAccounts.length} className={`px-3.5 py-2 rounded-lg border text-xs font-semibold flex items-center gap-1.5 transition-all active:scale-95 disabled:opacity-40 ${isDark ? 'border-emerald-500/30 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400' : 'border-emerald-500/30 bg-emerald-50 hover:bg-emerald-100 text-emerald-700'}`}>{busy === 'copy-all-at' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Copy className="w-3.5 h-3.5" />}复制全部 AT</button>
               </> : <>
                 <button onClick={() => void loadRotation(rotation.page)} disabled={rotationLoading} className={`px-3 py-2 rounded-lg border text-xs font-bold flex items-center gap-1.5 ${theme.border} ${theme.textPrimary}`}><RefreshCw className={`w-3.5 h-3.5 ${rotationLoading ? 'animate-spin' : ''}`} />刷新</button>
                 <button onClick={() => void probeRotation(rotationSelected)} disabled={!!busy || !rotationSelected.length} className="px-3 py-2 rounded-lg bg-blue-600 text-white text-xs font-bold flex items-center gap-1.5 disabled:opacity-40">{busy === 'rotation-probe' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}激活所选</button>
@@ -1812,9 +1981,10 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
                     {chatgptTokenSessions.length ? <div className="divide-y divide-slate-500/10">
                       {chatgptTokenSessions.slice(0, 10).map((session) => {
                         const sessionId = String(session.id || '');
+                        const pms = session.payment_methods || [];
                         return <div key={sessionId} className="px-4 py-3 flex items-center justify-between gap-3">
-                          <div className="min-w-0"><strong className={`block truncate text-[11px] ${theme.textPrimary}`}>{session.email || '未记录邮箱'}</strong><div className="mt-1 flex flex-wrap items-center gap-1.5"><span className={`text-[9px] ${theme.textSecondary}`}>AT 已生成并保存在本地</span><span title={session.plus_trial?.reason || '尚未检测'} className={`px-1.5 py-0.5 rounded-full text-[9px] font-bold ${session.plus_trial?.status === 'eligible' ? 'bg-violet-500/15 text-violet-500' : session.plus_trial?.status === 'ineligible' ? 'bg-rose-500/15 text-rose-600 dark:text-rose-400 ring-1 ring-inset ring-rose-500/30' : 'bg-amber-500/15 text-amber-500'}`}>Plus：{session.plus_trial?.status === 'eligible' ? '有资格' : session.plus_trial?.status === 'ineligible' ? '无资格' : '未知'}</span><span title={session.checkout_probe?.reason || '尚未检测'} className={`px-1.5 py-0.5 rounded-full text-[9px] font-bold ${session.checkout_probe?.kind === 'oaics' ? 'bg-cyan-500/15 text-cyan-500' : session.checkout_probe?.kind === 'cs_live' ? 'bg-emerald-500/15 text-emerald-500' : session.checkout_probe?.status === 'disabled' ? 'bg-slate-500/10 text-slate-500' : 'bg-amber-500/15 text-amber-500'}`}>Checkout：{session.checkout_probe?.kind === 'oaics' ? 'oaics' : session.checkout_probe?.kind === 'cs_live' ? 'cs_live' : session.checkout_probe?.status === 'disabled' ? '未开启' : '未知'}</span></div></div>
-                          <button type="button" onClick={() => void copyChatgptAccessToken(sessionId)} disabled={!!busy || !sessionId} className="shrink-0 inline-flex items-center gap-1.5 rounded-lg border border-blue-500/30 px-3 py-2 text-[10px] font-bold text-blue-600 hover:bg-blue-500/10 disabled:opacity-40">{busy === `copy-at-${sessionId}` ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Copy className="w-3.5 h-3.5" />}复制 AT</button>
+                          <div className="min-w-0"><strong className={`block truncate text-[11px] ${theme.textPrimary}`}>{session.email || '未记录邮箱'}</strong><div className="mt-1 flex flex-wrap items-center gap-1.5"><span className={`text-[9px] ${theme.textSecondary}`}>AT 已生成并保存在本地</span><span title={session.plus_trial?.reason || '尚未检测'} className={`px-1.5 py-0.5 rounded-full text-[9px] font-bold ${session.plus_trial?.status === 'eligible' ? 'bg-violet-500/15 text-violet-500' : session.plus_trial?.status === 'ineligible' ? 'bg-rose-500/15 text-rose-600 dark:text-rose-400 ring-1 ring-inset ring-rose-500/30' : 'bg-amber-500/15 text-amber-500'}`}>Plus：{session.plus_trial?.status === 'eligible' ? '有资格' : session.plus_trial?.status === 'ineligible' ? '无资格' : '未知'}</span><span title={session.checkout_probe?.reason || '尚未检测'} className={`px-1.5 py-0.5 rounded-full text-[9px] font-bold ${session.checkout_probe?.kind === 'oaics' ? 'bg-cyan-500/15 text-cyan-500' : session.checkout_probe?.kind === 'cs_live' ? 'bg-emerald-500/15 text-emerald-500' : session.checkout_probe?.status === 'disabled' ? 'bg-slate-500/10 text-slate-500' : 'bg-amber-500/15 text-amber-500'}`}>Checkout：{session.checkout_probe?.kind === 'oaics' ? 'oaics' : session.checkout_probe?.kind === 'cs_live' ? 'cs_live' : session.checkout_probe?.status === 'disabled' ? '未开启' : '未知'}</span>{pms.map((m) => { const info = getPaymentMethodInfo(m); return <span key={m} className={`px-1.5 py-0.5 rounded-full text-[9px] font-bold ${info.badgeClass}`}>{info.label}</span>; })}</div></div>
+                          <button type="button" onClick={() => void copyChatgptAccessToken(sessionId)} disabled={!!busy || !sessionId} className={`shrink-0 inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11px] font-semibold transition-all active:scale-95 disabled:opacity-40 ${copiedId === sessionId ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30' : isDark ? 'bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/25 hover:border-blue-500/40' : 'bg-blue-50 hover:bg-blue-100 text-blue-600 border border-blue-200 hover:border-blue-300'}`}>{busy === `copy-at-${sessionId}` ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : copiedId === sessionId ? <Check className="w-3.5 h-3.5 text-emerald-500 stroke-[2.5]" /> : <Copy className="w-3.5 h-3.5" />}{copiedId === sessionId ? '已复制' : '复制 AT'}</button>
                         </div>;
                       })}
                     </div> : <div className={`px-4 py-6 text-center text-[10px] ${theme.textSecondary}`}>{currentChatgptBatchId ? '本次注册成功并获取 Session 后，这里会出现检测结果和“复制 AT”。' : '启动新的 ChatGPT 注册任务后，这里只显示该批次的注册结果。'}</div>}
@@ -2105,11 +2275,12 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
                   </div>
 
                   <div className={`p-3 rounded-xl border ${theme.border} flex flex-col xl:flex-row xl:items-end gap-3`}>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3 flex-1">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-3 flex-1">
                       <Field label="邮箱搜索"><div className="relative"><Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" /><input value={chatgptAccountKeyword} onChange={(event) => setChatgptAccountKeyword(event.target.value)} placeholder="按邮箱模糊搜索" className={`${fieldClass} pl-8`} /></div></Field>
                       <Field label="邮箱类型"><StyledSelect ariaLabel="邮箱类型筛选" value={chatgptAccountMailType} onChange={setChatgptAccountMailType} options={CHATGPT_MAIL_TYPE_OPTIONS} isDark={isDark} /></Field>
                       <Field label="Plus 试用资格"><StyledSelect ariaLabel="Plus 试用资格筛选" value={chatgptAccountPlusTrial} onChange={setChatgptAccountPlusTrial} options={CHATGPT_PLUS_TRIAL_OPTIONS} isDark={isDark} /></Field>
                       <Field label="Checkout 类型"><StyledSelect ariaLabel="Checkout 类型筛选" value={chatgptAccountCheckout} onChange={setChatgptAccountCheckout} options={CHATGPT_CHECKOUT_OPTIONS} isDark={isDark} /></Field>
+                      <Field label="支付方式"><StyledSelect ariaLabel="支付方式筛选" value={chatgptAccountPaymentMethod} onChange={setChatgptAccountPaymentMethod} options={CHATGPT_PAYMENT_METHOD_OPTIONS} isDark={isDark} /></Field>
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
                       <span className={`text-[11px] ${theme.textSecondary}`}>筛选后 {filteredChatgptAccounts.length} 个</span>
@@ -2118,11 +2289,11 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
                   </div>
 
                   <div className={`overflow-x-auto rounded-xl border ${theme.border}`}>
-                    <table className="w-full min-w-[1020px] text-left text-[11px]">
+                    <table className="w-full min-w-[1240px] text-left text-[11px]">
                       <thead className={isDark ? 'bg-slate-900 text-slate-400' : 'bg-slate-100 text-slate-500'}>
                         <tr>
                           <th className="p-3 w-10"><input type="checkbox" aria-label="选择全部 OpenAI 账号" checked={filteredChatgptAccounts.length > 0 && filteredChatgptAccounts.every((item) => chatgptAccountSelected.includes(item.id))} ref={(input) => { if (input) input.indeterminate = filteredChatgptAccounts.some((item) => chatgptAccountSelected.includes(item.id)) && !filteredChatgptAccounts.every((item) => chatgptAccountSelected.includes(item.id)); }} onChange={(event) => { const ids = filteredChatgptAccounts.map((item) => item.id); setChatgptAccountSelected((previous) => event.target.checked ? Array.from(new Set([...previous, ...ids])) : previous.filter((id) => !ids.includes(id))); }} className="accent-blue-600" /></th>
-                          <th className="p-3 text-center">邮箱</th><th className="p-3 text-center">密码</th><th className="p-3 text-center">AT 状态</th><th className="p-3 text-center">Plus 试用</th><th className="p-3 text-center">Checkout 类型</th><th className="p-3 text-center">保存时间</th><th className="p-3 text-center">操作</th>
+                          <th className="p-3 text-center">邮箱</th><th className="p-3 text-center">密码</th><th className="p-3 text-center">AT 状态</th><th className="p-3 text-center">Plus 试用</th><th className="p-3 text-center">Checkout 类型</th><th className="p-3 text-center">支付方式</th><th className="p-3 text-center">创建时间</th><th className="p-3 text-center">距离创建时间</th><th className="p-3 text-center">操作</th>
                         </tr>
                       </thead>
                       <tbody className={`divide-y ${isDark ? 'divide-slate-800' : 'divide-slate-200'}`}>
@@ -2130,6 +2301,7 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
                           const selected = chatgptAccountSelected.includes(item.id);
                           const passwordVisible = visibleChatgptPasswords.has(item.id);
                           const registrationPassword = String(item.password || '');
+                          const paymentMethods = item.payment_methods || [];
                           return <tr key={item.id} className={selected ? 'bg-blue-500/5' : ''}>
                             <td className="p-3"><input type="checkbox" aria-label={`选择 ${item.email || 'OpenAI 账号'}`} checked={selected} onChange={(event) => setChatgptAccountSelected((previous) => event.target.checked ? [...new Set([...previous, item.id])] : previous.filter((id) => id !== item.id))} className="accent-blue-600" /></td>
                             <td className={`p-3 text-center font-bold ${theme.textPrimary}`}>{item.email || '未记录邮箱'}</td>
@@ -2137,11 +2309,55 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
                             <td className="p-3 text-center"><span className={`inline-flex px-2 py-1 rounded-full font-bold ${isDark ? 'bg-emerald-400/20 text-emerald-200' : 'bg-emerald-500/15 text-emerald-700'}`}>已保存</span></td>
                             <td className="p-3 text-center">{item.plus_trial?.status === 'eligible' ? <span title={item.plus_trial.reason || ''} className={`inline-flex px-2 py-1 rounded-full font-bold ${isDark ? 'bg-violet-400/20 text-violet-200' : 'bg-violet-500/15 text-violet-700'}`}>有资格</span> : item.plus_trial?.status === 'ineligible' ? <span title={item.plus_trial.reason || ''} className={`inline-flex px-2 py-1 rounded-full border font-extrabold shadow-sm ${isDark ? 'border-rose-400/50 bg-rose-400/20 text-rose-200' : 'border-rose-500/40 bg-rose-500/15 text-rose-700'}`}>无资格</span> : <span title={item.plus_trial?.reason || '尚未检测'} className={`inline-flex px-2 py-1 rounded-full font-bold ${isDark ? 'bg-amber-400/20 text-amber-200' : 'bg-amber-500/15 text-amber-700'}`}>未知</span>}</td>
                             <td className="p-3 text-center">{item.checkout_probe?.kind === 'oaics' ? <span title={item.checkout_probe.reason || ''} className={`inline-flex px-2 py-1 rounded-full font-bold ${isDark ? 'bg-cyan-400/20 text-cyan-200' : 'bg-cyan-500/15 text-cyan-700'}`}>oaics</span> : item.checkout_probe?.kind === 'cs_live' ? <span title={item.checkout_probe.reason || ''} className={`inline-flex px-2 py-1 rounded-full font-bold ${isDark ? 'bg-emerald-400/20 text-emerald-200' : 'bg-emerald-500/15 text-emerald-700'}`}>cs_live</span> : item.checkout_probe?.status === 'disabled' ? <span title={item.checkout_probe.reason || ''} className={`inline-flex px-2 py-1 rounded-full font-bold ${isDark ? 'bg-slate-400/20 text-slate-200' : 'bg-slate-500/15 text-slate-600'}`}>未开启</span> : <span title={item.checkout_probe?.reason || '尚未检测'} className={`inline-flex px-2 py-1 rounded-full font-bold ${isDark ? 'bg-amber-400/20 text-amber-200' : 'bg-amber-500/15 text-amber-700'}`}>未知</span>}</td>
+                            <td className="p-3 text-center">
+                              {paymentMethods.length > 0 ? (
+                                <div className="flex flex-wrap items-center justify-center gap-1 max-w-[240px] mx-auto">
+                                  {paymentMethods.map((method) => {
+                                    const info = getPaymentMethodInfo(method);
+                                    return (
+                                      <span
+                                        key={method}
+                                        className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold tracking-tight ${info.badgeClass}`}
+                                      >
+                                        {info.label}
+                                      </span>
+                                    );
+                                  })}
+                                </div>
+                              ) : (
+                                <span className={`inline-flex px-2 py-0.5 rounded-full text-[10px] ${isDark ? 'bg-slate-800 text-slate-400' : 'bg-slate-100 text-slate-400'}`}>
+                                  未检测
+                                </span>
+                              )}
+                            </td>
                             <td className={`p-3 text-center ${theme.textSecondary}`}>{rotationDate(item.created_at)}</td>
-                            <td className="p-3 text-center"><button onClick={() => void copyChatgptAccountTokens([item.id])} disabled={!!busy} className="px-3 py-1.5 rounded-md bg-blue-600 text-white font-bold disabled:opacity-40 inline-flex items-center gap-1">{busy === 'copy-selected-at' ? <Loader2 className="w-3 h-3 animate-spin" /> : <Copy className="w-3 h-3" />}复制 AT</button></td>
+                            <td className="p-3 text-center font-mono font-medium text-blue-600 dark:text-blue-400">{formatAgeDuration(item.created_at)}</td>
+                            <td className="p-3 text-center">
+                              <button
+                                type="button"
+                                onClick={() => void copyChatgptAccountTokens([item.id])}
+                                disabled={!!busy}
+                                className={`group inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold tracking-tight transition-all duration-150 active:scale-95 disabled:opacity-40 disabled:pointer-events-none ${
+                                  copiedId === item.id
+                                    ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30'
+                                    : isDark
+                                      ? 'bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/25 hover:border-blue-500/40'
+                                      : 'bg-blue-50 hover:bg-blue-100 text-blue-600 border border-blue-200 hover:border-blue-300 shadow-xs'
+                                }`}
+                              >
+                                {busy === 'copy-selected-at' && chatgptAccountSelected.length === 1 && chatgptAccountSelected[0] === item.id ? (
+                                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                ) : copiedId === item.id ? (
+                                  <Check className="w-3.5 h-3.5 text-emerald-500 stroke-[2.5]" />
+                                ) : (
+                                  <Copy className="w-3.5 h-3.5 transition-transform duration-150 group-hover:scale-110 opacity-80 group-hover:opacity-100" />
+                                )}
+                                <span>{copiedId === item.id ? '已复制' : '复制 AT'}</span>
+                              </button>
+                            </td>
                           </tr>;
                         })}
-                        {!filteredChatgptAccounts.length && <tr><td colSpan={8} className={`p-12 text-center ${theme.textSecondary}`}>{chatgptAccountsLoading ? '正在读取本地 OpenAI 账号…' : chatgptAccounts.length ? '没有符合筛选条件的账号' : '尚未保存包含 AT 的 OpenAI 账号'}</td></tr>}
+                        {!filteredChatgptAccounts.length && <tr><td colSpan={10} className={`p-12 text-center ${theme.textSecondary}`}>{chatgptAccountsLoading ? '正在读取本地 OpenAI 账号…' : chatgptAccounts.length ? '没有符合筛选条件的账号' : '尚未保存包含 AT 的 OpenAI 账号'}</td></tr>}
                       </tbody>
                     </table>
                   </div>
