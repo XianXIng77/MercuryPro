@@ -1,9 +1,12 @@
 import React, { useState } from 'react';
 import { motion } from 'motion/react';
 import {
+  LayoutDashboard,
   Mail,
   ScrollText,
   UserPlus,
+  KeyRound,
+  ShieldCheck,
 } from 'lucide-react';
 import { NavTab, StylePreset } from '../types';
 
@@ -31,6 +34,11 @@ export const WorkbenchSidebarNav: React.FC<WorkbenchSidebarNavProps> = ({
     badge?: number;
   }[] = [
     {
+      id: 'dashboard',
+      label: '数据仪表盘',
+      icon: <LayoutDashboard className="w-5 h-5" />,
+    },
+    {
       id: 'email',
       label: '邮箱管理',
       icon: <Mail className="w-5 h-5" />,
@@ -38,13 +46,23 @@ export const WorkbenchSidebarNav: React.FC<WorkbenchSidebarNavProps> = ({
     },
     {
       id: 'register',
-      label: '注册',
+      label: 'AI注册',
       icon: <UserPlus className="w-5 h-5" />,
     },
     {
+      id: 'invite',
+      label: '邀请码',
+      icon: <KeyRound className="w-5 h-5" />,
+    },
+    {
       id: 'logs',
-      label: '日志',
+      label: '注册日志',
       icon: <ScrollText className="w-5 h-5" />,
+    },
+    {
+      id: 'audit',
+      label: '操作审计',
+      icon: <ShieldCheck className="w-5 h-5" />,
     },
   ];
 

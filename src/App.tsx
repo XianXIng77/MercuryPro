@@ -11,12 +11,15 @@ import { ExtensionModules } from './components/ExtensionModules';
 import { LoginView } from './components/LoginView';
 import { MailAccountList } from './components/MailAccountList';
 import { MailboxInboxView } from './components/MailboxInboxView';
+import { PublicMailboxInboxPage } from './components/PublicMailboxInboxPage';
 import { Navbar } from './components/Navbar';
 import { WorkbenchSidebarNav } from './components/WorkbenchSidebarNav';
 import { authApi } from './api/auth';
+import { useToast } from './components/Toast';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<NavTab>('email');
+  const toast = useToast();
+  const [activeTab, setActiveTab] = useState<NavTab>('dashboard');
   const [activeAccount, setActiveAccount] = useState<MailAccount | null>(null);
   const [sessionUser, setSessionUser] = useState<string | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
@@ -24,9 +27,21 @@ export default function App() {
     const saved = typeof window === 'undefined' ? '' : window.localStorage.getItem('mercurypro-style-preset');
     return STYLE_PRESETS.some((preset) => preset.id === saved) ? String(saved) : 'mist-blue-gray';
   });
+  const publicMailboxToken = useMemo(() => {
+    if (typeof window === 'undefined' || !window.location.pathname.startsWith('/mailbox/')) return '';
+    try {
+      return decodeURIComponent(window.location.pathname.slice('/mailbox/'.length));
+    } catch {
+      return '';
+    }
+  }, []);
 
   // 启动时向后端查询当前会话(HttpOnly Cookie 携带,自动恢复登录态)
   useEffect(() => {
+    if (publicMailboxToken) {
+      setAuthChecked(true);
+      return;
+    }
     let cancelled = false;
     authApi
       .me()
@@ -42,21 +57,26 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [publicMailboxToken]);
 
-  const handleLoginSuccess = (email: string) => {
-    setSessionUser(email);
+  const handleLoginSuccess = (_email: string, successMessage = `登录成功，欢迎回来：${_email}`) => {
+    setSessionUser(_email);
+    // 等工作台完成切换后再提示，避免登录页卸载瞬间遮挡/丢失成功提示
+    window.setTimeout(() => toast.success(successMessage), 50);
   };
 
   const handleLogout = () => {
     authApi
       .logout()
+      .then(() => toast.info('已安全退出登录'))
       .catch(() => {
         /* 后端不可达时也直接本地退出 */
+        toast.warning('本地已退出登录，但服务器会话未确认');
       })
       .finally(() => {
         setSessionUser(null);
         setActiveAccount(null);
+        setActiveTab('dashboard');
       });
   };
 
@@ -70,8 +90,12 @@ export default function App() {
   }, [currentPreset.id]);
 
   const handleRunAiAutoTag = () => {
-    alert('请先进入具体邮箱并获取邮件后，再执行 AI 智能分类。');
+    toast.info('请先进入具体邮箱并获取邮件后，再执行 AI 智能分类。');
   };
+
+  if (publicMailboxToken) {
+    return <PublicMailboxInboxPage accessToken={publicMailboxToken} currentPreset={currentPreset} />;
+  }
 
   // 会话检查中:先不渲染,避免已登录用户刷新时闪现登录页
   if (!authChecked) {

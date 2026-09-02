@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { AutoTagRule, Folder, Tag, StylePreset } from '../types';
 import { StyledSelect, StyledSelectOption } from './StyledSelect';
+import { useToast } from './Toast';
 
 const CONDITION_TYPE_OPTIONS: StyledSelectOption[] = [
   { value: 'subject_contains', label: '主题包含关键字' },
@@ -56,6 +57,7 @@ export const AutoTagRuleModal: React.FC<AutoTagRuleModalProps> = ({
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [targetFolderId, setTargetFolderId] = useState<string>('');
   const [markStarred, setMarkStarred] = useState(false);
+  const toast = useToast();
 
   const theme = currentPreset.themeClasses;
   const isDark = currentPreset.mode === 'dark';
@@ -65,7 +67,7 @@ export const AutoTagRuleModal: React.FC<AutoTagRuleModalProps> = ({
   const handleCreateRule = (e: React.FormEvent) => {
     e.preventDefault();
     if (!ruleName.trim() || selectedTags.length === 0) {
-      alert('请填写规则名称并至少选择一个要施加的标签！');
+      toast.warning('请填写规则名称并至少选择一个要施加的标签！');
       return;
     }
 
@@ -144,7 +146,7 @@ export const AutoTagRuleModal: React.FC<AutoTagRuleModalProps> = ({
             <button
               onClick={() => {
                 onExecuteAllRules();
-                alert('已成功执行所有已启用的自定义规则分类！');
+                toast.success('已成功执行所有已启用的自定义规则分类！');
               }}
               className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700 flex items-center gap-1"
             >

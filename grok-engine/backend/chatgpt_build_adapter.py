@@ -876,8 +876,25 @@ def get_registration_access_token(session_id: str) -> dict[str, Any]:
     )
 
 
-def list_registration_accounts() -> dict[str, Any]:
-    return _operations.list_registration_accounts(_registration_context())
+def list_registration_accounts(
+    page: int = 1,
+    page_size: int = 20,
+    keyword: str = "",
+    mail_type: str = "all",
+    plus_trial: str = "all",
+    checkout: str = "all",
+    payment_method: str = "all",
+) -> dict[str, Any]:
+    return _operations.list_registration_accounts(
+        _registration_context(),
+        page=page,
+        page_size=page_size,
+        keyword=keyword,
+        mail_type=mail_type,
+        plus_trial=plus_trial,
+        checkout=checkout,
+        payment_method=payment_method,
+    )
 
 
 def get_registration_access_tokens(

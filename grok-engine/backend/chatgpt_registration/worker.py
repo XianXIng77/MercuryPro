@@ -331,6 +331,11 @@ def _run_registration(ctx, sid, proxy, receiver, browser_runtime=None):
         raw_payment_methods = result.get("payment_methods")
         if not raw_payment_methods and isinstance(plus_trial, dict):
             raw_payment_methods = plus_trial.get("payment_methods")
+        payment_methods_status = str(
+            result.get("payment_methods_status")
+            or plus_trial.get("payment_methods_status")
+            or ("detected" if raw_payment_methods else "unknown")
+        ).lower()
         payment_methods_list: list[str] = [
             str(m).strip().lower().replace("-", "_")
             for m in (raw_payment_methods if isinstance(raw_payment_methods, list) else [])
@@ -347,6 +352,7 @@ def _run_registration(ctx, sid, proxy, receiver, browser_runtime=None):
         session_data["mercuryPlusTrialEligibility"] = plus_trial
         session_data["mercuryCheckoutProbe"] = checkout_probe
         session_data["mercuryPaymentMethods"] = deduped_payment_methods
+        session_data["mercuryPaymentMethodsStatus"] = payment_methods_status
         password_was_set = any(
             isinstance(step, dict)
             and str(step.get("step") or "") == "password"
@@ -398,6 +404,7 @@ def _run_registration(ctx, sid, proxy, receiver, browser_runtime=None):
             plus_trial=plus_trial,
             checkout_probe=checkout_probe,
             payment_methods=deduped_payment_methods,
+            payment_methods_status=payment_methods_status,
             auto_import={
                 "enabled": False,
                 "ok": None,

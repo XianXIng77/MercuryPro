@@ -31,6 +31,7 @@ import {
 import { MailAccount, StylePreset } from '../types';
 import { StyledSelect } from './StyledSelect';
 import { ConfirmDialog } from './ConfirmDialog';
+import { useToast } from './Toast';
 
 interface MailAccountListProps {
   onOpenAccountInbox: (account: MailAccount) => void;
@@ -47,6 +48,7 @@ export const MailAccountList: React.FC<MailAccountListProps> = ({
   const theme = currentPreset.themeClasses;
   const isDark = currentPreset.mode === 'dark';
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const toast = useToast();
 
   const [accounts, setAccounts] = useState<MailAccount[]>([]);
   const [totalItems, setTotalItems] = useState(0);
@@ -63,7 +65,6 @@ export const MailAccountList: React.FC<MailAccountListProps> = ({
   const [refreshStates, setRefreshStates] = useState<Record<string, RefreshState>>({});
   const [isBulkRefreshing, setIsBulkRefreshing] = useState(false);
 
-  const [toastMessage, setToastMessage] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
   const [importMode, setImportMode] = useState<'text' | 'file'>('text');
   const [batchText, setBatchText] = useState('');
@@ -78,10 +79,7 @@ export const MailAccountList: React.FC<MailAccountListProps> = ({
   const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
   const isAllSelected = accounts.length > 0 && accounts.every((account) => selectedIds.includes(account.id));
 
-  const showToast = useCallback((message: string) => {
-    setToastMessage(message);
-    window.setTimeout(() => setToastMessage(''), 2800);
-  }, []);
+  const showToast = useCallback((message: string) => toast.success(message), [toast]);
 
   const loadAccounts = useCallback(async () => {
     setLoading(true);
@@ -190,7 +188,7 @@ export const MailAccountList: React.FC<MailAccountListProps> = ({
       showToast(`已标记为${nextStatus === '1' ? '已用' : '未用'}`);
     } catch (error: any) {
       setAccounts((previous) => previous.map((item) => item.id === account.id ? account : item));
-      showToast(error.message || '状态修改失败');
+      toast.error(error.message || '状态修改失败');
     }
   };
 
@@ -205,7 +203,7 @@ export const MailAccountList: React.FC<MailAccountListProps> = ({
       return true;
     } catch (error: any) {
       setRefreshStates((previous) => ({ ...previous, [account.id]: { status: 'error', message: error.message || '刷新失败' } }));
-      if (!quiet) showToast(error.message || 'Token 刷新失败');
+      if (!quiet) toast.error(error.message || 'Token 刷新失败');
       return false;
     }
   };
@@ -232,7 +230,7 @@ export const MailAccountList: React.FC<MailAccountListProps> = ({
       setPendingDeleteAccounts([]);
       await loadAccounts();
     } catch (error: any) {
-      showToast(error.message || '删除失败');
+      toast.error(error.message || '删除失败');
     } finally {
       setIsDeletingAccount(false);
     }
@@ -265,7 +263,7 @@ export const MailAccountList: React.FC<MailAccountListProps> = ({
       setCurrentPage(1);
       await loadAccounts();
     } catch (error: any) {
-      showToast(error.message || '导入失败');
+      toast.error(error.message || '导入失败');
     } finally {
       setIsImporting(false);
     }
@@ -280,13 +278,6 @@ export const MailAccountList: React.FC<MailAccountListProps> = ({
 
   return (
     <div className={`flex-1 flex flex-col h-full overflow-hidden ${theme.appBg} text-xs`}>
-      {toastMessage && (
-        <div className="fixed top-14 left-1/2 -translate-x-1/2 z-[70] px-4 py-2.5 rounded-xl bg-slate-950/95 text-white shadow-xl flex items-center gap-2">
-          <Check className="w-4 h-4 text-emerald-400" />
-          <span>{toastMessage}</span>
-        </div>
-      )}
-
       <form onSubmit={(event) => { event.preventDefault(); runSearch(); }} className={`p-3 border-b flex flex-wrap items-center gap-4 ${theme.navBg} ${theme.border} shrink-0`}>
         <div className="flex items-center gap-2">
           <span className={`font-semibold ${theme.textPrimary}`}>邮箱</span>

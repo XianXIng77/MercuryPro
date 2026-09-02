@@ -45,8 +45,11 @@ export const Navbar: React.FC<NavbarProps> = ({
                 : 'bg-blue-100/90 text-blue-700 border-blue-300/80'
             }`}>
               {activeTab === 'email' && '邮箱管理'}
-              {activeTab === 'register' && '注册'}
-              {activeTab === 'logs' && '注册诊断日志'}
+              {activeTab === 'dashboard' && '数据仪表盘'}
+              {activeTab === 'register' && 'AI注册'}
+              {activeTab === 'invite' && '邀请码'}
+              {activeTab === 'logs' && '注册日志'}
+              {activeTab === 'audit' && '操作审计'}
             </span>
           </div>
         </div>

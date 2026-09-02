@@ -921,6 +921,10 @@ def register_chatgpt_account(
         )
         plus_trial_status = str(plus_trial.get("status") or "unknown")
         payment_methods = list(plus_trial.get("payment_methods") or [])
+        payment_methods_status = str(
+            plus_trial.get("payment_methods_status")
+            or ("detected" if payment_methods else "unknown")
+        )
         _step(
             "plus_trial",
             plus_trial_status,
@@ -929,7 +933,7 @@ def register_chatgpt_account(
         )
         _step(
             "payment_methods",
-            "detected" if payment_methods else "none",
+            payment_methods_status,
             methods=payment_methods,
             methods_text=", ".join(payment_methods) if payment_methods else "未检测到专属方式",
         )
@@ -1004,6 +1008,7 @@ def register_chatgpt_account(
             "plus_trial": plus_trial,
             "checkout_probe": checkout_probe,
             "payment_methods": payment_methods,
+            "payment_methods_status": payment_methods_status,
             "name": f"{first_name} {last_name}",
             "steps": steps,
         }

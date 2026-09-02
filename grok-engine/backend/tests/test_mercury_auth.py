@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import tempfile
 import unittest
+from datetime import date, datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -142,6 +143,27 @@ class MercuryAuthTests(unittest.TestCase):
             asyncio.run(mercury_auth.login(payload, _FakeResponse()))
 
         self.assertEqual(ctx.exception.status_code, 401)
+
+    def test_build_user_stats_groups_users_without_exposing_details(self) -> None:
+        def timestamp(year: int, month: int, day: int) -> int:
+            return int(datetime(year, month, day, 12).timestamp())
+
+        self.save_users([
+            {"email": "admin@example.com", "role": "admin", "createdAt": timestamp(2026, 8, 31)},
+            {"email": "new@example.com", "role": "user", "createdAt": timestamp(2026, 9, 2)},
+            {"email": "previous@example.com", "role": "user", "createdAt": timestamp(2026, 7, 20)},
+        ])
+
+        stats = mercury_auth.build_user_stats(today=date(2026, 9, 2))
+
+        self.assertEqual(stats["summary"]["totalUsers"], 3)
+        self.assertEqual(stats["summary"]["newUsersLast30Days"], 2)
+        self.assertEqual(stats["summary"]["newUsersToday"], 1)
+        self.assertEqual(stats["summary"]["growthRate"], 100.0)
+        self.assertEqual(len(stats["dailyRegistrations"]), 30)
+        self.assertEqual(len(stats["weeklyRegistrations"]), 8)
+        self.assertEqual(stats["roleDistribution"][0], {"label": "管理员", "count": 1})
+        self.assertNotIn("email", str(stats))
 
 
 class _FakeResponse:

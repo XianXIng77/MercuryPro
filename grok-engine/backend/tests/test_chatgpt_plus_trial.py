@@ -15,6 +15,7 @@ from chatgpt_browser import (  # noqa: E402
     _PLUS_TRIAL_AMOUNT_PROBE_JS,
     _canonicalize_payment_methods,
     _check_checkout_kind,
+    _check_plus_trial_eligibility,
     _classify_checkout_session_id,
     _classify_plus_trial_probe,
     _extract_api_payment_methods,
@@ -38,6 +39,20 @@ class ChatGPTPlusTrialEligibilityTests(unittest.TestCase):
             canonical,
         )
 
+    def test_canonicalize_display_name_and_prefixed_identifier(self) -> None:
+        self.assertEqual(
+            ["apple_pay", "card"],
+            _canonicalize_payment_methods(["Apple Pay", "payment_method_card"]),
+        )
+
+    def test_extract_nested_api_payment_methods(self) -> None:
+        data = {"checkout": {"available_payment_methods": [{"method": "Apple Pay"}]}}
+        self.assertEqual(["apple_pay"], _extract_api_payment_methods(data))
+
+    def test_probe_does_not_infer_card_from_generic_checkout_page(self) -> None:
+        self.assertNotIn("detected.add('card')", _PAYMENT_METHODS_PROBE_JS)
+        self.assertNotIn("chatgpt.com/checkout", _PAYMENT_METHODS_PROBE_JS)
+
     def test_extract_api_payment_methods(self) -> None:
         data = {
             "payment_method_types": ["card", "paypal"],
@@ -45,6 +60,29 @@ class ChatGPTPlusTrialEligibilityTests(unittest.TestCase):
         }
         extracted = _extract_api_payment_methods(data)
         self.assertEqual(["card", "paypal", "gcash", "gopay", "apple_pay"], extracted)
+
+    def test_api_methods_are_preserved_without_checkout_url(self) -> None:
+        class Response:
+            status = 200
+            text = lambda self: ""
+            json = lambda self: {"payment_method_types": ["paypal"]}
+
+        class Request:
+            @staticmethod
+            def post(url, **kwargs):
+                return Response()
+
+        class Context:
+            request = Request()
+
+        class Page:
+            @staticmethod
+            def evaluate(script):
+                return "en-US"
+
+        result = _check_plus_trial_eligibility(Page(), Context(), "token")
+        self.assertEqual(["paypal"], result["payment_methods"])
+        self.assertEqual("detected", result["payment_methods_status"])
 
     def test_zero_due_today_is_eligible(self) -> None:
         result = _classify_plus_trial_probe(

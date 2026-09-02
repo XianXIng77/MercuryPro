@@ -13,7 +13,7 @@ import {
   Search,
   Star,
 } from 'lucide-react';
-import { getMicrosoftMessage, listMicrosoftMessages, mapMicrosoftMessage } from '../api/microsoftMail';
+import { getMicrosoftMessage, getPublicMicrosoftMessage, listMicrosoftMessages, listPublicMicrosoftMessages, mapMicrosoftMessage, refreshPublicMicrosoftToken } from '../api/microsoftMail';
 import { Email, MailAccount, StylePreset } from '../types';
 import { StyledSelect } from './StyledSelect';
 
@@ -21,12 +21,14 @@ interface MailboxInboxViewProps {
   account: MailAccount;
   onBackToAccountList: () => void;
   currentPreset: StylePreset;
+  publicAccessToken?: string;
 }
 
 export const MailboxInboxView: React.FC<MailboxInboxViewProps> = ({
   account,
   onBackToAccountList,
   currentPreset,
+  publicAccessToken,
 }) => {
   const theme = currentPreset.themeClasses;
   const isDark = currentPreset.mode === 'dark';
@@ -45,7 +47,9 @@ export const MailboxInboxView: React.FC<MailboxInboxViewProps> = ({
     setLoading(true);
     setErrorMessage('');
     try {
-      const rawMessages = await listMicrosoftMessages(accountId, top);
+      const rawMessages = publicAccessToken
+        ? (await refreshPublicMicrosoftToken(publicAccessToken), await listPublicMicrosoftMessages(publicAccessToken, top))
+        : await listMicrosoftMessages(accountId, top);
       setMessages(rawMessages.map((item) => mapMicrosoftMessage(item, account.emailAddress)));
     } catch (error: any) {
       setMessages([]);
@@ -53,7 +57,7 @@ export const MailboxInboxView: React.FC<MailboxInboxViewProps> = ({
     } finally {
       setLoading(false);
     }
-  }, [account.emailAddress, accountId, top]);
+  }, [account.emailAddress, accountId, publicAccessToken, top]);
 
   useEffect(() => {
     void loadMessages();
@@ -72,7 +76,9 @@ export const MailboxInboxView: React.FC<MailboxInboxViewProps> = ({
     setDetailLoading(true);
     setErrorMessage('');
     try {
-      const raw = await getMicrosoftMessage(accountId, message.id);
+      const raw = publicAccessToken
+        ? await getPublicMicrosoftMessage(publicAccessToken, message.id)
+        : await getMicrosoftMessage(accountId, message.id);
       setSelectedMessage(mapMicrosoftMessage(raw, account.emailAddress));
       setMessages((previous) => previous.map((item) => item.id === message.id ? { ...item, isRead: true } : item));
     } catch (error: any) {
@@ -86,10 +92,12 @@ export const MailboxInboxView: React.FC<MailboxInboxViewProps> = ({
     <div className={`flex-1 flex flex-col h-full overflow-hidden ${theme.appBg}`}>
       <div className={`p-3 border-b flex flex-wrap items-center justify-between gap-3 shrink-0 ${theme.navBg} ${theme.border}`}>
         <div className="flex items-center gap-3 min-w-0">
-          <button onClick={onBackToAccountList} className={`px-3 py-2 rounded-xl border text-xs font-bold flex items-center gap-2 shadow-xs ${theme.cardBg} ${theme.border} ${theme.textPrimary}`}>
-            <ArrowLeft className="w-4 h-4 text-blue-600" />返回邮箱账号列表
-          </button>
-          <div className={`h-6 w-px hidden sm:block ${isDark ? 'bg-slate-700' : 'bg-slate-300'}`} />
+          {!publicAccessToken && <>
+            <button onClick={onBackToAccountList} className={`px-3 py-2 rounded-xl border text-xs font-bold flex items-center gap-2 shadow-xs ${theme.cardBg} ${theme.border} ${theme.textPrimary}`}>
+              <ArrowLeft className="w-4 h-4 text-blue-600" />返回邮箱账号列表
+            </button>
+            <div className={`h-6 w-px hidden sm:block ${isDark ? 'bg-slate-700' : 'bg-slate-300'}`} />
+          </>}
           <div className="flex items-center gap-2 min-w-0">
             <div className="w-9 h-9 rounded-xl bg-blue-600 text-white flex items-center justify-center shadow-sm"><Inbox className="w-4 h-4" /></div>
             <div className="min-w-0">

@@ -19,6 +19,7 @@ import {
   Check,
 } from 'lucide-react';
 import { Email, Folder, FolderId, Tag, StylePreset } from '../types';
+import { useToast } from './Toast';
 
 interface EmailDetailProps {
   email: Email | null;
@@ -54,6 +55,7 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
   const [showTagPicker, setShowTagPicker] = useState(false);
   const [showFolderPicker, setShowFolderPicker] = useState(false);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
+  const toast = useToast();
 
   const theme = currentPreset.themeClasses;
 
@@ -137,7 +139,7 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
   const handleSendReply = (e: React.FormEvent) => {
     e.preventDefault();
     if (!replyText.trim()) return;
-    alert(`已发送回复给 ${email.senderName} (${email.senderEmail})！`);
+    toast.success(`已发送回复给 ${email.senderName} (${email.senderEmail})！`);
     setReplyText('');
   };
 
@@ -414,7 +416,7 @@ export const EmailDetail: React.FC<EmailDetailProps> = ({
                     <p className={`text-[11px] ${theme.textSecondary}`}>{att.size}</p>
                   </div>
                   <button
-                    onClick={() => alert(`模拟下载文件：${att.name}`)}
+                    onClick={() => toast.info(`模拟下载文件：${att.name}`)}
                     className="px-2.5 py-1 text-xs font-medium rounded-lg bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-500/20"
                   >
                     下载

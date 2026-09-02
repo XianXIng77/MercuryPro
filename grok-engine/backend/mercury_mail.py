@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
+import hmac
 import json
 import os
 import re
@@ -43,6 +46,60 @@ _accounts_cache: list[dict[str, Any]] | None = None
 _accounts_lock = asyncio.Lock()
 _accounts_file_lock = threading.RLock()
 REGISTRATION_USE_LIMIT = 3
+PUBLIC_MAILBOX_TOKEN_VERSION = "v1"
+
+
+def _public_mail_secret() -> bytes:
+    """Use the persistent Mercury JWT secret to sign public mailbox links."""
+    configured = os.environ.get("MERCURY_PUBLIC_MAIL_SECRET", "").strip()
+    if configured:
+        return configured.encode("utf-8")
+    try:
+        from mercury_auth import secret_key
+
+        return secret_key().encode("utf-8")
+    except Exception:
+        # This is only a last-resort fallback for isolated module tests.
+        return b"mercurypro-public-mailbox-link"
+
+
+def public_mailbox_link(account_id: str | int) -> str:
+    raw_id = str(account_id or "").strip()
+    payload = base64.urlsafe_b64encode(raw_id.encode("utf-8")).decode("ascii").rstrip("=")
+    signed = f"{PUBLIC_MAILBOX_TOKEN_VERSION}.{payload}"
+    signature = hmac.new(
+        _public_mail_secret(), signed.encode("ascii"), hashlib.sha256
+    ).hexdigest()[:40]
+    return f"/mailbox/{signed}.{signature}"
+
+
+def _public_mailbox_account_id(access_token: str) -> str:
+    parts = str(access_token or "").split(".")
+    if len(parts) != 3 or parts[0] != PUBLIC_MAILBOX_TOKEN_VERSION:
+        raise MailServiceError("收件链接无效或已过期", 404)
+    signed = ".".join(parts[:2])
+    expected = hmac.new(
+        _public_mail_secret(), signed.encode("ascii"), hashlib.sha256
+    ).hexdigest()[:40]
+    if not hmac.compare_digest(parts[2], expected):
+        raise MailServiceError("收件链接无效或已过期", 404)
+    try:
+        padding = "=" * (-len(parts[1]) % 4)
+        account_id = base64.urlsafe_b64decode((parts[1] + padding).encode("ascii")).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        raise MailServiceError("收件链接无效或已过期", 404) from None
+    if not account_id:
+        raise MailServiceError("收件链接无效或已过期", 404)
+    return account_id
+
+
+async def public_mailbox_snapshot(access_token: str) -> dict[str, Any]:
+    account_id = _public_mailbox_account_id(access_token)
+    account = await _account_snapshot(account_id)
+    return {
+        "accountId": account.get("accountId"),
+        "email": str(account.get("email") or ""),
+    }
 
 
 class MailServiceError(RuntimeError):
@@ -510,6 +567,48 @@ async def _account_snapshot(account_id: str) -> dict[str, Any]:
     async with _accounts_lock:
         accounts = await _accounts_unlocked()
         return dict(_find_account(accounts, account_id))
+
+
+@router.get("/public/mailboxes/{access_token}")
+async def public_mailbox(access_token: str) -> Any:
+    try:
+        return {"code": 200, "data": await public_mailbox_snapshot(access_token)}
+    except Exception as exc:
+        return _error_response(exc)
+
+
+@router.post("/public/mailboxes/{access_token}/refresh-token")
+async def public_refresh_token(access_token: str) -> Any:
+    try:
+        account_id = _public_mailbox_account_id(access_token)
+        # Refresh through the same token rotation path used by the authenticated UI,
+        # but never return the newly issued access/refresh tokens to the link holder.
+        result = await refresh_token(account_id)
+        if isinstance(result, dict) and result.get("code") == 200:
+            return {"code": 200, "data": {"refreshed": True}}
+        return result
+    except Exception as exc:
+        return _error_response(exc)
+
+
+@router.get("/public/mailboxes/{access_token}/messages")
+async def public_list_messages(
+    access_token: str, top: int = Query(20, ge=1, le=50)
+) -> Any:
+    try:
+        account_id = _public_mailbox_account_id(access_token)
+        return await list_messages(account_id, top)
+    except Exception as exc:
+        return _error_response(exc)
+
+
+@router.get("/public/mailboxes/{access_token}/messages/{message_id}")
+async def public_get_message(access_token: str, message_id: str) -> Any:
+    try:
+        account_id = _public_mailbox_account_id(access_token)
+        return await get_message(account_id, message_id)
+    except Exception as exc:
+        return _error_response(exc)
 
 
 @router.get("/accounts/{account_id}/messages")

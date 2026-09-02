@@ -3,6 +3,9 @@ import { Calendar, Users, BarChart3, Settings, Plus, Clock, Shield, Bell } from 
 import { NavTab, StylePreset } from '../types';
 import { GrokRegistrationPanel } from './GrokRegistrationPanel';
 import { RegistrationLogsPanel } from './RegistrationLogsPanel';
+import { InvitationCodePanel } from './InvitationCodePanel';
+import { UserDashboard } from './UserDashboard';
+import { UserAuditPanel } from './UserAuditPanel';
 
 interface ExtensionModulesProps {
   activeTab: NavTab;
@@ -16,12 +19,24 @@ export const ExtensionModules: React.FC<ExtensionModulesProps> = ({
   const theme = currentPreset.themeClasses;
   const isDark = currentPreset.mode === 'dark';
 
+  if (activeTab === 'dashboard') {
+    return <UserDashboard currentPreset={currentPreset} />;
+  }
+
   if (activeTab === 'register') {
     return <GrokRegistrationPanel currentPreset={currentPreset} />;
   }
 
+  if (activeTab === 'invite') {
+    return <InvitationCodePanel currentPreset={currentPreset} />;
+  }
+
   if (activeTab === 'logs') {
     return <RegistrationLogsPanel currentPreset={currentPreset} />;
+  }
+
+  if (activeTab === 'audit') {
+    return <UserAuditPanel currentPreset={currentPreset} />;
   }
 
   if (activeTab === 'calendar') {

@@ -1,6 +1,7 @@
 export interface GrokConfig {
   registration_target: 'grok' | 'chatgpt';
   registration_mode: 'browser';
+  invite_code: string;
   count: number;
   concurrency: number;
   stagger_ms: number;
@@ -48,6 +49,17 @@ export interface GrokConfig {
   [key: string]: unknown;
 }
 
+export interface InviteCodeRecord {
+  code: string;
+  created_at: string;
+  uses: number;
+  max_uses: number;
+  last_used_at?: string | null;
+  enabled: boolean;
+  status?: 'valid' | 'used' | 'invalid';
+}
+
+
 export interface GrokBatch {
   id?: string;
   batch_id?: string;
@@ -81,6 +93,7 @@ export interface GrokSession {
   plus_trial?: PlusTrialEligibility;
   checkout_probe?: CheckoutProbe;
   payment_methods?: string[];
+  payment_methods_status?: 'detected' | 'unknown' | 'error' | 'none';
   events?: Array<{ at?: number; status?: string; message?: string }>;
   pre_import_probe_enabled?: boolean;
   registration_json_format?: 'sub2api' | 'cpa';
@@ -146,8 +159,26 @@ export interface ChatGPTAccountRecord {
   plus_trial?: PlusTrialEligibility;
   checkout_probe?: CheckoutProbe;
   payment_methods?: string[];
+  payment_methods_status?: 'detected' | 'unknown' | 'error' | 'none';
   password?: string;
   password_available?: boolean;
+  mailbox_link?: string;
+  mailbox_account_id?: string;
+  mailbox_email?: string;
+}
+
+export interface ChatGPTAccountList {
+  ok: boolean;
+  accounts: ChatGPTAccountRecord[];
+  total: number;
+  page: number;
+  page_size: number;
+  pages: number;
+  summary: {
+    total: number;
+    access_token_available: number;
+    plus_trial_eligible: number;
+  };
 }
 
 export interface PlusTrialEligibility {
@@ -171,6 +202,8 @@ export interface CheckoutProbe {
   country?: string;
   currency?: string;
   reason?: string;
+  payment_methods?: string[];
+  payment_methods_status?: 'detected' | 'unknown' | 'error' | 'none';
 }
 
 export interface BrowserDebugStatus {
@@ -207,12 +240,33 @@ export const grokRegistrationApi = {
   health: () => request<Record<string, unknown>>('/api/grok/health'),
   browserDebugStatus: () => request<BrowserDebugStatus>('/api/browser-debug/status'),
   config: () => request<GrokConfig>('/api/grok/config'),
+inviteCodes: (params: { page: number; pageSize: number; keyword?: string; status?: string }) => {
+    const query = new URLSearchParams({ page: String(params.page), page_size: String(params.pageSize) });
+    if (params.keyword?.trim()) query.set('keyword', params.keyword.trim());
+    if (params.status && params.status !== 'all') query.set('status', params.status);
+    return request<{ ok: boolean; codes: InviteCodeRecord[]; total: number; page: number; page_size: number; pages: number }>(`/api/grok/invite-codes?${query.toString()}`);
+  },
+  generateInviteCodes: (count = 1, maxUses = 1) => request<{ ok: boolean; codes: InviteCodeRecord[] }>('/api/grok/invite-codes', { method: 'POST', body: JSON.stringify({ count, max_uses: maxUses }) }),
+  updateInviteCode: (code: string, maxUses: number) => request<{ ok: boolean; code: InviteCodeRecord }>(`/api/grok/invite-codes/\${encodeURIComponent(code)}`, { method: 'PUT', body: JSON.stringify({ max_uses: maxUses }) }),
+  revokeInviteCode: (code: string) => request<{ ok: boolean; code: InviteCodeRecord }>(`/api/grok/invite-codes/${encodeURIComponent(code)}`, { method: 'DELETE' }),
+
   performance: (provider: GrokConfig['captcha_provider']) => request<RegistrationPerformanceProfile>(`/api/grok/performance?provider=${encodeURIComponent(provider)}`),
   saveConfig: (config: GrokConfig) => request<{ ok: boolean; config: GrokConfig }>('/api/grok/config', { method: 'PUT', body: JSON.stringify(config) }),
   start: (config: GrokConfig) => request<Record<string, unknown>>('/api/grok/register', { method: 'POST', body: JSON.stringify(config) }),
   monitor: () => request<GrokMonitor>('/api/grok/sessions'),
   chatgptAccessToken: (sessionId: string) => request<{ ok: boolean; email?: string; access_token: string }>(`/api/grok/chatgpt/sessions/${encodeURIComponent(sessionId)}/access-token`, { method: 'POST' }),
-  chatgptAccounts: () => request<{ ok: boolean; accounts: ChatGPTAccountRecord[]; total: number }>('/api/grok/chatgpt/accounts'),
+  chatgptAccounts: (params: { page: number; pageSize: number; keyword?: string; mailType?: string; plusTrial?: string; checkout?: string; paymentMethod?: string }) => {
+    const query = new URLSearchParams({
+      page: String(params.page),
+      page_size: String(params.pageSize),
+    });
+    if (params.keyword?.trim()) query.set('keyword', params.keyword.trim());
+    if (params.mailType && params.mailType !== 'all') query.set('mail_type', params.mailType);
+    if (params.plusTrial && params.plusTrial !== 'all') query.set('plus_trial', params.plusTrial);
+    if (params.checkout && params.checkout !== 'all') query.set('checkout', params.checkout);
+    if (params.paymentMethod && params.paymentMethod !== 'all') query.set('payment_method', params.paymentMethod);
+    return request<ChatGPTAccountList>(`/api/grok/chatgpt/accounts?${query}`);
+  },
   chatgptAccountTokens: (ids: string[], allAccounts = false) => request<{ ok: boolean; tokens: Array<{ id: string; email: string; access_token: string }>; total: number }>('/api/grok/chatgpt/accounts/access-tokens', { method: 'POST', body: JSON.stringify({ ids, all_accounts: allAccounts }) }),
   resetMonitor: () => request<{ ok?: boolean; error?: string }>('/api/grok/sessions/reset', { method: 'POST' }),
   pauseBatch: (id: string) => request<Record<string, unknown>>(`/api/grok/batches/${encodeURIComponent(id)}/pause`, { method: 'POST' }),

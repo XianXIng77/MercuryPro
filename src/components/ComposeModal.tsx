@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { Folder, Tag, StylePreset } from '../types';
 import { StyledSelect } from './StyledSelect';
+import { useToast } from './Toast';
 
 interface ComposeModalProps {
   isOpen: boolean;
@@ -43,6 +44,7 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({
   const [aiPrompt, setAiPrompt] = useState('');
   const [showAiPromptBox, setShowAiPromptBox] = useState(false);
   const [isAiWriting, setIsAiWriting] = useState(false);
+  const toast = useToast();
 
   const theme = currentPreset.themeClasses;
   const isDark = currentPreset.mode === 'dark';
@@ -52,7 +54,7 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!recipient.trim() || !subject.trim() || !body.trim()) {
-      alert('请完整填写收件人、主题和正文！');
+      toast.warning('请完整填写收件人、主题和正文！');
       return;
     }
 
@@ -242,7 +244,7 @@ export const ComposeModal: React.FC<ComposeModalProps> = ({
           <div className="flex items-center justify-between pt-2">
             <button
               type="button"
-              onClick={() => alert('已添加模拟附件：方案计划书.pdf')}
+              onClick={() => toast.info('已添加模拟附件：方案计划书.pdf')}
               className={`px-3 py-1.5 text-xs rounded-xl border ${theme.border} ${theme.textSecondary} hover:${theme.textPrimary} flex items-center gap-1.5`}
             >
               <Paperclip className="w-3.5 h-3.5 text-indigo-500" />

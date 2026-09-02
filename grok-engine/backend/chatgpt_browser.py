@@ -131,7 +131,14 @@ _PAYMENT_METHODS_PROBE_JS = r"""
 () => {
   const norm = (v) => String(v || '').replace(/\s+/g, ' ').trim().toLowerCase();
   const detected = new Set();
-
+  const visibleEnabled = (el) => {
+    if (!el) return false;
+    const style = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== 'none' && style.visibility !== 'hidden'
+      && style.opacity !== '0' && rect.width > 0 && rect.height > 0
+      && !el.hasAttribute('disabled') && el.getAttribute('aria-disabled') !== 'true';
+  };
   const selectorMappings = [
     { pattern: /apple[_-]?pay/i, method: 'apple_pay' },
     { pattern: /google[_-]?pay|gpay/i, method: 'google_pay' },
@@ -153,89 +160,24 @@ _PAYMENT_METHODS_PROBE_JS = r"""
     { pattern: /revolut/i, method: 'revolut_pay' },
     { pattern: /paypay/i, method: 'paypay' },
   ];
-
-  // 1. Inspect window globals (Stripe Initial State / session config)
-  try {
-    const globals = [
-      window.__INITIAL_STATE__,
-      window.__stripe_checkout_state,
-      window.checkoutSession,
-      window.__NEXT_DATA__
-    ];
-    for (const g of globals) {
-      if (!g) continue;
-      const str = typeof g === 'string' ? g : JSON.stringify(g);
-      for (const { pattern, method } of selectorMappings) {
-        if (new RegExp(`["':_](${pattern.source})["',}]`, 'i').test(str)) {
-          detected.add(method);
-        }
-      }
-    }
-  } catch (e) {}
-
-  // 2. Check all input elements, radios, tabs, buttons, labels (even custom/styled ones)
   const inputs = Array.from(document.querySelectorAll('input, button, [role="radio"], [role="tab"], [data-test], [data-testid], [data-pm], label, [class*="PaymentMethod"], [class*="payment-method"], [class*="ExpressCheckout"]'));
   for (const el of inputs) {
-    const val = [
-      el.getAttribute('value'),
-      el.getAttribute('name'),
-      el.getAttribute('id'),
-      el.getAttribute('data-test'),
-      el.getAttribute('data-testid'),
-      el.getAttribute('data-pm'),
-      el.getAttribute('data-payment-method'),
-      el.getAttribute('aria-label'),
-      el.innerText || el.textContent
-    ].map(norm).join(' ');
-
-    for (const { pattern, method } of selectorMappings) {
-      if (pattern.test(val)) {
-        detected.add(method);
-      }
-    }
+    if (!visibleEnabled(el)) continue;
+    const val = [el.getAttribute('value'), el.getAttribute('name'), el.getAttribute('id'),
+      el.getAttribute('data-test'), el.getAttribute('data-testid'), el.getAttribute('data-pm'),
+      el.getAttribute('data-payment-method'), el.getAttribute('aria-label'),
+      el.innerText || el.textContent].map(norm).join(' ');
+    for (const { pattern, method } of selectorMappings) if (pattern.test(val)) detected.add(method);
   }
-
-  // 3. Inspect all script tags in HTML
-  try {
-    const scripts = Array.from(document.querySelectorAll('script'));
-    for (const s of scripts) {
-      const text = s.textContent || '';
-      if (text.length > 20 && text.length < 1000000 && (text.includes('payment') || text.includes('Payment') || text.includes('method') || text.includes('session'))) {
-        for (const { pattern, method } of selectorMappings) {
-          if (new RegExp(`["':_](${pattern.source})["',}]`, 'i').test(text)) {
-            detected.add(method);
-          }
-        }
-      }
-    }
-  } catch (e) {}
-
-  // 4. Check iframes (Stripe Elements / Express Checkout)
   const iframes = Array.from(document.querySelectorAll('iframe'));
   for (const iframe of iframes) {
-    const src = norm(iframe.getAttribute('src') || '');
-    const title = norm(iframe.getAttribute('title') || iframe.getAttribute('name') || '');
-    const combined = `${src} ${title}`;
-    for (const { pattern, method } of selectorMappings) {
-      if (pattern.test(combined)) {
-        detected.add(method);
-      }
-    }
-    if (src.includes('stripe') || combined.includes('stripe') || combined.includes('elements')) {
-      detected.add('card');
-    }
+    if (!visibleEnabled(iframe)) continue;
+    const combined = `${norm(iframe.getAttribute('src') || '')} ${norm(iframe.getAttribute('title') || iframe.getAttribute('name') || '')}`;
+    for (const { pattern, method } of selectorMappings) if (pattern.test(combined)) detected.add(method);
   }
-
-  // 5. Default baseline on Checkout Page: if on checkout.stripe.com or has payment form, card is supported
-  const pageUrl = window.location.href || '';
-  if (pageUrl.includes('checkout.stripe.com') || pageUrl.includes('chatgpt.com/checkout') || document.querySelector('#OrderDetails-TotalAmount, #ProductSummary-totalAmount, [class*="PaymentMethod"]')) {
-    detected.add('card');
-  }
-
   return Array.from(detected);
 }
 """
-
 _CANONICAL_PAYMENT_METHODS: dict[str, str] = {
     "apple_pay": "apple_pay",
     "applepay": "apple_pay",
@@ -283,7 +225,8 @@ def _canonicalize_payment_methods(methods: Any) -> list[str]:
     result: list[str] = []
     seen: set[str] = set()
     for item in methods:
-        raw = str(item or "").strip().lower().replace("-", "_")
+        raw = re.sub(r"\s+", "_", str(item or "").strip().lower().replace("-", "_"))
+        raw = re.sub(r"^payment_method_", "", raw)
         if not raw:
             continue
         canonical = _CANONICAL_PAYMENT_METHODS.get(raw, raw)
@@ -298,20 +241,29 @@ def _extract_api_payment_methods(data: dict[str, Any] | None) -> list[str]:
     if not isinstance(data, dict):
         return []
     candidates = []
-    for key in (
-        "payment_method_types",
-        "payment_methods",
-        "available_payment_methods",
-        "supported_payment_methods",
-        "payment_options",
-    ):
-        val = data.get(key)
-        if isinstance(val, list):
-            for item in val:
-                if isinstance(item, str):
-                    candidates.append(item)
-                elif isinstance(item, dict) and item.get("type"):
-                    candidates.append(str(item.get("type")))
+    keys = {"payment_method_types", "payment_methods", "available_payment_methods", "supported_payment_methods", "payment_options"}
+
+    def visit(value: Any, depth: int = 0) -> None:
+        if depth > 4:
+            return
+        if isinstance(value, dict):
+            for key, child in value.items():
+                if key in keys and isinstance(child, list):
+                    for item in child:
+                        if isinstance(item, str):
+                            candidates.append(item)
+                        elif isinstance(item, dict):
+                            method = item.get("type") or item.get("method") or item.get("name")
+                            if method:
+                                candidates.append(str(method))
+                elif isinstance(child, (dict, list)):
+                    visit(child, depth + 1)
+        elif isinstance(value, list):
+            for child in value:
+                if isinstance(child, (dict, list)):
+                    visit(child, depth + 1)
+
+    visit(data)
     return _canonicalize_payment_methods(candidates)
 
 
@@ -465,6 +417,7 @@ def _check_plus_trial_eligibility(
         country, currency = "GB", "GBP"
     else:
         country, currency = "US", "USD"
+    detected_methods: list[str] = []
     payload = {
         "plan_name": "chatgptplusplan",
         "billing_details": {"country": country, "currency": currency},
@@ -497,13 +450,28 @@ def _check_plus_trial_eligibility(
         if 200 <= response.status < 300 and isinstance(response_data, dict):
             data = response_data
         else:
-            # Promo checkout rejected/expired (e.g. HTTP 400); mark Plus trial as ineligible
+            # Only an explicit promo rejection is proof of ineligibility. Treat
+            # transport/server/rate-limit failures as unknown instead of lying
+            # about the account's trial status.
+            explicit_rejection = bool(
+                response.status in {400, 403, 404}
+                and re.search(
+                    r"not.?eligible|ineligible|promo.*(?:invalid|unavailable|expired)|"
+                    r"coupon.*(?:invalid|unavailable|expired)",
+                    response_text,
+                    re.I,
+                )
+            )
             plus_trial_override = {
-                "status": "ineligible",
-                "eligible": False,
+                "status": "ineligible" if explicit_rejection else "unknown",
+                "eligible": False if explicit_rejection else None,
                 "checked_at": time.time(),
                 "source": "checkout_api",
-                "reason": "Plus 免费试用活动不适用于该账号",
+                "reason": (
+                    "Plus 免费试用活动不适用于该账号"
+                    if explicit_rejection
+                    else f"资格接口暂时不可用（HTTP {response.status}）"
+                ),
                 "http_status": response.status,
             }
             # Fallback to standard checkout to retrieve checkout page and payment methods
@@ -534,6 +502,7 @@ def _check_plus_trial_eligibility(
             except Exception:
                 pass
 
+        detected_methods = _extract_api_payment_methods(data)
         checkout_url = str(
             data.get("url") or data.get("stripe_hosted_url") or data.get("checkout_url") or ""
         ).strip()
@@ -555,14 +524,16 @@ def _check_plus_trial_eligibility(
                 "locale": locale,
                 "country": country,
                 "currency": currency,
-                "payment_methods": [],
+                "payment_methods": _canonicalize_payment_methods(detected_methods),
+                "payment_methods_status": (
+                    "detected" if detected_methods else "unknown"
+                ),
             })
             return base_res
 
         page.goto(checkout_url, wait_until="domcontentloaded", timeout=30000)
         check_deadline = time.time() + max(5.0, min(timeout_sec, 25.0))
         last_probe: dict[str, Any] = {}
-        detected_methods: list[str] = _extract_api_payment_methods(data)
         body_text = ""
         while time.time() < check_deadline:
             try:
@@ -588,6 +559,9 @@ def _check_plus_trial_eligibility(
             "country": country,
             "currency": currency,
             "payment_methods": _canonicalize_payment_methods(detected_methods),
+            "payment_methods_status": (
+                "detected" if detected_methods else "unknown"
+            ),
         })
         return result
     except Exception as exc:
@@ -597,6 +571,8 @@ def _check_plus_trial_eligibility(
             "checked_at": time.time(),
             "source": "checkout_exception",
             "reason": str(exc)[:240],
+            "payment_methods": _canonicalize_payment_methods(detected_methods),
+            "payment_methods_status": "detected" if detected_methods else "error",
         }
 
 

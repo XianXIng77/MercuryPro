@@ -345,6 +345,35 @@ def get_registration_access_token(ctx, session_id):
     }
 
 
+def _mailbox_link_for_email(email: str) -> tuple[str, str, str] | None:
+    """Find a managed Microsoft mailbox and return its public inbox link."""
+    normalized = str(email or "").strip().lower()
+    local, separator, domain = normalized.partition("@")
+    if not separator or not local or not domain:
+        return None
+    base_local = local.split("+", 1)[0]
+    try:
+        from mercury_mail import public_mailbox_link, registration_accounts_snapshot
+
+        candidates = registration_accounts_snapshot()
+    except Exception:
+        return None
+    for account in candidates:
+        mailbox_email = str(account.get("email") or "").strip().lower()
+        mailbox_local, mailbox_separator, mailbox_domain = mailbox_email.partition("@")
+        if not mailbox_separator or mailbox_domain != domain:
+            continue
+        if mailbox_email != normalized and mailbox_local.split("+", 1)[0] != base_local:
+            continue
+        account_id = account.get("accountId")
+        return (
+            public_mailbox_link(account_id),
+            str(account_id),
+            mailbox_email,
+        )
+    return None
+
+
 def _saved_account_rows(ctx, *, include_tokens: bool = False):
     """Read durable ChatGPT session files as account-management records."""
     rows = []
@@ -386,12 +415,20 @@ def _saved_account_rows(ctx, *, include_tokens: bool = False):
                 if m not in seen_pm:
                     seen_pm.add(m)
                     deduped_payment_methods.append(m)
+            payment_methods_status = str(
+                payload.get("mercuryPaymentMethodsStatus")
+                or plus_trial.get("payment_methods_status")
+                or ("detected" if deduped_payment_methods else "unknown")
+            ).strip().lower()
+            if payment_methods_status not in {"detected", "unknown", "error", "none"}:
+                payment_methods_status = "unknown"
             registration_password = str(
                 payload.get("mercuryRegistrationPassword") or ""
             )
             stat = path.stat()
         except (OSError, ValueError, UnicodeDecodeError):
             continue
+        mailbox = _mailbox_link_for_email(email)
         row = {
             "id": path.name,
             "email": email,
@@ -400,8 +437,12 @@ def _saved_account_rows(ctx, *, include_tokens: bool = False):
             "plus_trial": plus_trial,
             "checkout_probe": checkout_probe,
             "payment_methods": deduped_payment_methods,
+            "payment_methods_status": payment_methods_status,
             "password": registration_password,
             "password_available": bool(registration_password),
+            "mailbox_link": mailbox[0] if mailbox else "",
+            "mailbox_account_id": mailbox[1] if mailbox else "",
+            "mailbox_email": mailbox[2] if mailbox else "",
         }
         if include_tokens:
             row["access_token"] = access_token
@@ -410,9 +451,133 @@ def _saved_account_rows(ctx, *, include_tokens: bool = False):
     return rows
 
 
-def list_registration_accounts(ctx):
+def _registration_account_mail_type(email: str) -> str:
+    domain = str(email or "").lower().partition("@")[2]
+    if domain in {"icloud.com", "me.com"}:
+        return "icloud"
+    if domain in {"gmail.com", "googlemail.com"}:
+        return "gmail"
+    if domain in {"outlook.com", "hotmail.com", "live.com", "msn.com"}:
+        return "microsoft"
+    return "other"
+
+
+def _registration_account_matches(
+    account: dict[str, Any],
+    *,
+    keyword: str,
+    mail_type: str,
+    plus_trial: str,
+    checkout: str,
+    payment_method: str,
+) -> bool:
+    email = str(account.get("email") or "").lower()
+    if keyword and keyword not in email:
+        return False
+    if mail_type != "all" and _registration_account_mail_type(email) != mail_type:
+        return False
+
+    plus_data = account.get("plus_trial") if isinstance(account.get("plus_trial"), dict) else {}
+    plus_status = str(plus_data.get("status") or "unknown").lower()
+    if plus_status not in {"eligible", "ineligible"}:
+        plus_status = "unknown"
+    if plus_trial != "all" and plus_status != plus_trial:
+        return False
+
+    checkout_data = account.get("checkout_probe") if isinstance(account.get("checkout_probe"), dict) else {}
+    checkout_kind = str(checkout_data.get("kind") or "unknown").lower()
+    if checkout_kind not in {"oaics", "cs_live", "cs_test"}:
+        checkout_kind = (
+            "disabled"
+            if str(checkout_data.get("status") or "").lower() == "disabled"
+            else "unknown"
+        )
+    if checkout != "all" and checkout_kind != checkout:
+        return False
+
+    if payment_method != "all":
+        payment_status = str(account.get("payment_methods_status") or "unknown").lower()
+        if payment_method == "unknown":
+            return payment_status in {"unknown", "error"}
+        methods = {
+            str(value or "").lower().replace("-", "").replace("_", "").replace(" ", "")
+            for value in (account.get("payment_methods") or [])
+            if str(value or "").strip()
+        }
+        if payment_method == "none":
+            # Empty methods are not proof that no method exists. Only an
+            # explicit legacy/producer-confirmed `none` result matches here.
+            if payment_status != "none":
+                return False
+            if methods:
+                return False
+        elif payment_method == "other":
+            main_methods = {
+                "applepay", "paypal", "gcash", "gopay", "card",
+                "googlepay", "link", "alipay", "wechatpay",
+            }
+            if not any(value not in main_methods for value in methods):
+                return False
+        else:
+            normalized_method = payment_method.replace("-", "").replace("_", "")
+            if normalized_method not in methods:
+                return False
+    return True
+
+
+def list_registration_accounts(
+    ctx,
+    page=1,
+    page_size=20,
+    keyword="",
+    mail_type="all",
+    plus_trial="all",
+    checkout="all",
+    payment_method="all",
+):
     accounts = _saved_account_rows(ctx)
-    return {"ok": True, "accounts": accounts, "total": len(accounts)}
+    page_size = max(1, min(100, int(page_size or 20)))
+    requested_page = max(1, int(page or 1))
+    filters = {
+        "keyword": str(keyword or "").strip().lower(),
+        "mail_type": str(mail_type or "all").strip().lower(),
+        "plus_trial": str(plus_trial or "all").strip().lower(),
+        "checkout": str(checkout or "all").strip().lower(),
+        "payment_method": str(payment_method or "all").strip().lower(),
+    }
+    filtered = [
+        account
+        for account in accounts
+        if _registration_account_matches(account, **filters)
+    ]
+    # Keep the newest saved account first before taking a page.
+    filtered.sort(
+        key=lambda item: float(item.get("created_at") or 0), reverse=True
+    )
+    total = len(filtered)
+    pages = max(1, (total + page_size - 1) // page_size)
+    current_page = min(requested_page, pages)
+    offset = (current_page - 1) * page_size
+    return {
+        "ok": True,
+        "accounts": filtered[offset : offset + page_size],
+        "total": total,
+        "page": current_page,
+        "page_size": page_size,
+        "pages": pages,
+        "summary": {
+            "total": len(accounts),
+            "access_token_available": sum(
+                1 for account in accounts if account.get("access_token_available")
+            ),
+            "plus_trial_eligible": sum(
+                1
+                for account in accounts
+                if isinstance(account.get("plus_trial"), dict)
+                and account["plus_trial"].get("status") == "eligible"
+            ),
+        },
+    }
 
 
 def get_registration_access_tokens(ctx, account_ids=None, all_accounts=False):

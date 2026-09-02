@@ -72,11 +72,18 @@ from mercury_ai import router as mercury_ai_router
 from mercury_mail import router as mercury_mail_router
 from mercury_auth import (
     ensure_default_admin,
+    get_current_user,
     has_valid_session,
     router as mercury_auth_router,
 )
 from mercury_logs import router as mercury_logs_router
+from operation_logs import (
+    action_for_request,
+    record_operation,
+    router as operation_logs_router,
+)
 from browser_debug import router as browser_debug_router
+from invite_codes import generate_invite_codes, list_invite_codes, revoke_invite_code, update_invite_code, InviteCodeError
 
 BACKEND_DIR = Path(__file__).resolve().parent
 APP_DIR = BACKEND_DIR.parent
@@ -240,6 +247,7 @@ registration = _get_registration_adapter()
 class Settings(BaseModel):
     registration_target: Literal["grok", "chatgpt"] = "grok"
     registration_mode: Literal["browser", "protocol"] = "browser"
+    invite_code: str = ""
     mail_provider: Literal[
         "yyds",
         "custom",
@@ -371,6 +379,13 @@ class ChatGPTAccessTokensRequest(BaseModel):
     all_accounts: bool = False
 
 
+class InviteCodeGenerateRequest(BaseModel):
+    count: int = Field(1, ge=1, le=50)
+    max_uses: int = Field(1, ge=1, le=1000)
+
+class InviteCodeUpdateRequest(BaseModel):
+    max_uses: int = Field(..., ge=1, le=1000)
+
 def _post_registration_config(cfg: dict[str, Any]) -> dict[str, Any]:
     return _app_core._post_registration_config(_app_context(), cfg)
 
@@ -391,6 +406,7 @@ app = FastAPI(title="MercuryPro", version="2.0.0")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.include_router(mercury_auth_router)
 app.include_router(mercury_logs_router)
+app.include_router(operation_logs_router)
 app.include_router(mercury_mail_router)
 app.include_router(mercury_ai_router)
 app.include_router(browser_debug_router)
@@ -444,12 +460,41 @@ async def enforce_auth_guard(request: Request, call_next):
     path = request.scope.get("path", "")
     is_api = path == "/api" or path.startswith("/api/")
     is_auth_path = path == "/api/auth" or path.startswith("/api/auth/")
-    if (is_api and not is_auth_path or path.startswith("/browser-debug")) and not has_valid_session(request):
+    is_public_mail_path = path.startswith("/api/microsoft/public/mailboxes/")
+    if (is_api and not is_auth_path and not is_public_mail_path or path.startswith("/browser-debug")) and not has_valid_session(request):
         return JSONResponse(
             status_code=401,
             content={"code": 401, "error": "未登录或会话已过期"},
         )
     return await call_next(request)
+
+
+@app.middleware("http")
+async def record_operation_middleware(request: Request, call_next):
+    """Record every authenticated state-changing API request."""
+    path = request.url.path
+    method = request.method.upper()
+    should_record = (
+        path.startswith("/api/")
+        and method in {"POST", "PUT", "PATCH", "DELETE"}
+        and not path.startswith("/api/auth/")
+        and not path.startswith("/api/audit-logs")
+    )
+    actor = None
+    if should_record:
+        try:
+            actor = get_current_user(request)
+        except HTTPException:
+            actor = None
+    response = await call_next(request)
+    if should_record:
+        record_operation(
+            request=request,
+            action=action_for_request(method, path),
+            status_code=response.status_code,
+            user=actor,
+        )
+    return response
 
 
 def _rotation_session_items() -> list[tuple[str, dict[str, Any]]]:
@@ -605,6 +650,35 @@ def check_proxy(request: ProxyCheckRequest) -> dict[str, Any]:
 def get_config() -> dict[str, Any]:
     return _app_routes.get_config(_app_context())
 
+
+@app.get("/api/invite-codes")
+def get_invite_codes(
+    keyword: str = Query(""),
+    status: str = Query(""),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(10, ge=1, le=100),
+) -> dict[str, Any]:
+    return list_invite_codes(keyword=keyword, status=status, page=page, page_size=page_size)
+
+
+@app.post("/api/invite-codes")
+def create_invite_codes(request: InviteCodeGenerateRequest) -> dict[str, Any]:
+    return generate_invite_codes(request.count, request.max_uses)
+
+
+@app.put("/api/invite-codes/{code}")
+def edit_invite_code(code: str, request: InviteCodeUpdateRequest) -> dict[str, Any]:
+    try:
+        return update_invite_code(code, request.max_uses)
+    except InviteCodeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+@app.delete("/api/invite-codes/{code}")
+def disable_invite_code(code: str) -> dict[str, Any]:
+    try:
+        return revoke_invite_code(code)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 @app.post("/api/sub2api/groups")
 def sub2api_groups(request: Sub2APIConnectionRequest) -> dict[str, Any]:
@@ -805,9 +879,27 @@ def chatgpt_access_token(session_id: str, response: Response) -> dict[str, Any]:
 
 
 @app.get("/api/chatgpt/accounts")
-def chatgpt_accounts(response: Response) -> dict[str, Any]:
+def chatgpt_accounts(
+    response: Response,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    keyword: str = Query(""),
+    mail_type: str = Query("all"),
+    plus_trial: str = Query("all"),
+    checkout: str = Query("all"),
+    payment_method: str = Query("all"),
+) -> dict[str, Any]:
     response.headers["Cache-Control"] = "no-store"
-    return _app_routes.chatgpt_accounts(_app_context())
+    return _app_routes.chatgpt_accounts(
+        _app_context(),
+        page=page,
+        page_size=page_size,
+        keyword=keyword,
+        mail_type=mail_type,
+        plus_trial=plus_trial,
+        checkout=checkout,
+        payment_method=payment_method,
+    )
 
 
 @app.post("/api/chatgpt/accounts/access-tokens")

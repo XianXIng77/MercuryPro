@@ -12,6 +12,7 @@ import os
 import secrets
 import threading
 import time
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,8 @@ import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, EmailStr, Field
+
+from invite_codes import InviteCodeError, use_invite_code
 
 router = APIRouter(prefix="/api/auth", tags=["Auth"])
 
@@ -55,6 +58,8 @@ class AuthCredentials(BaseModel):
     password: str = Field(min_length=8, max_length=128)
     username: str = Field(default="", max_length=32)
     remember: bool = True
+    # Required for registration; ignored by login.
+    invite_code: str = Field(default="", max_length=128)
 
 
 # ── 密钥 ────────────────────────────────────────────────────
@@ -158,6 +163,72 @@ def _public_user(user: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _created_date(user: dict[str, Any]) -> date | None:
+    """兼容历史用户数据,把 Unix 秒时间戳安全转换为服务端本地日期。"""
+    try:
+        created_at = float(user.get("createdAt", 0))
+        if created_at <= 0:
+            return None
+        return date.fromtimestamp(created_at)
+    except (OSError, OverflowError, TypeError, ValueError):
+        return None
+
+
+def build_user_stats(today: date | None = None) -> dict[str, Any]:
+    """生成不含个人信息的用户统计数据,供登录后的仪表盘展示。"""
+    current_day = today or date.today()
+    users = _load_users()
+    created_dates = [value for user in users if (value := _created_date(user))]
+
+    last_30_start = current_day - timedelta(days=29)
+    previous_30_start = last_30_start - timedelta(days=30)
+    new_last_30 = sum(last_30_start <= value <= current_day for value in created_dates)
+    new_previous_30 = sum(previous_30_start <= value < last_30_start for value in created_dates)
+    if new_previous_30:
+        growth_rate = round((new_last_30 - new_previous_30) / new_previous_30 * 100, 1)
+    else:
+        growth_rate = 100.0 if new_last_30 else 0.0
+
+    daily = []
+    for offset in range(29, -1, -1):
+        day = current_day - timedelta(days=offset)
+        daily.append(
+            {
+                "date": day.isoformat(),
+                "label": f"{day.month}/{day.day}",
+                "count": sum(value == day for value in created_dates),
+            }
+        )
+
+    weekly = []
+    for week_index in range(7, -1, -1):
+        end = current_day - timedelta(days=week_index * 7)
+        start = end - timedelta(days=6)
+        weekly.append(
+            {
+                "label": f"{start.month}/{start.day}-{end.month}/{end.day}",
+                "count": sum(start <= value <= end for value in created_dates),
+            }
+        )
+
+    admin_count = sum(str(user.get("role", "user")) == "admin" for user in users)
+    return {
+        "summary": {
+            "totalUsers": len(users),
+            "newUsersLast30Days": new_last_30,
+            "newUsersToday": sum(value == current_day for value in created_dates),
+            "growthRate": growth_rate,
+        },
+        "dailyRegistrations": daily,
+        "weeklyRegistrations": weekly,
+        "roleDistribution": [
+            {"label": "管理员", "count": admin_count},
+            {"label": "普通用户", "count": len(users) - admin_count},
+        ],
+        "generatedAt": int(time.time()),
+    }
+
+
 # ── JWT 会话 ────────────────────────────────────────────────
 
 
@@ -219,10 +290,19 @@ def has_valid_session(request: Request) -> bool:
 
 
 @router.post("/register")
-async def register(payload: AuthCredentials, response: Response) -> dict[str, Any]:
+async def register(payload: AuthCredentials, response: Response, request: Request = None) -> dict[str, Any]:
+    from operation_logs import record_operation
     email = str(payload.email).strip().lower()
     if _find_user(email) is not None:
+        record_operation(request=request, action="注册", status_code=409, detail="注册失败：邮箱已注册", risk="关注")
         raise AuthError(409, "该邮箱已注册,请直接登录")
+    # Invitation codes are single-use credentials.
+    try:
+        use_invite_code(payload.invite_code)
+    except InviteCodeError as exc:
+        record_operation(request=request, action="注册", status_code=403, detail="注册失败：邀请码无效或已使用", risk="关注")
+        raise AuthError(403, str(exc)) from exc
+
     user = {
         "email": email,
         "username": payload.username.strip() or email.split("@")[0],
@@ -234,27 +314,47 @@ async def register(payload: AuthCredentials, response: Response) -> dict[str, An
     users.append(user)
     _save_users(users)
     issue_session(response, user, remember=payload.remember)
+    record_operation(request=request, action="注册", status_code=200, user=_public_user(user), detail="创建用户并登录工作台")
     return {"user": _public_user(user)}
 
 
 @router.post("/login")
-async def login(payload: AuthCredentials, response: Response) -> dict[str, Any]:
+async def login(payload: AuthCredentials, response: Response, request: Request = None) -> dict[str, Any]:
+    from operation_logs import record_operation
     user = _find_user(str(payload.email))
     if user is None or not verify_password(
         payload.password, str(user.get("passwordHash", ""))
     ):
         # 邮箱不存在与密码错误返回同一提示,避免账号枚举
+        record_operation(request=request, action="登录", status_code=401, user=user, detail="登录失败：邮箱或密码错误", risk="高风险")
         raise AuthError(401, "邮箱或密码错误")
     issue_session(response, user, remember=payload.remember)
+    record_operation(request=request, action="登录", status_code=200, user=_public_user(user), detail="密码验证通过，登录工作台")
     return {"user": _public_user(user)}
 
 
 @router.post("/logout")
-async def logout(response: Response) -> dict[str, Any]:
+async def logout(response: Response, request: Request = None) -> dict[str, Any]:
+    from operation_logs import record_operation
+    user = None
+    if request is not None:
+        try:
+            user = get_current_user(request)
+        except HTTPException:
+            pass
     response.delete_cookie(SESSION_COOKIE_NAME, path="/")
+    record_operation(request=request, action="退出登录", status_code=200, user=user, detail="退出当前工作台会话")
     return {"ok": True}
 
 
 @router.get("/me")
 async def me(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
     return {"user": user}
+
+
+@router.get("/stats")
+async def user_stats(
+    _user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    """返回用户数量、近 30 天趋势、周注册量和角色占比。"""
+    return build_user_stats()

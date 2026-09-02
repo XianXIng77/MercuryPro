@@ -6,6 +6,25 @@ export interface AuthUser {
   role: string;
 }
 
+export interface UserStatsPoint {
+  label: string;
+  count: number;
+  date?: string;
+}
+
+export interface UserDashboardStats {
+  summary: {
+    totalUsers: number;
+    newUsersLast30Days: number;
+    newUsersToday: number;
+    growthRate: number;
+  };
+  dailyRegistrations: UserStatsPoint[];
+  weeklyRegistrations: UserStatsPoint[];
+  roleDistribution: UserStatsPoint[];
+  generatedAt: number;
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
   if (init.body && !headers.has('Content-Type')) {
@@ -18,11 +37,17 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     ? await response.json()
     : await response.text();
   if (!response.ok) {
-    const detail =
-      typeof payload === 'object' && payload !== null && 'detail' in payload
-        ? String((payload as { detail: unknown }).detail)
-        : '请求失败,请稍后重试';
-    throw new Error(detail);
+    const getMessage = (value: unknown): string | null => {
+      if (typeof value === 'string' && value.trim()) return value.trim();
+      if (!value || typeof value !== 'object') return null;
+      const record = value as Record<string, unknown>;
+      for (const key of ['detail', 'message', 'error', 'msg']) {
+        const message = getMessage(record[key]);
+        if (message) return message;
+      }
+      return null;
+    };
+    throw new Error(getMessage(payload) || `请求失败（HTTP ${response.status}）`);
   }
   return payload as T;
 }
@@ -35,10 +60,10 @@ export const authApi = {
     });
   },
 
-  register(email: string, password: string, username: string, remember: boolean) {
+  register(email: string, password: string, username: string, remember: boolean, inviteCode: string) {
     return request<{ user: AuthUser }>('/register', {
       method: 'POST',
-      body: JSON.stringify({ email, password, username, remember }),
+      body: JSON.stringify({ email, password, username, remember, invite_code: inviteCode }),
     });
   },
 
@@ -48,5 +73,9 @@ export const authApi = {
 
   me() {
     return request<{ user: AuthUser }>('/me');
+  },
+
+  stats() {
+    return request<UserDashboardStats>('/stats');
   },
 };

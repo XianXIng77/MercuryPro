@@ -1,12 +1,13 @@
 import React, { useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Eye, EyeOff, Github, Loader2, Lock, Mail, Sparkles, User } from 'lucide-react';
+import { Eye, EyeOff, Github, KeyRound, Loader2, Lock, Mail, Sparkles, User } from 'lucide-react';
 import type { StylePreset } from '../types';
 import { authApi } from '../api/auth';
+import { useToast } from './Toast';
 
 interface LoginViewProps {
   currentPreset: StylePreset;
-  onLoginSuccess: (email: string) => void;
+  onLoginSuccess: (email: string, successMessage?: string) => void;
 }
 
 /** Google "G" 官方四色 logo(SVG) */
@@ -57,11 +58,13 @@ const QqLogo: React.FC<{ className?: string }> = ({ className }) => (
  */
 export const LoginView: React.FC<LoginViewProps> = ({ currentPreset, onLoginSuccess }) => {
   const isDark = currentPreset.mode === 'dark';
+  const toast = useToast();
 
   const [mode, setMode] = useState<'login' | 'register'>('login');
   // 默认填充内置管理员账号,可直接登录
   const [email, setEmail] = useState('m@xianxing.art');
   const [username, setUsername] = useState('');
+  const [inviteCode, setInviteCode] = useState('');
   const [password, setPassword] = useState('xianxing1');
   const [showPassword, setShowPassword] = useState(false);
   const [remember, setRemember] = useState(true);
@@ -86,7 +89,9 @@ export const LoginView: React.FC<LoginViewProps> = ({ currentPreset, onLoginSucc
   // ── OAuth 第三方登录(暂未接入,点击提示) ────────────────────
   const handleOauthClick = () => {
     if (status !== 'idle') return;
-    setError('第三方登录暂未接入,请使用邮箱登录');
+    const message = '\u7b2c\u4e09\u65b9\u767b\u5f55\u6682\u672a\u63a5\u5165,\u8bf7\u4f7f\u7528\u90ae\u7bb1\u767b\u5f55';
+    setError(message);
+    toast.info(message);
   };
 
   // ── 提交(登录/注册调用后端 /api/auth/*) ─────────────────────
@@ -96,15 +101,27 @@ export const LoginView: React.FC<LoginViewProps> = ({ currentPreset, onLoginSucc
     setError('');
 
     if (mode === 'register' && username.trim().length < 2) {
-      setError('用户名至少需要 2 个字符');
+      const message = '\u7528\u6237\u540d\u81f3\u5c11\u9700\u8981 2 \u4e2a\u5b57\u7b26';
+      setError(message);
+      toast.warning(message);
+      return;
+    }
+    if (mode === 'register' && !inviteCode.trim()) {
+      const message = '\u8bf7\u8f93\u5165\u6709\u6548\u9080\u8bf7\u7801';
+      setError(message);
+      toast.warning(message);
       return;
     }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
-      setError('请输入有效的邮箱地址');
+      const message = '\u8bf7\u8f93\u5165\u6709\u6548\u7684\u90ae\u7bb1\u5730\u5740';
+      setError(message);
+      toast.warning(message);
       return;
     }
     if (password.length < 8) {
-      setError(mode === 'login' ? '密码至少 8 位' : '密码至少需要 8 个字符');
+      const message = mode === 'login' ? '密码至少 8 位' : '密码至少需要 8 个字符';
+      setError(message);
+      toast.warning(message);
       return;
     }
     setStatus('submitting');
@@ -112,11 +129,14 @@ export const LoginView: React.FC<LoginViewProps> = ({ currentPreset, onLoginSucc
       const { user } =
         mode === 'login'
           ? await authApi.login(email.trim(), password, remember)
-          : await authApi.register(email.trim(), password, username.trim(), remember);
+          : await authApi.register(email.trim(), password, username.trim(), remember, inviteCode.trim());
       setStatus('success');
-      window.setTimeout(() => onLoginSuccess(user.email), 900);
+      // 登录和注册成功后直接进入工作台，不再经过“返回登录页”的中间状态。
+      onLoginSuccess(user.email, mode === 'login' ? `登录成功，欢迎回来：${user.email}` : '注册成功，正在进入工作台');
     } catch (err) {
-      setError(err instanceof Error ? err.message : '网络错误,请稍后重试');
+      const message = err instanceof Error ? err.message : '网络错误,请稍后重试';
+      setError(message);
+      toast.error(message);
       setStatus('idle');
     }
   };
@@ -218,6 +238,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ currentPreset, onLoginSucc
         <form onSubmit={handleSubmit} className="space-y-4">
           <AnimatePresence mode="popLayout" initial={false}>
             {mode === 'register' && (
+              <>
               <motion.div
                 key="username-field"
                 initial={{ opacity: 0, height: 0, marginTop: 0 }}
@@ -237,6 +258,13 @@ export const LoginView: React.FC<LoginViewProps> = ({ currentPreset, onLoginSucc
                   />
                 </div>
               </motion.div>
+              <motion.div key="invite-code-field" initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} transition={{ duration: 0.25, ease: 'easeOut' }} className="overflow-hidden">
+                <div className="relative">
+                  <KeyRound className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                  <input value={inviteCode} onChange={(event) => setInviteCode(event.target.value.toUpperCase())} placeholder="&#x9080;&#x8bf7;&#x7801;&#xff08;&#x5fc5;&#x586b;&#xff09;" autoComplete="one-time-code" spellCheck={false} className={fieldClass + ' pl-10 uppercase'} />
+                </div>
+              </motion.div>
+              </>
             )}
           </AnimatePresence>
 
@@ -278,9 +306,9 @@ export const LoginView: React.FC<LoginViewProps> = ({ currentPreset, onLoginSucc
               <motion.p
                 key={error}
                 initial={{ opacity: 0, y: -6 }}
-                animate={{ opacity: 1, y: 0, x: [0, -7, 7, -4, 4, 0] }}
+                animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -6 }}
-                transition={{ duration: 0.4 }}
+                transition={{ duration: 0.2 }}
                 className="rounded-lg border border-rose-500/25 bg-rose-500/10 px-3 py-2 text-[11px] font-semibold text-rose-500"
                 role="alert"
               >

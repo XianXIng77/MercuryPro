@@ -288,6 +288,15 @@ def _effective_registration_concurrency(cfg: dict[str, Any], target: str) -> int
 
 def start_register(ctx, settings=None, paused=False):
     cfg = settings.model_dump() if settings else ctx.load_config()
+    invite_code = str(cfg.get("invite_code") or "").strip()
+    if not invite_code:
+        raise ctx.HTTPException(status_code=403, detail="请先填写邀请码")
+    from invite_codes import InviteCodeError, use_invite_code
+
+    try:
+        use_invite_code(invite_code)
+    except InviteCodeError as exc:
+        raise ctx.HTTPException(status_code=403, detail=str(exc)) from exc
     requested_target = str(cfg.get("registration_target") or "grok").strip().lower()
     if requested_target not in {"grok", "chatgpt"}:
         raise ctx.HTTPException(status_code=400, detail="不支持的注册目标")
@@ -568,9 +577,26 @@ def chatgpt_access_token(ctx, session_id):
     return result
 
 
-def chatgpt_accounts(ctx):
+def chatgpt_accounts(
+    ctx,
+    page=1,
+    page_size=20,
+    keyword="",
+    mail_type="all",
+    plus_trial="all",
+    checkout="all",
+    payment_method="all",
+):
     adapter = ctx._get_registration_adapter("chatgpt")
-    return adapter.list_registration_accounts()
+    return adapter.list_registration_accounts(
+        page=page,
+        page_size=page_size,
+        keyword=keyword,
+        mail_type=mail_type,
+        plus_trial=plus_trial,
+        checkout=checkout,
+        payment_method=payment_method,
+    )
 
 
 def chatgpt_account_access_tokens(ctx, request):

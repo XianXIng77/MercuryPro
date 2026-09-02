@@ -156,6 +156,36 @@ export async function importMicrosoftMailAccounts(file: File): Promise<ImportRec
   return Array.isArray(response.data) ? response.data : [];
 }
 
+export async function getPublicMicrosoftMailbox(accessToken: string): Promise<{ accountId: number | string; email: string }> {
+  const response = await request<ApiResponse<{ accountId: number | string; email: string }>>(
+    `/public/mailboxes/${encodeURIComponent(accessToken)}`,
+  );
+  return response.data || { accountId: '', email: '' };
+}
+
+export async function refreshPublicMicrosoftToken(accessToken: string) {
+  const response = await request<ApiResponse<Record<string, unknown>>>(
+    `/public/mailboxes/${encodeURIComponent(accessToken)}/refresh-token`,
+    { method: 'POST' },
+  );
+  return response.data || {};
+}
+
+export async function listPublicMicrosoftMessages(accessToken: string, top = 20) {
+  const response = await request<ApiResponse<Record<string, any>>>(
+    `/public/mailboxes/${encodeURIComponent(accessToken)}/messages${queryString({ top })}`,
+  );
+  const data = response.data || {};
+  return field<Record<string, any>[]>(data, 'value', 'Value') || [];
+}
+
+export async function getPublicMicrosoftMessage(accessToken: string, messageId: string) {
+  const response = await request<ApiResponse<Record<string, any>>>(
+    `/public/mailboxes/${encodeURIComponent(accessToken)}/messages/${encodeURIComponent(messageId)}`,
+  );
+  return response.data || {};
+}
+
 export async function refreshMicrosoftToken(accountId: number | string) {
   const response = await request<ApiResponse<Record<string, unknown>>>(`/accounts/${encodeURIComponent(String(accountId))}/refresh-token`, {
     method: 'POST',

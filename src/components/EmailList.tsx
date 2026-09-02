@@ -15,12 +15,12 @@ import {
   Inbox,
   LayoutList,
   Table as TableIcon,
-  Check,
   ChevronRight,
   ArrowDownToLine,
   Eye,
 } from 'lucide-react';
 import { Email, Folder, FolderId, Tag, StylePreset } from '../types';
+import { useToast } from './Toast';
 
 interface EmailListProps {
   emails: Email[];
@@ -75,18 +75,13 @@ export const EmailList: React.FC<EmailListProps> = ({
   const [showTagMenu, setShowTagMenu] = useState(false);
   const [activeActionRowId, setActiveActionRowId] = useState<string | null>(null);
   const [syncingRowId, setSyncingRowId] = useState<string | null>(null);
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const toast = useToast();
 
   const theme = currentPreset.themeClasses;
   const isDark = currentPreset.mode === 'dark';
 
   // Show floating toast
-  const triggerToast = (msg: string) => {
-    setToastMessage(msg);
-    setTimeout(() => {
-      setToastMessage(null);
-    }, 2200);
-  };
+  const triggerToast = (msg: string) => toast.success(msg);
 
   // Trigger individual email fetch / sync
   const handleSingleFetch = (e: React.MouseEvent, email: Email) => {
@@ -127,14 +122,6 @@ export const EmailList: React.FC<EmailListProps> = ({
 
   return (
     <div className={`flex-1 flex flex-col h-full overflow-hidden border-r ${theme.border} ${theme.appBg}`}>
-      {/* Toast Notification */}
-      {toastMessage && (
-        <div className="absolute top-16 right-6 z-50 bg-slate-900 text-white px-3.5 py-2 rounded-lg text-xs font-semibold shadow-2xl flex items-center gap-2 border border-blue-500/40 animate-bounce">
-          <Check className="w-4 h-4 text-emerald-400" />
-          <span>{toastMessage}</span>
-        </div>
-      )}
-
       {/* Top Workstation Action Toolbar */}
       <div className={`p-2.5 sm:p-3 border-b flex flex-wrap items-center justify-between gap-2.5 shrink-0 ${theme.cardBg} ${theme.border}`}>
         {/* Left Folder Title & Primary RECEIVE MAIL Button */}
