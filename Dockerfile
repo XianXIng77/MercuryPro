@@ -50,6 +50,6 @@ RUN python -m camoufox fetch \
 EXPOSE 9100
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9100/api/health', timeout=4)"
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9100/api/health/live', timeout=4)"
 
 CMD ["sh", "scripts/start_server_with_novnc.sh"]

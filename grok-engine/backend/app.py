@@ -461,7 +461,8 @@ async def enforce_auth_guard(request: Request, call_next):
     is_api = path == "/api" or path.startswith("/api/")
     is_auth_path = path == "/api/auth" or path.startswith("/api/auth/")
     is_public_mail_path = path.startswith("/api/microsoft/public/mailboxes/")
-    if (is_api and not is_auth_path and not is_public_mail_path or path.startswith("/browser-debug")) and not has_valid_session(request):
+    is_public_health_path = path == "/api/health/live"
+    if (is_api and not is_auth_path and not is_public_mail_path and not is_public_health_path or path.startswith("/browser-debug")) and not has_valid_session(request):
         return JSONResponse(
             status_code=401,
             content={"code": 401, "error": "未登录或会话已过期"},
@@ -552,6 +553,12 @@ def health() -> dict[str, Any]:
         "registration_alt": {other_target: other_available},
         "accounts_dir": str(DATA_DIR / "accounts"),
     }
+
+
+@app.get("/api/health/live")
+def health_live() -> dict[str, bool]:
+    """Unauthenticated liveness probe used by Docker's health check."""
+    return {"ok": True}
 
 
 @app.get("/api/output-paths")
