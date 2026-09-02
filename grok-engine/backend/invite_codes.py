@@ -124,6 +124,7 @@ def list_invite_codes(keyword: str = "", page: int = 1, page_size: int = 10, sta
 
 def generate_invite_codes(count: int = 1, max_uses: int = 1) -> dict[str, Any]:
     count = max(1, min(int(count or 1), 50))
+    max_uses = max(1, min(int(max_uses or 1), 1000))
     with _lock:
         records = _load_unlocked()
         existing = {str(item.get("code") or "") for item in records}
@@ -133,6 +134,7 @@ def generate_invite_codes(count: int = 1, max_uses: int = 1) -> dict[str, Any]:
                 "code": _new_code(existing),
                 "created_at": _now(),
                 "uses": 0,
+                "max_uses": max_uses,
                 "last_used_at": None,
                 "enabled": True,
             }
@@ -189,7 +191,8 @@ def use_invite_code(code: str) -> dict[str, Any]:
                 continue
             if not bool(record.get("enabled", True)):
                 raise InviteCodeError("邀请码已撤销")
-            if int(record.get("uses") or 0) > 0:
+            max_uses = max(1, int(record.get("max_uses") or 1))
+            if int(record.get("uses") or 0) >= max_uses:
                 raise InviteCodeError("Invitation code already used")
             record["uses"] = 1
             record["last_used_at"] = _now()
