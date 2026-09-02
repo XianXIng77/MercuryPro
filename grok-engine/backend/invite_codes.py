@@ -194,7 +194,7 @@ def use_invite_code(code: str) -> dict[str, Any]:
             max_uses = max(1, int(record.get("max_uses") or 1))
             if int(record.get("uses") or 0) >= max_uses:
                 raise InviteCodeError("Invitation code already used")
-            record["uses"] = 1
+            record["uses"] = int(record.get("uses") or 0) + 1
             record["last_used_at"] = _now()
             _save_unlocked(records)
             return _public(record)
