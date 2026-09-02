@@ -247,7 +247,7 @@ inviteCodes: (params: { page: number; pageSize: number; keyword?: string; status
     return request<{ ok: boolean; codes: InviteCodeRecord[]; total: number; page: number; page_size: number; pages: number }>(`/api/grok/invite-codes?${query.toString()}`);
   },
   generateInviteCodes: (count = 1, maxUses = 1) => request<{ ok: boolean; codes: InviteCodeRecord[] }>('/api/grok/invite-codes', { method: 'POST', body: JSON.stringify({ count, max_uses: maxUses }) }),
-  updateInviteCode: (code: string, maxUses: number) => request<{ ok: boolean; code: InviteCodeRecord }>(`/api/grok/invite-codes/\${encodeURIComponent(code)}`, { method: 'PUT', body: JSON.stringify({ max_uses: maxUses }) }),
+  updateInviteCode: (code: string, maxUses: number) => request<{ ok: boolean; code: InviteCodeRecord }>(`/api/grok/invite-codes/${encodeURIComponent(code)}`, { method: 'PUT', body: JSON.stringify({ max_uses: maxUses }) }),
   revokeInviteCode: (code: string) => request<{ ok: boolean; code: InviteCodeRecord }>(`/api/grok/invite-codes/${encodeURIComponent(code)}`, { method: 'DELETE' }),
 
   performance: (provider: GrokConfig['captcha_provider']) => request<RegistrationPerformanceProfile>(`/api/grok/performance?provider=${encodeURIComponent(provider)}`),
