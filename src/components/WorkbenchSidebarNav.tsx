@@ -93,7 +93,7 @@ export const WorkbenchSidebarNav: React.FC<WorkbenchSidebarNavProps> = ({
       </div>
 
       {/* Main Workbench Nav Items */}
-      <nav className="flex-1 p-2 space-y-1.5 overflow-y-auto">
+      <nav className="flex-1 p-2 space-y-1.5 overflow-visible">
         <div className="hidden sm:block text-[10px] font-bold text-slate-400 px-2.5 py-1 uppercase tracking-wider">
           核心工作台模块
         </div>
@@ -119,7 +119,6 @@ export const WorkbenchSidebarNav: React.FC<WorkbenchSidebarNavProps> = ({
                   ? 'text-slate-400 hover:text-white'
                   : 'text-slate-600 hover:text-slate-900'
               }`}
-              title={item.label}
             >
               {/* Active Tab Sliding Pill Animation */}
               {isActive && (

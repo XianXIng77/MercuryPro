@@ -1,13 +1,17 @@
 import React, { useEffect, useState } from 'react';
 import {
-  AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, Clock3, Download,
+  AlertTriangle, CheckCircle2, Clock3, Download,
   Filter, KeyRound, LogIn, MonitorSmartphone, RefreshCw, Search, ShieldCheck,
   UserRound, XCircle,
 } from 'lucide-react';
 import { StylePreset } from '../types';
 import { OperationAuditLog, OperationAuditSummary, operationLogsApi } from '../api/operationLogs';
+import { useToast } from './Toast';
+import { Tooltip } from './Tooltip';
+import { Pagination } from './Pagination';
 
 const ACTIONS = ['全部', '登录', '退出登录', '注册', '新增', '执行', '修改', '删除', '导出', '权限变更'];
+const AUDIT_DEFAULT_PAGE_SIZE = 10;
 
 const actionIcon = (action: string) => {
   if (action === '登录' || action === '退出登录') return <LogIn className="h-4 w-4" />;
@@ -25,16 +29,23 @@ export const UserAuditPanel: React.FC<{ currentPreset: StylePreset }> = ({ curre
   const [status, setStatus] = useState('全部');
   const [logs, setLogs] = useState<OperationAuditLog[]>([]);
   const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(AUDIT_DEFAULT_PAGE_SIZE);
   const [summary, setSummary] = useState<OperationAuditSummary>({ today: 0, activeUsers: 0, success: 0, risks: 0 });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const toast = useToast();
+
+  useEffect(() => {
+    if (error) toast.error(error);
+  }, [error, toast]);
   const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError('');
-    operationLogsApi.list({ q: query.trim(), action, status })
+    operationLogsApi.list({ q: query.trim(), action, status, limit: pageSize, offset: (page - 1) * pageSize })
       .then((result) => {
         if (cancelled) return;
         setLogs(result.items || []);
@@ -46,7 +57,13 @@ export const UserAuditPanel: React.FC<{ currentPreset: StylePreset }> = ({ curre
       })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [action, query, refreshKey, status]);
+  }, [action, page, pageSize, query, refreshKey, status]);
+
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
 
   const exportCsv = () => {
     const header = ['编号', '用户', '邮箱', '操作', '模块', '详情', 'IP 地址', '设备', '时间', '状态', '风险'];
@@ -122,13 +139,12 @@ export const UserAuditPanel: React.FC<{ currentPreset: StylePreset }> = ({ curre
       <div className="flex min-h-0 flex-1 flex-col p-4 sm:p-6">
         <div className={`flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border ${theme.cardBg} ${theme.border} ${theme.shadow}`}>
           <div className={`flex flex-wrap items-center gap-2 border-b p-3 ${theme.border}`}>
-            <div className="relative min-w-[220px] flex-1 sm:max-w-sm"><Search className={`absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 ${theme.textSecondary}`} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索用户、操作详情或 IP 地址" className={`h-9 w-full rounded-lg border bg-transparent pl-9 pr-3 text-xs outline-none transition placeholder:text-slate-400 focus:border-blue-500 ${theme.border} ${theme.textPrimary}`} /></div>
+            <div className="relative min-w-[220px] flex-1 sm:max-w-sm"><Search className={`absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 ${theme.textSecondary}`} /><input value={query} onChange={(event) => { setQuery(event.target.value); setPage(1); }} placeholder="搜索用户、操作详情或 IP 地址" className={`h-9 w-full rounded-lg border bg-transparent pl-9 pr-3 text-xs outline-none transition placeholder:text-slate-400 focus:border-blue-500 ${theme.border} ${theme.textPrimary}`} /></div>
             <div className={`hidden h-9 items-center gap-1.5 px-1 text-xs font-bold sm:flex ${theme.textSecondary}`}><Filter className="h-3.5 w-3.5" />筛选</div>
-            <select aria-label="按操作类型筛选" value={action} onChange={(event) => setAction(event.target.value)} className={selectClass}>{ACTIONS.map((item) => <option key={item}>{item}</option>)}</select>
-            <select aria-label="按操作状态筛选" value={status} onChange={(event) => setStatus(event.target.value)} className={selectClass}><option>全部</option><option>成功</option><option>失败</option></select>
+            <select aria-label="按操作类型筛选" value={action} onChange={(event) => { setAction(event.target.value); setPage(1); }} className={selectClass}>{ACTIONS.map((item) => <option key={item}>{item}</option>)}</select>
+            <select aria-label="按操作状态筛选" value={status} onChange={(event) => { setStatus(event.target.value); setPage(1); }} className={selectClass}><option>全部</option><option>成功</option><option>失败</option></select>
           </div>
           <div className="min-h-0 flex-1 overflow-auto">
-            {error && <div className="m-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs font-semibold text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-300">{error}</div>}
             <table className="w-full min-w-[1050px] border-collapse text-left">
               <thead className={`sticky top-0 z-10 text-center text-[11px] font-bold ${isDark ? 'bg-slate-900 text-slate-400' : 'bg-slate-50 text-slate-500'}`}><tr>{['用户', '操作', '模块 / 详情', 'IP 地址 / 设备', '操作时间', '状态', '风险'].map((label) => <th key={label} className={`border-b px-4 py-3 text-center ${theme.border}`}>{label}</th>)}</tr></thead>
               <tbody className="text-center">
@@ -136,7 +152,7 @@ export const UserAuditPanel: React.FC<{ currentPreset: StylePreset }> = ({ curre
                 {!loading && logs.map((log) => <tr key={log.id} className={`group border-b text-xs transition ${theme.border} ${isDark ? 'hover:bg-white/[0.03]' : 'hover:bg-blue-50/50'}`}>
                   <td className="px-4 py-3.5 text-left"><div className="flex items-center justify-start gap-2.5"><span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full font-extrabold ${log.user === '管理员' ? (isDark ? 'bg-blue-500/25 text-blue-200 ring-1 ring-blue-400/50' : 'bg-blue-100 text-blue-700 ring-1 ring-blue-300') : (isDark ? 'bg-amber-500/25 text-amber-200 ring-1 ring-amber-400/50' : 'bg-amber-100 text-amber-800 ring-1 ring-amber-300')}`}>{log.user.charAt(0)}</span><div><p className={`font-bold ${theme.textPrimary}`}>{log.user}</p><p className={`mt-0.5 text-[10px] ${theme.textSecondary}`}>{log.email}</p></div></div></td>
                   <td className="px-4 py-3.5"><span className={`audit-action-badge inline-flex items-center gap-1.5 rounded-lg border px-2 py-1 font-bold ${log.status === '失败' ? auditPalette.actionFailure : auditPalette.actionSuccess}`} data-kind={log.status === '失败' ? 'failure' : 'success'}>{actionIcon(log.action)}{log.action}</span></td>
-                  <td className="max-w-sm px-4 py-3.5"><p className={`font-bold ${theme.textPrimary}`}>{log.module}</p><p className={`mt-1 truncate text-[11px] ${theme.textSecondary}`} title={log.detail}>{log.detail}</p></td>
+                  <td className="max-w-sm px-4 py-3.5"><p className={`font-bold ${theme.textPrimary}`}>{log.module}</p><Tooltip content={log.detail} isDark={isDark}><p className={`mt-1 truncate text-[11px] ${theme.textSecondary}`}>{log.detail}</p></Tooltip></td>
                   <td className="px-4 py-3.5"><p className={`font-mono font-semibold ${theme.textPrimary}`}>{log.ip}</p><p className={`mt-1 flex items-center justify-center gap-1 text-[10px] ${theme.textSecondary}`}><MonitorSmartphone className="h-3 w-3" />{log.device}</p></td>
                   <td className={`whitespace-nowrap px-4 py-3.5 font-mono text-[11px] ${theme.textSecondary}`}>{log.time}</td>
                   <td className="px-4 py-3.5">{log.status === '成功' ? <span className={`audit-status-badge inline-flex items-center gap-1 rounded-full border px-2 py-1 font-bold ${auditPalette.statusSuccess}`} data-kind="success"><CheckCircle2 className="h-3.5 w-3.5" />成功</span> : <span className={`audit-status-badge inline-flex items-center gap-1 rounded-full border px-2 py-1 font-bold ${auditPalette.statusFailure}`} data-kind="failure"><XCircle className="h-3.5 w-3.5" />失败</span>}</td>
@@ -146,7 +162,7 @@ export const UserAuditPanel: React.FC<{ currentPreset: StylePreset }> = ({ curre
             </table>
             {!loading && !logs.length && <div className={`flex h-48 flex-col items-center justify-center text-center ${theme.textSecondary}`}><Search className="mb-2 h-8 w-8 opacity-40" /><p className="text-sm font-bold">{error ? '暂时无法读取日志' : '没有匹配的操作记录'}</p><p className="mt-1 text-xs">{error ? '请确认后端服务已启动' : '请尝试调整关键词或筛选条件'}</p></div>}
           </div>
-          <footer className={`flex items-center justify-between gap-3 border-t px-4 py-3 text-xs ${theme.border}`}><p className={theme.textSecondary}>共 <b className={theme.textPrimary}>{total}</b> 条记录 · 日志由后端持久化</p><div className="flex items-center gap-1"><button type="button" disabled className={`rounded-md border p-1.5 opacity-40 ${theme.border}`} aria-label="上一页"><ChevronLeft className="h-3.5 w-3.5" /></button><span className="flex h-7 min-w-7 items-center justify-center rounded-md bg-blue-600 px-2 font-bold text-white">1</span><button type="button" disabled className={`rounded-md border p-1.5 opacity-40 ${theme.border}`} aria-label="下一页"><ChevronRight className="h-3.5 w-3.5" /></button></div></footer>
+          <Pagination total={total} page={page} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={(value) => { setPageSize(value); setPage(1); }} loading={loading} currentPreset={currentPreset} className={`border-t px-4 py-3 ${theme.border}`} />
         </div>
       </div>
     </div>

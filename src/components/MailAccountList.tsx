@@ -1,10 +1,8 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   AlertCircle,
   Check,
   CheckSquare,
-  ChevronLeft,
-  ChevronRight,
   Copy,
   FileText,
   Info,
@@ -32,6 +30,8 @@ import { MailAccount, StylePreset } from '../types';
 import { StyledSelect } from './StyledSelect';
 import { ConfirmDialog } from './ConfirmDialog';
 import { useToast } from './Toast';
+import { Tooltip } from './Tooltip';
+import { Pagination } from './Pagination';
 
 interface MailAccountListProps {
   onOpenAccountInbox: (account: MailAccount) => void;
@@ -54,7 +54,6 @@ export const MailAccountList: React.FC<MailAccountListProps> = ({
   const [totalItems, setTotalItems] = useState(0);
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
-  const [jumpPageInput, setJumpPageInput] = useState('1');
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
 
@@ -76,7 +75,6 @@ export const MailAccountList: React.FC<MailAccountListProps> = ({
   const [pendingDeleteAccounts, setPendingDeleteAccounts] = useState<MailAccount[]>([]);
   const [isDeletingAccount, setIsDeletingAccount] = useState(false);
 
-  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
   const isAllSelected = accounts.length > 0 && accounts.every((account) => selectedIds.includes(account.id));
 
   const showToast = useCallback((message: string) => toast.success(message), [toast]);
@@ -109,15 +107,6 @@ export const MailAccountList: React.FC<MailAccountListProps> = ({
   useEffect(() => {
     void loadAccounts();
   }, [loadAccounts]);
-
-  useEffect(() => {
-    setJumpPageInput(String(currentPage));
-  }, [currentPage]);
-
-  const pageNumbers = useMemo(() => {
-    const start = Math.max(1, Math.min(currentPage - 2, totalPages - 4));
-    return Array.from({ length: Math.min(5, totalPages) }, (_, index) => start + index);
-  }, [currentPage, totalPages]);
 
   const runSearch = () => {
     setCurrentPage(1);
@@ -269,13 +258,6 @@ export const MailAccountList: React.FC<MailAccountListProps> = ({
     }
   };
 
-  const handleJumpPage = (event: React.FormEvent) => {
-    event.preventDefault();
-    const page = Number.parseInt(jumpPageInput, 10);
-    if (page >= 1 && page <= totalPages) setCurrentPage(page);
-    else setJumpPageInput(String(currentPage));
-  };
-
   return (
     <div className={`flex-1 flex flex-col h-full overflow-hidden ${theme.appBg} text-xs`}>
       <form onSubmit={(event) => { event.preventDefault(); runSearch(); }} className={`p-3 border-b flex flex-wrap items-center gap-4 ${theme.navBg} ${theme.border} shrink-0`}>
@@ -336,9 +318,11 @@ export const MailAccountList: React.FC<MailAccountListProps> = ({
           </div>
           <div className="flex items-center gap-2">
             {selectedIds.length > 0 && <span className={theme.textSecondary}>已选 {selectedIds.length} 个</span>}
-            <button onClick={() => void loadAccounts()} className={`p-2 rounded-lg border ${theme.cardBg} ${theme.border} ${theme.textSecondary}`} title="刷新数据">
+            <Tooltip content="刷新数据" placement="right" isDark={isDark}>
+            <button onClick={() => void loadAccounts()} className={`p-2 rounded-lg border ${theme.cardBg} ${theme.border} ${theme.textSecondary}`}>
               <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
             </button>
+            </Tooltip>
           </div>
         </div>
 
@@ -412,20 +396,7 @@ export const MailAccountList: React.FC<MailAccountListProps> = ({
           </table>
         </div>
 
-        <div className={`px-4 py-3 border-t flex flex-wrap items-center justify-between gap-3 ${theme.navBg} ${theme.border}`}>
-          <div className={`flex items-center gap-4 ${theme.textSecondary}`}>
-            <span>共 {totalItems} 条</span>
-            <div className="w-28"><StyledSelect ariaLabel="每页显示数量" value={String(pageSize)} onChange={(value) => { setPageSize(Number(value)); setCurrentPage(1); }} options={[10, 20, 50, 100].map((size) => ({ value: String(size), label: `${size}条/页` }))} isDark={isDark} className="py-1.5" /></div>
-          </div>
-          <div className="flex items-center gap-2">
-            <button disabled={currentPage === 1} onClick={() => setCurrentPage((page) => page - 1)} className={`p-1.5 border rounded-lg disabled:opacity-40 ${theme.cardBg} ${theme.border}`}><ChevronLeft className="w-4 h-4" /></button>
-            {pageNumbers.map((page) => <button key={page} onClick={() => setCurrentPage(page)} className={`min-w-9 px-2.5 py-1.5 rounded-lg border font-semibold ${page === currentPage ? 'bg-blue-600 border-blue-600 text-white' : `${theme.cardBg} ${theme.border} ${theme.textPrimary}`}`}>{page}</button>)}
-            <button disabled={currentPage === totalPages} onClick={() => setCurrentPage((page) => page + 1)} className={`p-1.5 border rounded-lg disabled:opacity-40 ${theme.cardBg} ${theme.border}`}><ChevronRight className="w-4 h-4" /></button>
-            <form onSubmit={handleJumpPage} className={`ml-2 flex items-center gap-1 ${theme.textSecondary}`}>
-              <span>前往</span><input value={jumpPageInput} onChange={(event) => setJumpPageInput(event.target.value)} className={`w-12 px-2 py-1.5 text-center border rounded-lg ${theme.cardBg} ${theme.border} ${theme.textPrimary}`} /><span>页</span>
-            </form>
-          </div>
-        </div>
+        <Pagination total={totalItems} page={currentPage} pageSize={pageSize} onPageChange={setCurrentPage} onPageSizeChange={(value) => { setPageSize(value); setCurrentPage(1); }} loading={loading} currentPreset={currentPreset} className={`px-4 py-3 border-t ${theme.navBg} ${theme.border}`} />
       </div>
 
       {showAddModal && (

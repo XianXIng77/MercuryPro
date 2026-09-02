@@ -34,6 +34,8 @@ import {
 } from '../api/grokRegistration';
 import { ConfirmDialog } from './ConfirmDialog';
 import { StyledSelect, StyledSelectOption } from './StyledSelect';
+import { useToast } from './Toast';
+import { Tooltip } from './Tooltip';
 
 type ConfigTab = 'registration' | 'browser' | 'mail' | 'proxy' | 'import' | 'rotation';
 
@@ -847,6 +849,7 @@ interface Props {
 export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
   const theme = currentPreset.themeClasses;
   const isDark = currentPreset.mode === 'dark';
+  const toast = useToast();
   const [tab, setTab] = useState<ConfigTab>('registration');
   // 域名邮箱配置:初始化时先用浏览器记住的域名 / QQ 邮箱 / 授权码填充,
   // 避免加载后端配置前被默认空值覆盖本地缓存。
@@ -878,6 +881,12 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState('');
   const [notice, setNotice] = useState<{ tone: 'ok' | 'error' | 'info'; text: string } | null>(null);
+
+  useEffect(() => {
+    if (!notice) return;
+    toast.showToast({ message: notice.text, tone: notice.tone === 'ok' ? 'success' : notice.tone });
+    setNotice(null);
+  }, [notice, toast]);
 
   const [solverState, setSolverState] = useState('未检测');
   const [proxyResult, setProxyResult] = useState<ProxyResultView | null>(null);
@@ -1908,7 +1917,7 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
             <span className={`px-2.5 py-1.5 rounded-lg border text-[11px] font-bold ${serviceOnline ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-600' : serviceOnline === false ? 'bg-rose-500/10 border-rose-500/30 text-rose-600' : 'bg-slate-500/10 border-slate-500/30 text-slate-500'}`}>
               <CircleDot className="inline w-3 h-3 mr-1" />内置注册引擎 {serviceOnline ? '在线' : serviceOnline === false ? '未就绪' : '检测中'}
             </span>
-            <button onClick={() => void load()} disabled={loading} className={`p-2 rounded-lg border ${theme.border} ${theme.textSecondary}`} title="重新读取配置"><RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /></button>
+            <Tooltip content="重新读取配置" placement="right" isDark={isDark}><button onClick={() => void load()} disabled={loading} className={`p-2 rounded-lg border ${theme.border} ${theme.textSecondary}`}><RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /></button></Tooltip>
           </div>
         </div>
 
@@ -1920,12 +1929,6 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
           ))}
         </div>
 
-        {notice && (
-          <div className={`rounded-lg border px-4 py-3 text-[13px] font-semibold leading-5 flex items-center gap-3 ${isDark ? 'border-slate-700 bg-slate-800/80 text-slate-100' : 'border-slate-300 bg-slate-100 text-slate-800'}`}>
-            <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${notice.tone === 'ok' ? 'bg-emerald-500' : notice.tone === 'error' ? 'bg-rose-500' : 'bg-blue-500'}`} />
-            <span>{notice.text}</span>
-          </div>
-        )}
 
         <div className={`relative ${tab === 'rotation' || tab === 'browser' ? '' : tab === 'registration' ? 'space-y-4 xl:space-y-0 xl:grid xl:grid-cols-[minmax(0,1fr)_360px] xl:items-start xl:gap-4' : 'space-y-4 xl:space-y-0 xl:pr-[376px]'}`}>
         <section className={`${cardClass} min-w-0 overflow-hidden flex flex-col ${tab === 'rotation' ? '' : 'xl:min-h-[calc(100vh-260px)]'}`}>
@@ -2049,6 +2052,151 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset }) => {
                       </div>
                     </div>
                   </div>
+                </div>}
+
+                {tab === 'mail' && <div className="space-y-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-1.5"><span className={`block text-xs font-bold ${theme.textPrimary}`}>邮箱类型</span><StyledSelect ariaLabel="邮箱类型" value={config.mail_provider} onChange={(value) => setField('mail_provider', value as GrokConfig['mail_provider'])} options={mailProviderOptions} isDark={isDark} /></div>
+                    {config.mail_provider === 'custom' ? <>
+                      <Field label="邮箱域名"><input value={config.mail_domain} onChange={(e) => setField('mail_domain', e.target.value)} placeholder="多个域名用逗号分隔" className={fieldClass} /></Field>
+                      <Field label="API 地址"><input value={config.mail_base_url} onChange={(e) => setField('mail_base_url', e.target.value)} placeholder="YYDS 或自建邮箱 API 地址" className={fieldClass} /></Field>
+                      <Field label="API Key / 管理员密钥"><input type="password" value={config.mail_api_key} onChange={(e) => setField('mail_api_key', e.target.value)} className={fieldClass} /></Field>
+                    </> : config.mail_provider === 'smsbower' ? <>
+                      <Field label="SMSBower API 地址"><input value={config.smsbower_base_url} onChange={(e) => setField('smsbower_base_url', e.target.value)} placeholder="https://smsbower.page/api/mail" className={fieldClass} /></Field>
+                      <Field label="SMSBower API Key"><div className="flex gap-2"><input type="password" value={config.smsbower_api_key} onChange={(e) => setField('smsbower_api_key', e.target.value)} className={fieldClass} /><button onClick={() => void checkSmsbowerBalance()} disabled={!!busy || !config.smsbower_api_key.trim()} className="px-3 rounded-lg bg-slate-600 text-white text-xs font-bold min-w-max flex items-center gap-1.5 disabled:opacity-50">{busy === 'smsbower-balance' && <Loader2 className="w-3.5 h-3.5 animate-spin" />}查询余额</button></div></Field>
+                      {smsbowerBalance !== null && <div className="col-span-2"><div className={`rounded-lg border px-4 py-3 ${smsbowerBalance.ok ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-rose-500/30 bg-rose-500/5'}`}><span className={`text-xs font-bold ${smsbowerBalance.ok ? 'text-emerald-600' : 'text-rose-600'}`}>{smsbowerBalance.ok ? `SMSBower 可用 · 单价 $${smsbowerBalance.balance ?? '--'} · 库存 ${smsbowerBalance.count ?? '--'} 个` : `SMSBower 查询失败：${smsbowerBalance.error || '未知错误'}`}</span></div></div>}
+                    </> : config.mail_provider === 'naturalflower' ? <>
+                      <Field label="Naturalflower 邮箱与取件链接" wide hint="每行一组，格式：icloud邮箱 空格 https://pickup.naturalflower.cn/?token=...；任务会按行顺序一一使用。">
+                        <textarea rows={10} value={config.naturalflower_mailboxes} onChange={(e) => setField('naturalflower_mailboxes', e.target.value)} placeholder="crabber.veils7s@icloud.com https://pickup.naturalflower.cn/?token=..." className={`${fieldClass} font-mono`} />
+                      </Field>
+                      <div className="col-span-2"><div className={`rounded-lg border px-4 py-3 ${naturalflowerMailboxesValid ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-amber-500/30 bg-amber-500/5'}`}><span className={`text-xs font-bold ${naturalflowerMailboxesValid ? 'text-emerald-600' : 'text-amber-600'}`}>{naturalflowerMailboxesValid ? `格式检查通过 · 共 ${naturalflowerMailboxCount} 个邮箱` : '请检查每行是否同时包含有效邮箱和完整 Naturalflower 取件 URL'}</span></div></div>
+                      <div className="col-span-2">
+                        <div className={`rounded-xl border overflow-hidden ${theme.border} ${isDark ? 'bg-slate-900/40' : 'bg-slate-50'}`}>
+                          <div className={`p-3 border-b ${theme.border}`}>
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <div className="min-w-0">
+                                <strong className={`text-xs ${theme.textPrimary}`}>Naturalflower 邮箱状态</strong>
+                                <p className={`text-[10px] mt-0.5 ${theme.textSecondary}`}>共 {naturalflowerRows.length} · 成功 {naturalflowerStatusCounts.success} · 失败 {naturalflowerStatusCounts.failed} · 进行中 {naturalflowerStatusCounts.running} · 已取消 {naturalflowerStatusCounts.cancelled} · 未使用 {naturalflowerStatusCounts.unused}</p>
+                              </div>
+                              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                                <StyledSelect ariaLabel="Naturalflower 邮箱状态筛选" value={naturalflowerFilter} onChange={(value) => setNaturalflowerFilter(value as 'all' | NaturalflowerRowStatus)} options={NATURALFLOWER_FILTER_OPTIONS} isDark={isDark} />
+                                <button onClick={() => void reRegisterFailedNaturalflower()} disabled={!!busy || naturalflowerStatusCounts.failed === 0} className="px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-[11px] font-bold flex items-center gap-1.5 disabled:opacity-40">{busy === 'start' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}重新注册失败{naturalflowerStatusCounts.failed ? `（${naturalflowerStatusCounts.failed}）` : ''}</button>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="max-h-[340px] overflow-auto">
+                            <table className="w-full min-w-[640px] text-left text-[10px]">
+                              <thead className={`sticky top-0 z-10 ${isDark ? 'bg-slate-800 text-slate-400' : 'bg-slate-200 text-slate-500'}`}><tr><th className="px-4 py-2.5 text-center">邮箱账号</th><th className="px-3 py-2.5 text-center">取件地址</th><th className="px-3 py-2.5 text-center">状态</th></tr></thead>
+                              <tbody className={`divide-y ${isDark ? 'divide-slate-800' : 'divide-slate-200'}`}>
+                                {naturalflowerPageRows.length ? naturalflowerPageRows.map((row) => {
+                                  const meta = NATURALFLOWER_STATUS_META[row.status];
+                                  return <tr key={`${row.lineIndex}-${row.email}`} className={isDark ? 'hover:bg-white/[0.025]' : 'hover:bg-black/[0.025]'}>
+                                    <td className="px-4 py-3 max-w-[220px]"><div className="flex items-center justify-center gap-2 min-w-0"><span className={`w-2 h-2 rounded-full shrink-0 ${meta.dot}`} /><strong className={`truncate text-[11px] ${theme.textPrimary}`} title={row.email}>{row.email}</strong></div>{row.status === 'failed' && row.session?.error && <p className="mt-1 truncate text-center text-rose-500" title={row.session.error}>失败原因：{row.session.error}</p>}</td>
+                                    <td className="px-3 py-3 max-w-[240px]"><a href={row.pickupUrl} target="_blank" rel="noopener noreferrer" className={`block truncate text-[11px] text-blue-500 hover:text-blue-400 hover:underline`} title={`打开取件地址：${row.pickupUrl}`}>{row.pickupUrl}</a></td>
+                                    <td className="px-3 py-3 text-center"><span className={`inline-flex px-2 py-1 rounded-md border font-bold ${meta.badge}`}>{meta.label}</span></td>
+                                  </tr>;
+                                }) : <tr><td colSpan={3} className={`px-4 py-8 text-center ${theme.textSecondary}`}>当前筛选条件下暂无邮箱</td></tr>}
+                              </tbody>
+                            </table>
+                          </div>
+                          <div className={`p-2.5 border-t ${theme.border} flex items-center justify-between gap-2`}>
+                            <span className={`text-[10px] ${theme.textSecondary}`}>第 {naturalflowerCurrentPage} / {naturalflowerTotalPages} 页 · 共 {naturalflowerFilteredRows.length} 个</span>
+                            <div className="flex items-center gap-1.5">
+                              <button onClick={() => setNaturalflowerPage((p) => Math.max(1, p - 1))} disabled={naturalflowerCurrentPage <= 1} className={`px-2.5 py-1 rounded-md border text-[10px] font-bold disabled:opacity-40 ${theme.border} ${theme.textPrimary}`}>上一页</button>
+                              <button onClick={() => setNaturalflowerPage((p) => Math.min(naturalflowerTotalPages, p + 1))} disabled={naturalflowerCurrentPage >= naturalflowerTotalPages} className={`px-2.5 py-1 rounded-md border text-[10px] font-bold disabled:opacity-40 ${theme.border} ${theme.textPrimary}`}>下一页</button>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </> : config.mail_provider === 'domain_email' ? <>
+                      <Field label="Cloudflare 转发域名" hint="在 Cloudflare Email Routing 中把该域名的所有邮件转发到下方 QQ 邮箱">
+                        <input value={config.domain_email_domain} onChange={(e) => setField('domain_email_domain', e.target.value)} placeholder="example.com" className={fieldClass} />
+                      </Field>
+                      <Field label="QQ 邮箱" hint="接收转发的 QQ 邮箱，用于 IMAP 收取验证码">
+                        <input value={config.domain_email_qq} onChange={(e) => setField('domain_email_qq', e.target.value)} placeholder="123456789@qq.com" className={fieldClass} />
+                      </Field>
+                      <Field label="QQ 授权码" hint="QQ 邮箱设置 → 账号 → 开启 IMAP/SMTP 服务后生成">
+                        <div className="flex gap-2">
+                          <input type="password" value={config.domain_email_auth_code} onChange={(e) => setField('domain_email_auth_code', e.target.value)} placeholder="16 位授权码，非 QQ 登录密码" className={fieldClass} />
+                          <button onClick={() => void checkDomainMail()} disabled={!!busy || !config.domain_email_domain.trim() || !config.domain_email_qq.trim() || !config.domain_email_auth_code.trim()} className="px-3 rounded-lg bg-slate-600 text-white text-xs font-bold min-w-max flex items-center gap-1.5 disabled:opacity-50">{busy === 'domain-mail-test' && <Loader2 className="w-3.5 h-3.5 animate-spin" />}检测授权</button>
+                        </div>
+                      </Field>
+                      {domainMailTest !== null && <div className="col-span-2"><div className={`rounded-lg border px-4 py-3 ${domainMailTest.ok ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-rose-500/30 bg-rose-500/5'}`}><span className={`text-xs font-bold ${domainMailTest.ok ? 'text-emerald-600' : 'text-rose-600'}`}>{domainMailTest.ok ? `QQ 授权可用 · 已连接 ${domainMailTest.host || 'imap.qq.com'}（${domainMailTest.folder || 'INBOX'}）· 域名 ${domainMailTest.domain || config.domain_email_domain}` : `授权检测失败：${domainMailTest.error || '未知错误'}`}</span></div></div>}
+                    </> : <>
+                      <div className="space-y-1.5"><span className={`block text-xs font-bold ${theme.textPrimary}`}>账号来源</span><StyledSelect ariaLabel="微软邮箱账号来源" value={config.hotmail_account_source} onChange={(value) => setField('hotmail_account_source', value as GrokConfig['hotmail_account_source'])} options={HOTMAIL_ACCOUNT_SOURCE_OPTIONS.map((option) => option.value === 'mail_management' ? { ...option, description: config.registration_target === 'chatgpt' ? '仅使用邮箱管理中 OpenAI 状态为 0/1 的账号' : '仅使用邮箱管理中 Grok 状态为 0/3、1/3、2/3 的账号' } : option)} isDark={isDark} /></div>
+                      <Field label="本地助手地址"><div className="flex gap-2"><input value={config.hotmail_local_base_url} onChange={(e) => setField('hotmail_local_base_url', e.target.value)} className={fieldClass} /><button onClick={() => void testHotmail()} disabled={!!busy} className="px-3 rounded-lg bg-slate-600 text-white text-xs font-bold min-w-max flex items-center gap-1.5 disabled:opacity-50">{busy === 'hotmail-test' && <Loader2 className="w-3.5 h-3.5 animate-spin" />}检测助手</button></div></Field>
+                      {config.hotmail_account_source === 'manual' && <Field label="批量导入微软邮箱账号" wide hint="每行：email----password----refresh-token----client-id"><textarea rows={5} value={hotmailImportText} onChange={(e) => setHotmailImportText(e.target.value)} className={fieldClass} /></Field>}
+                    </>}
+                  </div>
+                  {config.mail_provider === 'smsbower' && <div className={`rounded-xl border p-4 ${theme.border} ${isDark ? 'bg-slate-900/40' : 'bg-slate-50'}`}>
+                    <div className="flex items-center justify-between gap-3"><div className="min-w-0"><strong className={`text-xs ${theme.textPrimary}`}>SMSBower Gmail 邮箱</strong><p className={`text-[10px] mt-1 leading-5 ${theme.textSecondary}`}>每次注册前通过 SMSBower API 临时购买一个 Gmail 邮箱，注册完成后释放。验证码通过 SMSBower 接口自动获取。{smsbowerBalance?.ok && <span className="text-emerald-600"> · 单价 ${smsbowerBalance.balance ?? '--'} · 库存 {smsbowerBalance.count ?? '--'} 个</span>}</p></div></div>
+                  </div>}
+                  {config.mail_provider === 'domain_email' && <div className={`rounded-xl border p-4 ${theme.border} ${isDark ? 'bg-slate-900/40' : 'bg-slate-50'}`}>
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <strong className={`text-xs ${theme.textPrimary}`}>域名邮箱（Cloudflare 转发）</strong>
+                        <p className={`text-[10px] mt-1 leading-5 ${theme.textSecondary}`}>
+                          注册时随机生成美式人名风格前缀（如 james.smith87、emily_johnson2001、x7k2p9q3r），组成 <span className="font-mono">前缀@{config.domain_email_domain || '你的域名'}</span> 用于 OpenAI 注册；Cloudflare 会把验证邮件转发到 QQ 邮箱，引擎通过 IMAP + 授权码自动读取验证码。请先在 Cloudflare Email Routing 中开启“Catch-all 转发到 QQ 邮箱”，并在 QQ 邮箱设置中开启 IMAP 服务。
+                        </p>
+                      </div>
+                    </div>
+                  </div>}
+                  {config.mail_provider === 'hotmail_local' && <div className={`rounded-xl border overflow-hidden ${theme.border} ${isDark ? 'bg-slate-900/40' : 'bg-slate-50'}`}>
+                    <div className={`p-4 border-b ${theme.border}`}>
+                      <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <strong className={`text-xs ${theme.textPrimary}`}>微软邮箱账户池</strong>
+                          <p className={`text-[10px] mt-1 leading-5 ${theme.textSecondary}`}>
+                            {hotmailPool ? `当前查看：${config.registration_target === 'chatgpt' ? 'OpenAI（每邮箱仅 1 次）' : 'Grok（每邮箱 3 次，含 +别名）'} · 账户池共 ${hotmailPool.total || 0} · 可用 ${hotmailPool.available || 0} · 可用账号 ${hotmailPool.available_accounts || 0} · 测活通过 ${hotmailPool.healthy || 0} · 测活失败 ${hotmailPool.unhealthy || 0} · 未测活 ${hotmailPool.unchecked || 0} · 注册失败 ${hotmailPool.failed || 0} · 已用尽 ${hotmailPool.used || 0}` : '正在等待读取账户池'}
+                          </p>
+                        </div>
+                        <div className="flex flex-wrap gap-2 shrink-0">
+                          {config.hotmail_account_source === 'manual' && <>
+                          <button onClick={() => setPendingConfirmation({ kind: 'delete-hotmail-selected', ids: [...hotmailSelected] })} disabled={!!busy || !hotmailSelected.length} className="px-3 py-2 rounded-lg border border-rose-500/30 text-rose-600 text-[11px] font-bold flex items-center gap-1.5 disabled:opacity-40"><Trash2 className="w-3.5 h-3.5" />删除所选{hotmailSelected.length ? `（${hotmailSelected.length}）` : ''}</button>
+                          <button onClick={() => setPendingConfirmation({ kind: 'delete-hotmail-used' })} disabled={!!busy || !Number(hotmailPool?.used || 0)} className="px-3 py-2 rounded-lg border border-amber-500/30 text-amber-600 text-[11px] font-bold flex items-center gap-1.5 disabled:opacity-40"><Trash2 className="w-3.5 h-3.5" />删除用尽</button>
+                          <button onClick={() => setPendingConfirmation({ kind: 'delete-hotmail-unhealthy' })} disabled={!!busy || !Number(hotmailPool?.unhealthy || 0)} className="px-3 py-2 rounded-lg border border-rose-500/30 text-rose-600 text-[11px] font-bold flex items-center gap-1.5 disabled:opacity-40"><Trash2 className="w-3.5 h-3.5" />删除激活失败</button>
+                          </>}
+                          <button onClick={() => void probeHotmail()} disabled={!!busy} className={`px-3 py-2 rounded-lg border text-[11px] font-bold flex items-center gap-1.5 disabled:opacity-50 ${theme.border} ${theme.textPrimary}`}>{busy === 'hotmail-probe' && <Loader2 className="w-3.5 h-3.5 animate-spin" />}全部重新测活</button>
+                          {config.hotmail_account_source === 'manual' && <button onClick={() => void importHotmail()} disabled={!!busy} className="px-3 py-2 rounded-lg bg-blue-600 text-white text-[11px] font-bold flex items-center gap-1.5 disabled:opacity-50">{busy === 'hotmail-import' && <Loader2 className="w-3.5 h-3.5 animate-spin" />}导入并自动测活</button>}
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-[150px_minmax(220px,1fr)] gap-2 mt-3">
+                        <StyledSelect ariaLabel="邮箱状态" value={hotmailStatus} onChange={setHotmailStatus} options={HOTMAIL_STATUS_OPTIONS} isDark={isDark} />
+                        <div className="relative"><Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" /><input value={hotmailKeyword} onChange={(event) => setHotmailKeyword(event.target.value)} placeholder="模糊搜索邮箱名称" className={`${fieldClass} pl-8`} /></div>
+                      </div>
+                    </div>
+
+                    <div className="max-h-[360px] overflow-auto">
+                      <table className="w-full min-w-[760px] text-left text-[10px]">
+                        <thead className={`sticky top-0 z-10 ${isDark ? 'bg-slate-800 text-slate-400' : 'bg-slate-200 text-slate-500'}`}><tr><th className="px-3 py-2.5 w-10 text-center"><input type="checkbox" aria-label="全选当前筛选结果" title="全选当前筛选结果" checked={allFilteredHotmailSelected} ref={(input) => { if (input) input.indeterminate = someFilteredHotmailSelected && !allFilteredHotmailSelected; }} onChange={(event) => setHotmailSelected((previous) => event.target.checked ? Array.from(new Set([...previous, ...filteredHotmailIds])) : previous.filter((id) => !filteredHotmailIds.includes(id)))} className="accent-blue-600" /></th><th className="px-4 py-2.5 text-center">邮箱账号</th><th className="px-3 py-2.5 text-center">状态</th><th className="px-3 py-2.5 text-center">验证码</th><th className="px-3 py-2.5 text-center">操作</th></tr></thead>
+                        <tbody className={`divide-y ${isDark ? 'divide-slate-800' : 'divide-slate-200'}`}>
+                          {filteredHotmailAccounts.map((account) => {
+                            const status = hotmailStatusKey(account);
+                            const useLimit = Math.max(1, Number(account.use_limit || hotmailPool?.alias_uses || 3));
+                            const useCount = Math.max(0, Number(account.use_count || 0));
+                            const remaining = Math.max(0, Number(account.remaining_uses ?? (useLimit - useCount)));
+                            const restorableUses = Math.min(useLimit, useCount);
+                            const accountId = String(account.id || '');
+                            const selected = hotmailSelected.includes(accountId);
+                            const latestCode = account.verification_entries?.[0];
+                            const statusLabel = account.reserved ? '使用中' : account.failed ? '注册失败' : account.mail_healthy === false ? '测活失败' : account.used || remaining <= 0 ? `已用尽 ${useCount}/${useLimit}` : account.preferred_for_next_use ? `已指定 · 余 ${remaining}/${useLimit}` : account.mail_healthy === true ? `测活通过 · 余 ${remaining}/${useLimit}` : `未测活 · 余 ${remaining}/${useLimit}`;
+                            const statusStyle = status === 'healthy' ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600' : status === 'unhealthy' || status === 'failed' ? 'border-rose-500/30 bg-rose-500/10 text-rose-600' : status === 'used' ? 'border-amber-500/30 bg-amber-500/10 text-amber-600' : status === 'reserved' ? 'border-blue-500/30 bg-blue-500/10 text-blue-600' : 'border-yellow-500/30 bg-yellow-500/10 text-yellow-600';
+                            const canUse = !account.failed && !account.used && !account.reserved && account.mail_healthy !== false && remaining > 0;
+                            const operationBusy = busy.endsWith(`-${accountId}`);
+                            return <tr key={account.id} className={selected ? 'bg-blue-500/[0.07]' : isDark ? 'hover:bg-white/[0.025]' : 'hover:bg-black/[0.025]'}>
+                              <td className="px-3 py-3 text-center"><input type="checkbox" aria-label={`选择 ${account.email || '邮箱'}`} checked={selected} onChange={(event) => setHotmailSelected((previous) => event.target.checked ? Array.from(new Set([...previous, accountId])) : previous.filter((id) => id !== accountId))} className="accent-blue-600" /></td>
+                              <td className="px-4 py-3 max-w-[260px]"><div className="flex items-center gap-2 min-w-0"><span className={`w-2 h-2 rounded-full shrink-0 ${account.mail_healthy === false ? 'bg-rose-500' : account.mail_healthy === true ? 'bg-emerald-400' : 'bg-amber-400'}`} /><strong className={`truncate text-[11px] ${theme.textPrimary}`} title={account.email}>{account.email || '未记录邮箱'}</strong></div><p className={`mt-1 ml-4 truncate ${account.failure_reason || account.mail_health_error ? 'text-rose-500' : theme.textSecondary}`} title={account.failure_reason || account.mail_health_error || account.next_alias_email}>{account.failure_reason ? `注册失败：${account.failure_reason}` : account.mail_health_error ? `测活失败：${account.mail_health_error}` : account.next_alias_email && remaining > 0 ? `下次注册：${account.next_alias_email}` : `已用 ${useCount}/${useLimit} 次${config.registration_target === 'grok' ? '（含 +别名）' : ''}`}</p></td>
+                              <td className="px-3 py-3 text-center"><span className={`inline-flex px-2 py-1 rounded-md border font-bold ${statusStyle}`}>{statusLabel}</span></td>
+                              <td className="px-3 py-3 text-center"><strong className={latestCode?.status === 'received' ? 'text-emerald-500 text-xs' : latestCode?.status === 'waiting' ? 'text-amber-500' : latestCode ? 'text-rose-500' : theme.textSecondary}>{latestCode?.status === 'received' ? latestCode.code || '--' : latestCode?.status === 'waiting' ? '读取中…' : latestCode ? '读取失败' : '--'}</strong>{latestCode?.email && <p className={`mx-auto mt-1 max-w-[150px] truncate ${theme.textSecondary}`} title={latestCode.email}>{latestCode.email}</p>}</td>
+                              <td className="px-3 py-3"><div className="flex justify-center gap-1.5">{account.failed && <button onClick={() => void handleHotmailAction(account, 'restore')} disabled={!!busy || account.reserved} className="px-2 py-1.5 rounded-md border border-emerald-500/30 text-emerald-600 font-bold disabled:opacity-40">允许复用</button>}{restorableUses > 0 && <button onClick={() => setRestoreUsesDialog({ account, count: 1 })} disabled={!!busy || account.reserved} className="px-2 py-1.5 rounded-md border border-amber-500/30 text-amber-600 font-bold disabled:opacity-40">恢复次数</button>}{canUse && <button onClick={() => void handleHotmailAction(account, 'prefer')} disabled={!!busy || account.preferred_for_next_use} className="px-2 py-1.5 rounded-md border border-cyan-500/30 text-cyan-600 font-bold disabled:opacity-40">{account.preferred_for_next_use ? '已指定' : '指定使用'}</button>}<button onClick={() => void handleHotmailAction(account, 'probe')} disabled={!!busy} className={`px-2 py-1.5 rounded-md border font-bold disabled:opacity-40 ${theme.border} ${theme.textPrimary}`}>{operationBusy && busy.startsWith('hotmail-probe-') ? <Loader2 className="w-3 h-3 animate-spin" /> : '重新测活'}</button>{config.hotmail_account_source === 'manual' && <button onClick={() => setPendingConfirmation({ kind: 'delete-hotmail', account })} disabled={!!busy} className="px-2 py-1.5 rounded-md border border-rose-500/30 text-rose-600 font-bold disabled:opacity-40">删除</button>}</div></td>
+                            </tr>;
+                          })}
+                          {!filteredHotmailAccounts.length && <tr><td colSpan={5} className={`p-10 text-center ${theme.textSecondary}`}>{hotmailPool?.accounts?.length ? '没有匹配的邮箱账号' : '尚未导入微软邮箱账号'}</td></tr>}
+                        </tbody>
+                      </table>
+                    </div>
+                    <div className={`px-4 py-2 border-t text-[10px] ${theme.border} ${theme.textSecondary}`}>显示 {filteredHotmailAccounts.length} / {hotmailPool?.total || 0} 个物理邮箱 · 已选 {hotmailSelected.length} 个；{config.registration_target === 'chatgpt' ? '这里只显示 OpenAI 独立的 0/1 使用状态。' : '这里只显示 Grok 独立的 0/3 使用状态，并依次使用本体、+1、+2。'}</div>
+                  </div>}
                 </div>}
 
                 {tab === 'proxy' && <div className="space-y-4">

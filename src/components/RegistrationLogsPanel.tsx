@@ -17,6 +17,9 @@ import type { LucideIcon } from 'lucide-react';
 import { StylePreset } from '../types';
 import { StyledSelect, StyledSelectOption } from './StyledSelect';
 import { registrationLogsApi, RegistrationLogItem } from '../api/registrationLogs';
+import { useToast } from './Toast';
+import { Tooltip } from './Tooltip';
+import { Pagination } from './Pagination';
 
 interface RegistrationLogsPanelProps {
   currentPreset: StylePreset;
@@ -129,11 +132,18 @@ function outcomeTone(stage: string, outcome: string, isDark: boolean): string {
 export const RegistrationLogsPanel: React.FC<RegistrationLogsPanelProps> = ({ currentPreset }) => {
   const theme = currentPreset.themeClasses;
   const isDark = currentPreset.mode === 'dark';
-
   const [items, setItems] = useState<RegistrationLogItem[]>([]);
   const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+
+  const toast = useToast();
+
+  useEffect(() => {
+    if (error) toast.error(error);
+  }, [error, toast]);
 
   const [emailFilter, setEmailFilter] = useState('');
   const [stageFilter, setStageFilter] = useState('');
@@ -154,6 +164,8 @@ export const RegistrationLogsPanel: React.FC<RegistrationLogsPanelProps> = ({ cu
         stage: stageFilter || undefined,
         outcome: outcomeFilter || undefined,
         registrationTarget: targetFilter || undefined,
+        limit: pageSize,
+        offset: (page - 1) * pageSize,
       });
       setItems(result.items);
       setTotal(result.total);
@@ -164,11 +176,17 @@ export const RegistrationLogsPanel: React.FC<RegistrationLogsPanelProps> = ({ cu
     } finally {
       setLoading(false);
     }
-  }, [emailFilter, stageFilter, outcomeFilter, targetFilter]);
+  }, [emailFilter, page, pageSize, stageFilter, outcomeFilter, targetFilter]);
 
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
 
   // 阶段切换时,清掉不再适用的结果筛选
   useEffect(() => {
@@ -249,7 +267,7 @@ export const RegistrationLogsPanel: React.FC<RegistrationLogsPanelProps> = ({ cu
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
           <input
             value={emailFilter}
-            onChange={(event) => setEmailFilter(event.target.value)}
+            onChange={(event) => { setEmailFilter(event.target.value); setPage(1); }}
             placeholder="按邮箱搜索…"
             className={`${inputClass} w-full pl-9`}
           />
@@ -258,7 +276,7 @@ export const RegistrationLogsPanel: React.FC<RegistrationLogsPanelProps> = ({ cu
           <StyledSelect
             ariaLabel="筛选注册目标"
             value={targetFilter}
-            onChange={(value) => setTargetFilter(value as '' | 'grok' | 'openai')}
+            onChange={(value) => { setTargetFilter(value as '' | 'grok' | 'openai'); setPage(1); }}
             options={TARGET_OPTIONS}
             isDark={isDark}
           />
@@ -267,7 +285,7 @@ export const RegistrationLogsPanel: React.FC<RegistrationLogsPanelProps> = ({ cu
           <StyledSelect
             ariaLabel="筛选阶段"
             value={stageFilter}
-            onChange={setStageFilter}
+            onChange={(value) => { setStageFilter(value); setPage(1); }}
             options={stageOptions}
             isDark={isDark}
           />
@@ -276,21 +294,22 @@ export const RegistrationLogsPanel: React.FC<RegistrationLogsPanelProps> = ({ cu
           <StyledSelect
             ariaLabel="筛选结果"
             value={outcomeFilter}
-            onChange={setOutcomeFilter}
+            onChange={(value) => { setOutcomeFilter(value); setPage(1); }}
             options={[{ value: '', label: '全部结果' }, ...outcomeOptions]}
             isDark={isDark}
           />
         </div>
+        <Tooltip content="刷新列表" placement="right" isDark={isDark}>
         <button
           type="button"
           onClick={() => void refresh()}
           disabled={loading}
           className={`ml-auto px-4 py-2 rounded-lg font-semibold flex items-center gap-1.5 disabled:opacity-50 ${theme.accentBg} ${theme.accentText}`}
-          title="刷新列表"
         >
           <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
           刷新
         </button>
+        </Tooltip>
       </div>
 
       {/* 数据列表大卡片:撑满剩余高度,内部滚动 */}
@@ -314,17 +333,6 @@ export const RegistrationLogsPanel: React.FC<RegistrationLogsPanelProps> = ({ cu
             <div className={`flex flex-col items-center justify-center gap-2 py-20 ${theme.textSecondary}`}>
               <Loader2 className="h-6 w-6 animate-spin text-blue-500" />
               正在加载日志列表…
-            </div>
-          ) : error ? (
-            <div className="flex flex-col items-center justify-center gap-3 py-20">
-              <p className="font-semibold text-rose-500">{error}</p>
-              <button
-                type="button"
-                onClick={() => void refresh()}
-                className="px-4 py-1.5 rounded-lg bg-rose-600 text-white font-semibold"
-              >
-                重试
-              </button>
             </div>
           ) : items.length === 0 ? (
             <div className={`flex flex-col items-center justify-center gap-2 py-20 ${theme.textSecondary}`}>
@@ -483,8 +491,7 @@ export const RegistrationLogsPanel: React.FC<RegistrationLogsPanelProps> = ({ cu
         </div>
 
         <footer className={`px-4 py-2.5 border-t flex items-center justify-between gap-2 ${theme.navBg} ${theme.border}`}>
-          <span className={theme.textSecondary}>日志与截图按目标分别写入配置目录下的 grok 与 openai 子目录</span>
-          <span className={`hidden sm:inline ${theme.textSecondary}`}>最多展示前 200 条</span>
+          <Pagination total={total} page={page} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={(value) => { setPageSize(value); setPage(1); }} loading={loading} currentPreset={currentPreset} className={`px-4 py-2.5 ${theme.navBg}`} />
         </footer>
       </div>
 
