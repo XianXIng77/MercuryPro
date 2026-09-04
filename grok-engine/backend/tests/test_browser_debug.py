@@ -117,6 +117,12 @@ class BrowserDebugBridgeTests(unittest.IsolatedAsyncioTestCase):
         writer = _Writer()
 
         with patch.dict("os.environ", {"BROWSER_DEBUG_DESKTOP_ENABLED": "true"}), patch(
+            "mercury_auth.get_current_user",
+            return_value={"email": "reader@example.com", "role": "user"},
+        ), patch(
+            "mercury_auth.user_has_permission",
+            return_value=True,
+        ), patch(
             "browser_debug.asyncio.open_connection",
             AsyncMock(return_value=(_Reader(), writer)),
         ):
@@ -126,6 +132,22 @@ class BrowserDebugBridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([b"client-data"], writer.payloads)
         self.assertTrue(writer.closed)
 
+    async def test_websocket_rejects_user_without_register_view(self) -> None:
+        websocket = _WebSocket()
+        websocket.close = AsyncMock()  # type: ignore[method-assign]
+
+        with patch(
+            "mercury_auth.get_current_user",
+            return_value={"email": "reader@example.com", "role": "user"},
+        ), patch(
+            "mercury_auth.user_has_permission",
+            return_value=False,
+        ):
+            await browser_debug_vnc(websocket)  # type: ignore[arg-type]
+
+        websocket.close.assert_awaited_once_with(code=1008, reason="Permission denied")
+
 
 if __name__ == "__main__":
     unittest.main()
+

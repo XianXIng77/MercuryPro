@@ -1,4 +1,4 @@
-import React, { useId } from 'react';
+import React, { useId, useState } from 'react';
 
 export type TooltipPlacement = 'top' | 'right' | 'bottom' | 'left';
 
@@ -11,13 +11,6 @@ interface TooltipProps {
   className?: string;
 }
 
-const placementClasses: Record<TooltipPlacement, string> = {
-  top: 'bottom-full left-1/2 mb-2 -translate-x-1/2',
-  right: 'left-full top-1/2 ml-2 -translate-y-1/2',
-  bottom: 'left-1/2 top-full mt-2 -translate-x-1/2',
-  left: 'right-full top-1/2 mr-2 -translate-y-1/2',
-};
-
 /** Shared, non-blocking contextual hint for buttons and compact controls. */
 export const Tooltip: React.FC<TooltipProps> = ({
   content,
@@ -27,16 +20,41 @@ export const Tooltip: React.FC<TooltipProps> = ({
   className = '',
 }) => {
   const id = useId();
+  const [position, setPosition] = useState({ top: 0, left: 0, transform: 'translate(-50%, -100%)' });
 
   if (content === null || content === undefined || content === '') return children;
 
+  const updatePosition = (event: React.SyntheticEvent<HTMLSpanElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    let nextPlacement = placement;
+    if (nextPlacement === 'top' && rect.top < 120) nextPlacement = 'bottom';
+    if (nextPlacement === 'bottom' && window.innerHeight - rect.bottom < 120) nextPlacement = 'top';
+    if (nextPlacement === 'left' && rect.left < 280) nextPlacement = 'right';
+    if (nextPlacement === 'right' && window.innerWidth - rect.right < 280) nextPlacement = 'left';
+
+    if (nextPlacement === 'bottom') {
+      setPosition({ top: rect.bottom + 8, left: rect.left + rect.width / 2, transform: 'translate(-50%, 0)' });
+    } else if (nextPlacement === 'left') {
+      setPosition({ top: rect.top + rect.height / 2, left: rect.left - 8, transform: 'translate(-100%, -50%)' });
+    } else if (nextPlacement === 'right') {
+      setPosition({ top: rect.top + rect.height / 2, left: rect.right + 8, transform: 'translate(0, -50%)' });
+    } else {
+      setPosition({ top: rect.top - 8, left: rect.left + rect.width / 2, transform: 'translate(-50%, -100%)' });
+    }
+  };
+
   return (
-    <span className={`group relative inline-flex ${className}`}>
+    <span
+      className={`group/tooltip relative inline-flex ${className}`}
+      onMouseEnter={updatePosition}
+      onFocusCapture={updatePosition}
+    >
       {React.cloneElement(children, { 'aria-describedby': id })}
       <span
         id={id}
         role="tooltip"
-        className={`pointer-events-none absolute z-[60] w-max max-w-64 rounded-lg px-2.5 py-1.5 text-[11px] font-semibold leading-4 opacity-0 shadow-lg transition-all duration-150 group-hover:opacity-100 group-focus-within:opacity-100 ${placementClasses[placement]} ${
+        style={{ top: position.top, left: position.left, transform: position.transform }}
+        className={`pointer-events-none fixed z-[60] w-max max-w-64 break-all rounded-lg px-2.5 py-1.5 text-[11px] font-semibold leading-4 opacity-0 shadow-lg transition-opacity duration-150 group-hover/tooltip:opacity-100 group-focus-within/tooltip:opacity-100 ${
           isDark
             ? 'border border-slate-700 bg-slate-900 text-slate-100 shadow-black/30'
             : 'border border-slate-200 bg-slate-900 text-white shadow-slate-900/20'
@@ -47,3 +65,4 @@ export const Tooltip: React.FC<TooltipProps> = ({
     </span>
   );
 };
+

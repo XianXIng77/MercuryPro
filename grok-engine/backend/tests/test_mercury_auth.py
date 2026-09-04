@@ -103,11 +103,14 @@ class MercuryAuthTests(unittest.TestCase):
             email="newbie@example.com", password="password123", username="新人"
         )
 
-        result = asyncio.run(mercury_auth.register(payload, response))
+        with patch.object(mercury_auth, "use_invite_code", return_value=None):
+            result = asyncio.run(mercury_auth.register(payload, response))
 
         self.assertEqual(result["user"]["email"], "newbie@example.com")
         self.assertEqual(result["user"]["username"], "新人")
         self.assertEqual(result["user"]["role"], "user")
+        self.assertEqual([item["key"] for item in result["menus"]], ["dashboard", "email"])
+        self.assertEqual(result["permissions"], ["dashboard:view", "email:view"])
         users = self.load_users()
         self.assertEqual(len(users), 1)
         self.assertTrue(mercury_auth.verify_password("password123", users[0]["passwordHash"]))
@@ -144,6 +147,102 @@ class MercuryAuthTests(unittest.TestCase):
 
         self.assertEqual(ctx.exception.status_code, 401)
 
+    def test_access_profile_merges_role_and_user_grants(self) -> None:
+        admin_profile = mercury_auth.access_profile({"email": "admin@example.com", "role": "admin"})
+        user_profile = mercury_auth.access_profile({
+            "email": "user@example.com",
+            "role": "user",
+            "extraMenus": ["logs"],
+            "extraPermissions": ["logs:view"],
+        })
+
+        self.assertIn("access", [item["key"] for item in admin_profile["menus"]])
+        self.assertNotIn("access", [item["key"] for item in user_profile["menus"]])
+        self.assertIn("logs", [item["key"] for item in user_profile["menus"]])
+        self.assertIn("logs:view", user_profile["permissions"])
+        self.assertEqual(user_profile["roleMenus"], ["dashboard", "email"])
+
+    def test_access_profile_loads_persisted_user_extras_from_public_user(self) -> None:
+        self.save_users([{
+            "email": "reader@example.com",
+            "username": "reader",
+            "role": "user",
+            "extraMenus": ["logs"],
+            "extraPermissions": [],
+        }])
+
+        profile = mercury_auth.access_profile({
+            "email": "reader@example.com",
+            "username": "reader",
+            "role": "user",
+        })
+
+        self.assertIn("logs", [item["key"] for item in profile["menus"]])
+        self.assertIn("logs:view", profile["permissions"])
+        self.assertTrue(
+            mercury_auth.user_has_permission(
+                {"email": "reader@example.com", "role": "user"},
+                "logs:view",
+            )
+        )
+
+    def test_required_permission_for_business_routes(self) -> None:
+        required = mercury_auth.required_permission_for_request
+
+        self.assertEqual(required("/api/microsoft/accounts", "GET"), "email:view")
+        self.assertEqual(required("/api/grok/register", "POST"), "register:run")
+        self.assertEqual(required("/api/grok/sessions", "GET"), "register:view")
+        self.assertEqual(required("/api/invite-codes", "GET"), "invite:view")
+        self.assertEqual(required("/api/invite-codes", "POST"), "invite:manage")
+        self.assertEqual(required("/api/logs", "GET"), "logs:view")
+        self.assertEqual(required("/api/audit-logs", "GET"), "audit:view")
+        self.assertEqual(required("/api/unknown", "GET"), "access:manage")
+        self.assertIsNone(required("/api/health/live", "GET"))
+
+    def test_menu_grant_implies_its_view_permission(self) -> None:
+        profile = mercury_auth.access_profile({
+            "email": "",
+            "role": "user",
+            "extraMenus": ["logs"],
+            "extraPermissions": [],
+        })
+
+        self.assertIn("logs:view", profile["permissions"])
+
+    def test_admin_template_permissions_are_enforced_without_locking_access_center(self) -> None:
+        roles = mercury_auth._default_roles()
+        roles["admin"]["menuKeys"] = []
+        roles["admin"]["permissions"] = []
+        mercury_auth._save_roles(roles)
+
+        admin = {"email": "admin@example.com", "role": "admin"}
+        profile = mercury_auth.access_profile(admin)
+
+        self.assertEqual([item["key"] for item in profile["menus"]], ["access"])
+        self.assertEqual(profile["permissions"], ["access:manage"])
+        self.assertTrue(mercury_auth.user_has_permission(admin, "access:manage"))
+        self.assertFalse(mercury_auth.user_has_permission(admin, "invite:manage"))
+
+    def test_last_admin_cannot_be_demoted(self) -> None:
+        import asyncio
+
+        self.save_users([{
+            "email": "admin@example.com",
+            "username": "admin",
+            "role": "admin",
+            "passwordHash": "x",
+        }])
+        payload = mercury_auth.UserAccessPayload(
+            role="user",
+            extraMenus=[],
+            extraPermissions=[],
+        )
+
+        with self.assertRaises(mercury_auth.AuthError) as ctx:
+            asyncio.run(mercury_auth.update_user_access("admin@example.com", payload))
+
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertEqual(self.load_users()[0]["role"], "admin")
     def test_build_user_stats_groups_users_without_exposing_details(self) -> None:
         def timestamp(year: int, month: int, day: int) -> int:
             return int(datetime(year, month, day, 12).timestamp())
@@ -180,3 +279,5 @@ class _FakeResponse:
 class _FakeRequest:
     def __init__(self, cookies: dict[str, str]) -> None:
         self.cookies = cookies
+
+

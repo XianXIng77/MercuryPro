@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import os
 import secrets
@@ -43,6 +45,155 @@ DEFAULT_ADMIN_PASSWORD = "xianxing1"
 SESSION_COOKIE_NAME = "mercurypro_session"
 SESSION_TTL_SECONDS = 7 * 24 * 3600  # 记住我 7 天;未勾选则仅浏览器会话 Cookie
 JWT_ALGORITHM = "HS256"
+# 权限模型：角色授权与用户额外授权合并后生成最终菜单和权限。
+# 后端权限校验默认启用；仅允许通过环境变量在紧急排障时显式关闭。
+PERMISSION_ENFORCEMENT_ENABLED = os.environ.get("MERCURY_PERMISSION_ENFORCEMENT", "true").strip().lower() in {"1", "true", "yes", "on"}
+
+MENU_DEFINITIONS: list[dict[str, Any]] = [
+    {"key": "dashboard", "path": "/dashboard", "label": "数据仪表盘", "icon": "dashboard", "permission": "dashboard:view"},
+    {"key": "email", "path": "/email", "label": "邮箱管理", "icon": "mail", "permission": "email:view"},
+    {"key": "register", "path": "/register", "label": "AI注册", "icon": "register", "permission": "register:view"},
+    {"key": "invite", "path": "/invite", "label": "邀请码", "icon": "invite", "permission": "invite:view"},
+    {"key": "logs", "path": "/logs", "label": "注册日志", "icon": "logs", "permission": "logs:view"},
+    {"key": "audit", "path": "/audit", "label": "操作审计", "icon": "audit", "permission": "audit:view"},
+    {"key": "access", "path": "/access", "label": "权限中心", "icon": "access", "permission": "access:manage"},
+
+]
+
+
+PERMISSION_DEFINITIONS: list[dict[str, str]] = [
+    {"code": "dashboard:view", "label": "查看数据仪表盘", "group": "工作台"},
+    {"code": "email:view", "label": "查看邮箱管理", "group": "工作台"},
+    {"code": "register:view", "label": "查看 AI 注册", "group": "注册中心"},
+    {"code": "register:run", "label": "执行账号注册", "group": "注册中心"},
+    {"code": "invite:view", "label": "查看邀请码", "group": "系统管理"},
+    {"code": "invite:manage", "label": "管理邀请码", "group": "系统管理"},
+    {"code": "logs:view", "label": "查看注册日志", "group": "审计中心"},
+    {"code": "audit:view", "label": "查看操作审计", "group": "审计中心"},
+    {"code": "access:manage", "label": "管理角色与权限", "group": "系统管理"},
+]
+
+
+def _roles_file() -> Path:
+    return DATA_DIRECTORY / "roles.json"
+
+
+def _all_menu_keys() -> list[str]:
+    return [str(item["key"]) for item in MENU_DEFINITIONS]
+
+
+def _all_permission_codes() -> list[str]:
+    return [str(item["code"]) for item in PERMISSION_DEFINITIONS]
+
+
+def _default_roles() -> dict[str, dict[str, Any]]:
+    all_menus = _all_menu_keys()
+    all_permissions = _all_permission_codes()
+    return {
+        "admin": {
+            "key": "admin",
+            "label": "管理员",
+            "description": "可以访问工作台全部模块并管理系统授权。",
+            "color": "violet",
+            "menuKeys": all_menus,
+            "permissions": all_permissions,
+        },
+        "user": {
+            "key": "user",
+            "label": "普通用户",
+            "description": "默认注册角色，可使用个人邮箱工作台。",
+            "color": "blue",
+            "menuKeys": ["dashboard", "email"],
+            "permissions": ["dashboard:view", "email:view"],
+        },
+    }
+
+
+def _load_roles() -> dict[str, dict[str, Any]]:
+    path = _roles_file()
+    defaults = _default_roles()
+    if not path.exists():
+        return defaults
+    try:
+        parsed = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return defaults
+    if not isinstance(parsed, dict):
+        return defaults
+    roles = defaults.copy()
+    for key, value in parsed.items():
+        if isinstance(value, dict) and str(key).strip():
+            roles[str(key)] = {**defaults.get(str(key), {"key": str(key)}), **value, "key": str(key)}
+    normalized: dict[str, dict[str, Any]] = {}
+    for key, role in roles.items():
+        menu_keys = _clean_access_values(role.get("menuKeys"), set(_all_menu_keys()))
+        permissions = _clean_access_values(role.get("permissions"), set(_all_permission_codes()))
+        permissions = list(dict.fromkeys([*permissions, *_menu_permissions(menu_keys)]))
+        if key == "admin":
+            menu_keys = list(dict.fromkeys([*menu_keys, "access"]))
+            permissions = list(dict.fromkeys([*permissions, "access:manage"]))
+        normalized[key] = {**role, "key": key, "menuKeys": menu_keys, "permissions": permissions}
+    return normalized
+
+
+def _save_roles(roles: dict[str, dict[str, Any]]) -> None:
+    path = _roles_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(roles, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _clean_access_values(values: Any, allowed: set[str]) -> list[str]:
+    if not isinstance(values, list):
+        return []
+    return list(dict.fromkeys(str(value).strip() for value in values if str(value).strip() in allowed))
+
+
+def _menu_permissions(menu_keys: list[str]) -> list[str]:
+    selected = set(menu_keys)
+    return list(dict.fromkeys(
+        str(item.get("permission") or "").strip()
+        for item in MENU_DEFINITIONS
+        if str(item.get("key") or "") in selected and str(item.get("permission") or "").strip()
+    ))
+
+
+def access_profile(user: dict[str, Any]) -> dict[str, Any]:
+    """Merge persisted role grants and per-user grants into one access profile."""
+    email = str(user.get("email") or "").strip()
+    stored_user = _find_user(email) if email else None
+    source = stored_user or user
+    roles = _load_roles()
+    role_key = str(source.get("role") or "user")
+    role = roles.get(role_key) or roles["user"]
+    role_menus = _clean_access_values(role.get("menuKeys"), set(_all_menu_keys()))
+    role_permissions = _clean_access_values(role.get("permissions"), set(_all_permission_codes()))
+    extra_menus = _clean_access_values(source.get("extraMenus"), set(_all_menu_keys()))
+    extra_permissions = _clean_access_values(source.get("extraPermissions"), set(_all_permission_codes()))
+    if role_key == "admin":
+        # 管理员模板可以收紧业务权限，但必须始终保留权限中心，避免把系统锁死。
+        role_menus = list(dict.fromkeys([*role_menus, "access"]))
+        role_permissions = list(dict.fromkeys([*role_permissions, "access:manage"]))
+    else:
+        role_menus = [key for key in role_menus if key != "access"]
+        extra_menus = [key for key in extra_menus if key != "access"]
+        role_permissions = [code for code in role_permissions if code != "access:manage"]
+        extra_permissions = [code for code in extra_permissions if code != "access:manage"]
+    menu_keys = set(role_menus) | set(extra_menus)
+    role_permissions = list(dict.fromkeys([*role_permissions, *_menu_permissions(role_menus)]))
+    extra_permissions = list(dict.fromkeys([*extra_permissions, *_menu_permissions(extra_menus)]))
+    permission_codes = set(role_permissions) | set(extra_permissions)
+    menus = [dict(item) for item in MENU_DEFINITIONS if str(item["key"]) in menu_keys]
+    permissions = [code for code in _all_permission_codes() if code in permission_codes]
+    return {
+        "role": role_key,
+        "roleLabel": str(role.get("label") or role_key),
+        "menus": menus,
+        "permissions": permissions,
+        "roleMenus": role_menus,
+        "rolePermissions": role_permissions,
+        "extraMenus": extra_menus,
+        "extraPermissions": extra_permissions,
+    }
 
 _users_lock = threading.RLock()
 _secret_key: str | None = None
@@ -60,6 +211,32 @@ class AuthCredentials(BaseModel):
     remember: bool = True
     # Required for registration; ignored by login.
     invite_code: str = Field(default="", max_length=128)
+
+
+class RolePayload(BaseModel):
+    key: str = Field(min_length=2, max_length=40, pattern=r"^[a-z][a-z0-9_-]*$")
+    label: str = Field(min_length=1, max_length=40)
+    description: str = Field(default="", max_length=200)
+    color: str = Field(default="blue", max_length=20)
+    menuKeys: list[str] = Field(default_factory=list)
+    permissions: list[str] = Field(default_factory=list)
+
+
+class UserAccessPayload(BaseModel):
+    role: str = Field(min_length=2, max_length=40)
+    extraMenus: list[str] = Field(default_factory=list)
+    extraPermissions: list[str] = Field(default_factory=list)
+class ProfilePayload(BaseModel):
+    username: str = Field(min_length=1, max_length=32)
+    phone: str = Field(default="", max_length=32)
+    bio: str = Field(default="", max_length=180)
+    avatarColor: str = Field(default="blue", max_length=24)
+    avatar: str = Field(default="", max_length=1_100_000)
+
+
+class PasswordPayload(BaseModel):
+    currentPassword: str = Field(min_length=1, max_length=128)
+    newPassword: str = Field(min_length=8, max_length=128)
 
 
 # ── 密钥 ────────────────────────────────────────────────────
@@ -160,8 +337,37 @@ def _public_user(user: dict[str, Any]) -> dict[str, Any]:
         "email": user.get("email"),
         "username": user.get("username") or str(user.get("email", "")).split("@")[0],
         "role": user.get("role", "user"),
+        "phone": user.get("phone", ""),
+        "bio": user.get("bio", ""),
+        "avatarColor": user.get("avatarColor", "blue"),
+        "avatar": user.get("avatar", ""),
+        "createdAt": user.get("createdAt"),
     }
 
+
+
+_ALLOWED_AVATAR_PREFIXES = (
+    "data:image/png;base64,",
+    "data:image/jpeg;base64,",
+    "data:image/webp;base64,",
+)
+_MAX_AVATAR_BYTES = 768 * 1024
+
+
+def _normalize_avatar_data(value: str) -> str:
+    avatar = value.strip()
+    if not avatar:
+        return ""
+    prefix = next((item for item in _ALLOWED_AVATAR_PREFIXES if avatar.startswith(item)), None)
+    if prefix is None:
+        raise AuthError(400, "头像仅支持 PNG、JPG 或 WebP 格式")
+    try:
+        decoded = base64.b64decode(avatar[len(prefix):], validate=True)
+    except (binascii.Error, ValueError):
+        raise AuthError(400, "头像数据无效，请重新上传") from None
+    if not decoded or len(decoded) > _MAX_AVATAR_BYTES:
+        raise AuthError(400, "头像处理后不能超过 768KB")
+    return avatar
 
 def _created_date(user: dict[str, Any]) -> date | None:
     """兼容历史用户数据,把 Unix 秒时间戳安全转换为服务端本地日期。"""
@@ -239,6 +445,10 @@ def issue_session(response: Response, user: dict[str, Any], remember: bool) -> N
             "sub": str(user.get("email", "")).lower(),
             "username": user.get("username") or "",
             "role": user.get("role", "user"),
+        "phone": user.get("phone", ""),
+        "bio": user.get("bio", ""),
+        "avatarColor": user.get("avatarColor", "blue"),
+        "createdAt": user.get("createdAt"),
             "iat": now,
             "exp": now + SESSION_TTL_SECONDS,
         },
@@ -275,6 +485,81 @@ def require_admin(user: dict[str, Any] = Depends(get_current_user)) -> dict[str,
     if user.get("role") != "admin":
         raise AuthError(403, "需要管理员权限")
     return user
+
+
+def user_has_permission(user: dict[str, Any], permission: str) -> bool:
+    """Return whether the persisted user grants allow one permission."""
+    if not PERMISSION_ENFORCEMENT_ENABLED:
+        return True
+    return permission in access_profile(user)["permissions"]
+
+
+def require_permission(permission: str):
+    """Build a reusable FastAPI permission dependency."""
+    def checker(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+        if not user_has_permission(user, permission):
+            raise AuthError(403, f"没有权限访问该资源（需要 {permission}）")
+        return user
+
+    return checker
+
+
+_READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+_REGISTRATION_PREFIXES = (
+    "/api/health",
+    "/api/output-paths",
+    "/api/download",
+    "/api/solver",
+    "/api/proxy",
+    "/api/config",
+    "/api/sub2api",
+    "/api/performance",
+    "/api/mail",
+    "/api/smsbower",
+    "/api/register",
+    "/api/sessions",
+    "/api/account-rotation",
+    "/api/chatgpt",
+    "/api/batches",
+    "/api/import",
+    "/api/browser-debug",
+)
+
+
+def required_permission_for_request(path: str, method: str) -> str | None:
+    """Map a protected request to the permission enforced by the API guard."""
+    normalized = "/" + str(path or "").lstrip("/")
+    verb = str(method or "GET").upper()
+    if normalized == "/api/grok" or normalized.startswith("/api/grok/"):
+        normalized = "/api" + normalized[len("/api/grok"):]
+
+    if normalized == "/api/health/live":
+        return None
+    if normalized.startswith("/api/microsoft/public/mailboxes/"):
+        return None
+    if normalized == "/api/auth/stats":
+        return "dashboard:view"
+    if normalized.startswith("/api/auth/access/"):
+        return "access:manage"
+    if normalized.startswith("/api/auth/"):
+        return None
+    if normalized == "/api/microsoft" or normalized.startswith("/api/microsoft/"):
+        return "email:view"
+    if normalized == "/api/ai" or normalized.startswith("/api/ai/"):
+        return "email:view"
+    if normalized == "/api/logs" or normalized.startswith("/api/logs/"):
+        return "logs:view"
+    if normalized == "/api/audit-logs" or normalized.startswith("/api/audit-logs/"):
+        return "audit:view"
+    if normalized == "/api/invite-codes" or normalized.startswith("/api/invite-codes/"):
+        return "invite:view" if verb in _READ_METHODS else "invite:manage"
+    if normalized == "/browser-debug" or normalized.startswith("/browser-debug/"):
+        return "register:view"
+    if any(normalized == prefix or normalized.startswith(prefix + "/") for prefix in _REGISTRATION_PREFIXES):
+        return "register:view" if verb in _READ_METHODS else "register:run"
+    if normalized == "/api" or normalized.startswith("/api/"):
+        return "access:manage"
+    return None
 
 
 def has_valid_session(request: Request) -> bool:
@@ -315,7 +600,7 @@ async def register(payload: AuthCredentials, response: Response, request: Reques
     _save_users(users)
     issue_session(response, user, remember=payload.remember)
     record_operation(request=request, action="注册", status_code=200, user=_public_user(user), detail="创建用户并登录工作台")
-    return {"user": _public_user(user)}
+    return {"user": _public_user(user), **access_profile(user)}
 
 
 @router.post("/login")
@@ -330,7 +615,7 @@ async def login(payload: AuthCredentials, response: Response, request: Request =
         raise AuthError(401, "邮箱或密码错误")
     issue_session(response, user, remember=payload.remember)
     record_operation(request=request, action="登录", status_code=200, user=_public_user(user), detail="密码验证通过，登录工作台")
-    return {"user": _public_user(user)}
+    return {"user": _public_user(user), **access_profile(user)}
 
 
 @router.post("/logout")
@@ -349,12 +634,143 @@ async def logout(response: Response, request: Request = None) -> dict[str, Any]:
 
 @router.get("/me")
 async def me(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
-    return {"user": user}
+    return {"user": user, **access_profile(user)}
+
+
+@router.get("/menus")
+async def menus(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    """Return the merged role and per-user menu/permission profile."""
+    return access_profile(user)
+
+
+
+@router.put("/profile")
+async def update_profile(payload: ProfilePayload, request: Request = None, user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    from operation_logs import record_operation
+    users = _load_users()
+    target = next((item for item in users if str(item.get("email", "")).strip().lower() == str(user.get("email", "")).strip().lower()), None)
+    if target is None:
+        raise AuthError(404, "用户不存在")
+    target["username"] = payload.username.strip()
+    target["phone"] = payload.phone.strip()
+    target["bio"] = payload.bio.strip()
+    target["avatarColor"] = payload.avatarColor.strip() or "blue"
+    target["avatar"] = _normalize_avatar_data(payload.avatar)
+    _save_users(users)
+    updated = _public_user(target)
+    record_operation(request=request, action="修改个人资料", status_code=200, user=updated, detail="更新个人中心资料")
+    return {"user": updated}
+
+
+@router.put("/password")
+async def update_password(payload: PasswordPayload, request: Request = None, user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    from operation_logs import record_operation
+    target = _find_user(str(user.get("email", "")))
+    if target is None or not verify_password(payload.currentPassword, str(target.get("passwordHash", ""))):
+        record_operation(request=request, action="修改密码", status_code=400, user=user, detail="修改密码失败：当前密码错误", risk="高风险")
+        raise AuthError(400, "当前密码错误")
+    if payload.newPassword == payload.currentPassword:
+        raise AuthError(400, "新密码不能与当前密码相同")
+    target["passwordHash"] = hash_password(payload.newPassword)
+    users = _load_users()
+    for index, item in enumerate(users):
+        if str(item.get("email", "")).strip().lower() == str(target.get("email", "")).strip().lower():
+            users[index] = target
+            break
+    _save_users(users)
+    record_operation(request=request, action="修改密码", status_code=200, user=user, detail="密码已更新，下次登录生效", risk="关注")
+    return {"ok": True}
+@router.get("/access/catalog")
+async def access_catalog(_admin: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    return {"menus": [dict(item) for item in MENU_DEFINITIONS], "permissions": [dict(item) for item in PERMISSION_DEFINITIONS]}
+
+
+@router.get("/access/roles")
+async def access_roles(_admin: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    return {"items": list(_load_roles().values())}
+
+
+@router.put("/access/roles/{role_key}")
+async def update_access_role(role_key: str, payload: RolePayload, _admin: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    key = str(role_key or payload.key).strip()
+    if key != payload.key:
+        raise AuthError(400, "角色标识不能在编辑时修改")
+    roles = _load_roles()
+    if key not in roles:
+        raise AuthError(404, "角色不存在")
+    menu_keys = _clean_access_values(payload.menuKeys, set(_all_menu_keys()))
+    permissions = _clean_access_values(payload.permissions, set(_all_permission_codes()))
+    if key == "admin":
+        menu_keys = list(dict.fromkeys([*menu_keys, "access"]))
+        permissions = list(dict.fromkeys([*permissions, "access:manage"]))
+    else:
+        menu_keys = [item for item in menu_keys if item != "access"]
+        permissions = [item for item in permissions if item != "access:manage"]
+    permissions = list(dict.fromkeys([*permissions, *_menu_permissions(menu_keys)]))
+    roles[key] = {
+        "key": key,
+        "label": payload.label.strip(),
+        "description": payload.description.strip(),
+        "color": payload.color.strip() or "blue",
+        "menuKeys": menu_keys,
+        "permissions": permissions,
+    }
+    _save_roles(roles)
+    return roles[key]
+
+
+@router.get("/access/users")
+async def access_users(_admin: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    items = []
+    for user in _load_users():
+        public = _public_user(user)
+        profile = access_profile(user)
+        items.append({**public, "createdAt": user.get("createdAt"), "extraMenus": profile["extraMenus"], "extraPermissions": profile["extraPermissions"], "roleMenus": profile["roleMenus"], "rolePermissions": profile["rolePermissions"], "menus": profile["menus"], "permissions": profile["permissions"]})
+    return {"items": items}
+
+
+@router.get("/access/users/{email}")
+async def access_user(email: str, _admin: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    target = _find_user(email)
+    if target is None:
+        raise AuthError(404, "用户不存在")
+    public = _public_user(target)
+    profile = access_profile(target)
+    return {**public, **profile, "createdAt": target.get("createdAt")}
+
+
+@router.put("/access/users/{email}")
+async def update_user_access(email: str, payload: UserAccessPayload, _admin: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+    roles = _load_roles()
+    if payload.role not in roles:
+        raise AuthError(400, "角色不存在")
+    users = _load_users()
+    target = next((item for item in users if str(item.get("email", "")).strip().lower() == email.strip().lower()), None)
+    if target is None:
+        raise AuthError(404, "用户不存在")
+    if (
+        str(target.get("role") or "user") == "admin"
+        and payload.role != "admin"
+        and sum(str(item.get("role") or "user") == "admin" for item in users) <= 1
+    ):
+        raise AuthError(400, "必须至少保留一个管理员账号")
+    extra_menus = _clean_access_values(payload.extraMenus, set(_all_menu_keys()))
+    extra_permissions = _clean_access_values(payload.extraPermissions, set(_all_permission_codes()))
+    if payload.role != "admin":
+        extra_menus = [item for item in extra_menus if item != "access"]
+        extra_permissions = [item for item in extra_permissions if item != "access:manage"]
+    extra_permissions = list(dict.fromkeys([*extra_permissions, *_menu_permissions(extra_menus)]))
+    target["role"] = payload.role
+    target["extraMenus"] = extra_menus
+    target["extraPermissions"] = extra_permissions
+    _save_users(users)
+    public = _public_user(target)
+    return {"user": public, **access_profile(target)}
 
 
 @router.get("/stats")
 async def user_stats(
-    _user: dict[str, Any] = Depends(get_current_user),
+    _user: dict[str, Any] = Depends(require_permission("dashboard:view")),
 ) -> dict[str, Any]:
     """返回用户数量、近 30 天趋势、周注册量和角色占比。"""
     return build_user_stats()

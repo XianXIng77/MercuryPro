@@ -91,7 +91,7 @@ export interface StylePreset {
   };
 }
 
-export type NavTab = 'dashboard' | 'email' | 'register' | 'invite' | 'logs' | 'audit' | 'calendar' | 'contacts' | 'analytics' | 'tickets' | 'settings';
+export type NavTab = 'dashboard' | 'email' | 'register' | 'invite' | 'logs' | 'audit' | 'access' | 'calendar' | 'contacts' | 'analytics' | 'tickets' | 'settings' | 'profile';
 
 export interface MailAccount {
   id: string;
@@ -163,4 +163,3 @@ export interface DomainEmailConfig {
   refreshResult: '未刷新' | '刷新成功' | '刷新失败';
   messages: Email[];
 }
-

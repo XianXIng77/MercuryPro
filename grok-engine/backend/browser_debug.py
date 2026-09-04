@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 
 
@@ -67,6 +67,16 @@ def browser_debug_status() -> dict[str, object]:
 
 @router.websocket("/api/browser-debug/vnc")
 async def browser_debug_vnc(websocket: WebSocket) -> None:
+    from mercury_auth import get_current_user, user_has_permission
+
+    try:
+        actor = get_current_user(websocket)
+    except HTTPException:
+        await websocket.close(code=1008, reason="Authentication required")
+        return
+    if not user_has_permission(actor, "register:view"):
+        await websocket.close(code=1008, reason="Permission denied")
+        return
     if not browser_debug_enabled():
         await websocket.close(code=1008, reason="Browser debug desktop is disabled")
         return

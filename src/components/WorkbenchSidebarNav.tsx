@@ -7,6 +7,9 @@ import {
   UserPlus,
   KeyRound,
   ShieldCheck,
+  SlidersHorizontal,
+  CircleUserRound,
+  LogOut,
 } from 'lucide-react';
 import { NavTab, StylePreset } from '../types';
 
@@ -15,6 +18,9 @@ interface WorkbenchSidebarNavProps {
   setActiveTab: (tab: NavTab) => void;
   totalUnreadCount: number;
   currentPreset: StylePreset;
+  /** Backend menu keys; omitted means show the existing full menu set. */
+  menuKeys?: string[];
+  onLogout: () => void;
 }
 
 export const WorkbenchSidebarNav: React.FC<WorkbenchSidebarNavProps> = ({
@@ -22,6 +28,8 @@ export const WorkbenchSidebarNav: React.FC<WorkbenchSidebarNavProps> = ({
   setActiveTab,
   totalUnreadCount,
   currentPreset,
+  menuKeys,
+  onLogout,
 }) => {
   const [hoveredTab, setHoveredTab] = useState<NavTab | null>(null);
   const theme = currentPreset.themeClasses;
@@ -64,6 +72,16 @@ export const WorkbenchSidebarNav: React.FC<WorkbenchSidebarNavProps> = ({
       label: '操作审计',
       icon: <ShieldCheck className="w-5 h-5" />,
     },
+    {
+      id: 'access',
+      label: '权限中心',
+      icon: <SlidersHorizontal className="w-5 h-5" />,
+    },
+    {
+      id: 'profile',
+      label: '个人中心',
+      icon: <CircleUserRound className="w-5 h-5" />,
+    },
   ];
 
   return (
@@ -98,7 +116,7 @@ export const WorkbenchSidebarNav: React.FC<WorkbenchSidebarNavProps> = ({
           核心工作台模块
         </div>
 
-        {mainNavItems.map((item) => {
+        {mainNavItems.filter((item) => item.id === 'profile' || !menuKeys || menuKeys.includes(item.id)).map((item) => {
           const isActive = activeTab === item.id;
           const isHovered = hoveredTab === item.id;
           const isHighlighted = isActive || isHovered;
@@ -151,6 +169,27 @@ export const WorkbenchSidebarNav: React.FC<WorkbenchSidebarNavProps> = ({
           );
         })}
       </nav>
+
+      {/* Logout Action */}
+      <div className={`shrink-0 p-2 border-t ${isDark ? 'border-slate-800' : 'border-slate-200/80'}`}>
+        <motion.button
+          type="button"
+          onClick={onLogout}
+          title="退出登录"
+          whileHover={{ scale: 1.02, x: 3 }}
+          whileTap={{ scale: 0.97 }}
+          transition={{ type: 'spring', stiffness: 400, damping: 25 }}
+          className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-xs font-semibold cursor-pointer transition-colors duration-150 ${
+            isDark
+              ? 'text-slate-400 hover:bg-rose-500/10 hover:text-rose-400'
+              : 'text-slate-600 hover:bg-rose-50 hover:text-rose-600'
+          }`}
+        >
+          <LogOut className="w-5 h-5 shrink-0" />
+          <span className="hidden sm:inline">退出登录</span>
+        </motion.button>
+      </div>
     </aside>
   );
 };
+

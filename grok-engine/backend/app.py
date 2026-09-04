@@ -73,8 +73,9 @@ from mercury_mail import router as mercury_mail_router
 from mercury_auth import (
     ensure_default_admin,
     get_current_user,
-    has_valid_session,
+    required_permission_for_request,
     router as mercury_auth_router,
+    user_has_permission,
 )
 from mercury_logs import router as mercury_logs_router
 from operation_logs import (
@@ -462,11 +463,29 @@ async def enforce_auth_guard(request: Request, call_next):
     is_auth_path = path == "/api/auth" or path.startswith("/api/auth/")
     is_public_mail_path = path.startswith("/api/microsoft/public/mailboxes/")
     is_public_health_path = path == "/api/health/live"
-    if (is_api and not is_auth_path and not is_public_mail_path and not is_public_health_path or path.startswith("/browser-debug")) and not has_valid_session(request):
-        return JSONResponse(
-            status_code=401,
-            content={"code": 401, "error": "未登录或会话已过期"},
-        )
+    protected = (
+        is_api and not is_auth_path and not is_public_mail_path and not is_public_health_path
+        or path.startswith("/browser-debug")
+    )
+    if protected:
+        try:
+            actor = get_current_user(request)
+        except HTTPException:
+            return JSONResponse(
+                status_code=401,
+                content={"code": 401, "error": "未登录或会话已过期"},
+            )
+        permission = required_permission_for_request(path, request.method)
+        if permission and not user_has_permission(actor, permission):
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "code": 403,
+                    "error": "没有权限访问该资源",
+                    "detail": f"当前操作需要权限：{permission}",
+                    "permission": permission,
+                },
+            )
     return await call_next(request)
 
 

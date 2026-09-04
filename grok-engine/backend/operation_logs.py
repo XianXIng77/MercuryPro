@@ -1,6 +1,7 @@
 """Persistent JSONL user operation audit log."""
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import threading
@@ -18,6 +19,117 @@ _configured_dir = Path(os.environ.get("DATA_DIR", "data"))
 DATA_DIRECTORY = _configured_dir if _configured_dir.is_absolute() else PROJECT_ROOT / _configured_dir
 AUDIT_LOG_FILE = DATA_DIRECTORY / "operation-audit.jsonl"
 _lock = threading.RLock()
+_geo_lock = threading.RLock()
+_geo_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+_geo_reader: Any = None
+_geo_reader_loaded = False
+_GEO_CACHE_TTL_SECONDS = 24 * 3600
+_GEO_DB_PATH = Path(os.environ.get("MERCURY_GEOIP_DB", str(DATA_DIRECTORY / "GeoLite2-City.mmdb")))
+
+
+def _private_ip_location(ip: str) -> dict[str, Any] | None:
+    try:
+        address = ipaddress.ip_address(ip)
+    except ValueError:
+        return None
+    if address.is_loopback:
+        label = "本机"
+    elif address.is_private or address.is_link_local:
+        label = "内网"
+    else:
+        return None
+    return {
+        "label": label,
+        "country": "",
+        "country_code": "",
+        "region": "",
+        "city": "",
+        "postal": "",
+        "timezone": "",
+        "latitude": None,
+        "longitude": None,
+        "isp": "",
+        "org": "",
+        "asn": "",
+        "private": True,
+        "available": True,
+    }
+
+
+def _geo_reader_instance() -> Any:
+    global _geo_reader, _geo_reader_loaded
+    with _geo_lock:
+        if _geo_reader_loaded:
+            return _geo_reader
+        _geo_reader_loaded = True
+        if not _GEO_DB_PATH.is_file():
+            return None
+        try:
+            from geoip2.database import Reader
+            _geo_reader = Reader(str(_GEO_DB_PATH))
+        except Exception:
+            _geo_reader = None
+        return _geo_reader
+
+
+def _geo_label(country: str, region: str, city: str) -> str:
+    parts = [value for value in (country, region, city) if value]
+    return " · ".join(parts) or "位置未知"
+
+
+def lookup_ip_location(ip: str) -> dict[str, Any]:
+    """Resolve a public IP via an optional local GeoLite2-City database."""
+    normalized = str(ip or "").strip()
+    if not normalized or normalized == "未知":
+        return {"label": "位置未知", "available": False}
+    private = _private_ip_location(normalized)
+    if private is not None:
+        return private
+    try:
+        address = ipaddress.ip_address(normalized)
+    except ValueError:
+        return {"label": "位置未知", "available": False}
+    if not address.is_global:
+        return {"label": "未知网络地址", "available": False}
+
+    now = time.time()
+    with _geo_lock:
+        cached = _geo_cache.get(normalized)
+        if cached and cached[0] > now:
+            return dict(cached[1])
+    reader = _geo_reader_instance()
+    if reader is None:
+        return {"label": "未配置 GeoIP 数据库", "available": False}
+    try:
+        record = reader.city(normalized)
+        country = str(record.country.name or "").strip()
+        country_code = str(record.country.iso_code or "").strip().upper()
+        region = str((record.subdivisions.most_specific.name if record.subdivisions else "") or "").strip()
+        city = str(record.city.name or "").strip()
+        postal = str(record.postal.code or "").strip()
+        timezone_name = str((record.location.time_zone if record.location else "") or "").strip()
+        result = {
+            "label": _geo_label(country, region, city),
+            "country": country,
+            "country_code": country_code,
+            "region": region,
+            "city": city,
+            "postal": postal,
+            "timezone": timezone_name,
+            "latitude": record.location.latitude if record.location else None,
+            "longitude": record.location.longitude if record.location else None,
+            "isp": "",
+            "org": "",
+            "asn": "",
+            "private": False,
+            "available": True,
+        }
+    except Exception:
+        result = {"label": "位置未知", "available": False}
+    with _geo_lock:
+        _geo_cache[normalized] = (time.time() + _GEO_CACHE_TTL_SECONDS, result)
+    return dict(result)
+
 
 MODULE_LABELS = {
     "auth": "账户安全",
@@ -81,6 +193,7 @@ def record_operation(
     forwarded = request.headers.get("x-forwarded-for", "") if request else ""
     client = request.client.host if request and request.client else ""
     ip = forwarded.split(",", 1)[0].strip() or client or "未知"
+    geo = lookup_ip_location(ip)
     user_agent = request.headers.get("user-agent", "") if request else ""
     status = "成功" if 200 <= int(status_code) < 400 else "失败"
     path = request.url.path if request else ""
@@ -92,6 +205,7 @@ def record_operation(
         "module": module or module_for_path(path),
         "detail": detail or f"{action} {path}",
         "ip": ip,
+        "geo": geo,
         "device": user_agent[:160] or "未知设备",
         "time": datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S"),
         "status": status,
@@ -132,14 +246,19 @@ async def list_operation_logs(
     keyword = q.strip().lower()
     filtered = [
         item for item in records
-        if (not keyword or any(keyword in str(item.get(field, "")).lower() for field in ("id", "user", "email", "action", "module", "detail", "ip")))
+        if (not keyword or any(keyword in str(item.get(field, "")).lower() for field in ("id", "user", "email", "action", "module", "detail", "ip", "geo")))
         and (not action or item.get("action") == action)
         and (not status or item.get("status") == status)
     ]
     filtered.sort(key=lambda item: str(item.get("time", "")), reverse=True)
+    # Enrich only the visible page so large audit histories stay fast.
+    page_items = [
+        {**item, "geo": item.get("geo") or lookup_ip_location(str(item.get("ip") or ""))}
+        for item in filtered[offset : offset + limit]
+    ]
     today = datetime.now().astimezone().strftime("%Y-%m-%d")
     return {
-        "items": filtered[offset : offset + limit],
+        "items": page_items,
         "total": len(filtered),
         "summary": {
             "today": sum(str(item.get("time", "")).startswith(today) for item in filtered),
@@ -148,3 +267,4 @@ async def list_operation_logs(
             "risks": sum(item.get("risk") == "高风险" for item in filtered),
         },
     }
+

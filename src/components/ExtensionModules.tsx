@@ -10,11 +10,13 @@ import { UserAuditPanel } from './UserAuditPanel';
 interface ExtensionModulesProps {
   activeTab: NavTab;
   currentPreset: StylePreset;
+  permissionCodes?: string[];
 }
 
 export const ExtensionModules: React.FC<ExtensionModulesProps> = ({
   activeTab,
   currentPreset,
+  permissionCodes = [],
 }) => {
   const theme = currentPreset.themeClasses;
   const isDark = currentPreset.mode === 'dark';
@@ -24,11 +26,11 @@ export const ExtensionModules: React.FC<ExtensionModulesProps> = ({
   }
 
   if (activeTab === 'register') {
-    return <GrokRegistrationPanel currentPreset={currentPreset} />;
+    return <GrokRegistrationPanel currentPreset={currentPreset} canRun={permissionCodes.includes('register:run')} />;
   }
 
   if (activeTab === 'invite') {
-    return <InvitationCodePanel currentPreset={currentPreset} />;
+    return <InvitationCodePanel currentPreset={currentPreset} canManage={permissionCodes.includes('invite:manage')} />;
   }
 
   if (activeTab === 'logs') {
@@ -205,3 +207,4 @@ export const ExtensionModules: React.FC<ExtensionModulesProps> = ({
 
   return null;
 };
+

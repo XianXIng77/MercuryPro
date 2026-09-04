@@ -6,6 +6,22 @@ export interface OperationAuditLog {
   module: string;
   detail: string;
   ip: string;
+  geo?: {
+    label?: string;
+    country?: string;
+    country_code?: string;
+    region?: string;
+    city?: string;
+    postal?: string;
+    timezone?: string;
+    latitude?: number | null;
+    longitude?: number | null;
+    isp?: string;
+    org?: string;
+    asn?: string;
+    private?: boolean;
+    available?: boolean;
+  };
   device: string;
   time: string;
   status: '成功' | '失败';

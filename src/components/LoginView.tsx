@@ -2,12 +2,12 @@ import React, { useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Eye, EyeOff, Github, KeyRound, Loader2, Lock, Mail, Sparkles, User } from 'lucide-react';
 import type { StylePreset } from '../types';
-import { authApi } from '../api/auth';
+import { authApi, type AccessProfile, type AuthUser } from '../api/auth';
 import { useToast } from './Toast';
 
 interface LoginViewProps {
   currentPreset: StylePreset;
-  onLoginSuccess: (email: string, successMessage?: string) => void;
+  onLoginSuccess: (user: AuthUser, accessProfile: AccessProfile, successMessage?: string) => void;
 }
 
 /** Google "G" 官方四色 logo(SVG) */
@@ -126,13 +126,14 @@ export const LoginView: React.FC<LoginViewProps> = ({ currentPreset, onLoginSucc
     }
     setStatus('submitting');
     try {
-      const { user } =
+      const result =
         mode === 'login'
           ? await authApi.login(email.trim(), password, remember)
           : await authApi.register(email.trim(), password, username.trim(), remember, inviteCode.trim());
+      const { user, menus, permissions } = result;
       setStatus('success');
       // 登录和注册成功后直接进入工作台，不再经过“返回登录页”的中间状态。
-      onLoginSuccess(user.email, mode === 'login' ? `登录成功，欢迎回来：${user.email}` : '注册成功，正在进入工作台');
+      onLoginSuccess(user, { menus, permissions }, mode === 'login' ? `登录成功，欢迎回来：${user.email}` : '注册成功，正在进入工作台');
     } catch (err) {
       const message = err instanceof Error ? err.message : '网络错误,请稍后重试';
       setError(message);
@@ -419,3 +420,4 @@ export const LoginView: React.FC<LoginViewProps> = ({ currentPreset, onLoginSucc
     </div>
   );
 };
+

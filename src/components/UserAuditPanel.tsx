@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import {
   AlertTriangle, CheckCircle2, Clock3, Download,
   Filter, KeyRound, LogIn, MonitorSmartphone, RefreshCw, Search, ShieldCheck,
-  UserRound, XCircle,
+  UserRound, XCircle, MapPin,
 } from 'lucide-react';
 import { StylePreset } from '../types';
 import { OperationAuditLog, OperationAuditSummary, operationLogsApi } from '../api/operationLogs';
@@ -20,6 +20,19 @@ const actionIcon = (action: string) => {
 };
 
 const escapeCsv = (value: string) => `"${value.replace(/"/g, '""')}"`;
+
+const geoLabel = (geo: OperationAuditLog['geo']) => geo?.label || '位置未知';
+
+const geoDetails = (geo: OperationAuditLog['geo']) => [
+  geo?.label,
+  geo?.country_code ? `国家代码：${geo.country_code}` : '',
+  geo?.postal ? `邮编：${geo.postal}` : '',
+  geo?.timezone ? `时区：${geo.timezone}` : '',
+  geo?.isp ? `运营商：${geo.isp}` : '',
+  geo?.org ? `组织：${geo.org}` : '',
+  geo?.asn ? `ASN：${geo.asn}` : '',
+  geo?.latitude != null && geo?.longitude != null ? `坐标：${geo.latitude}, ${geo.longitude}` : '',
+].filter(Boolean).join(' · ') || '位置未知';
 
 export const UserAuditPanel: React.FC<{ currentPreset: StylePreset }> = ({ currentPreset }) => {
   const theme = currentPreset.themeClasses;
@@ -66,8 +79,8 @@ export const UserAuditPanel: React.FC<{ currentPreset: StylePreset }> = ({ curre
   }, [page, totalPages]);
 
   const exportCsv = () => {
-    const header = ['编号', '用户', '邮箱', '操作', '模块', '详情', 'IP 地址', '设备', '时间', '状态', '风险'];
-    const rows = logs.map((log) => [log.id, log.user, log.email, log.action, log.module, log.detail, log.ip, log.device, log.time, log.status, log.risk]);
+    const header = ['编号', '用户', '邮箱', '操作', '模块', '详情', 'IP 地址', '国家/地区/城市', '设备', '时间', '状态', '风险'];
+    const rows = logs.map((log) => [log.id, log.user, log.email, log.action, log.module, log.detail, log.ip, geoLabel(log.geo), log.device, log.time, log.status, log.risk]);
     const csv = `\uFEFF${[header, ...rows].map((row) => row.map(escapeCsv).join(',')).join('\n')}`;
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
     const link = document.createElement('a');
@@ -145,18 +158,29 @@ export const UserAuditPanel: React.FC<{ currentPreset: StylePreset }> = ({ curre
             <select aria-label="按操作状态筛选" value={status} onChange={(event) => { setStatus(event.target.value); setPage(1); }} className={selectClass}><option>全部</option><option>成功</option><option>失败</option></select>
           </div>
           <div className="min-h-0 flex-1 overflow-auto">
-            <table className="w-full min-w-[1050px] border-collapse text-left">
-              <thead className={`sticky top-0 z-10 text-center text-[11px] font-bold ${isDark ? 'bg-slate-900 text-slate-400' : 'bg-slate-50 text-slate-500'}`}><tr>{['用户', '操作', '模块 / 详情', 'IP 地址 / 设备', '操作时间', '状态', '风险'].map((label) => <th key={label} className={`border-b px-4 py-3 text-center ${theme.border}`}>{label}</th>)}</tr></thead>
+            <table className="w-full min-w-[1345px] table-fixed border-collapse text-left">
+              <colgroup>
+                <col className="w-[180px]" />
+                <col className="w-[120px]" />
+                <col className="w-[260px]" />
+                <col className="w-[120px]" />
+                <col className="w-[190px]" />
+                <col className="w-[200px]" />
+                <col className="w-[155px]" />
+                <col className="w-[120px]" />
+              </colgroup>
+              <thead className={`sticky top-0 z-10 text-center text-[11px] font-bold ${isDark ? 'bg-slate-900 text-slate-400' : 'bg-slate-50 text-slate-500'}`}><tr>{['用户', '操作', '模块 / 详情', 'IP 地址', '位置', '设备', '操作时间', '状态'].map((label) => <th key={label} className={`border-b whitespace-nowrap px-4 py-3 text-center ${theme.border}`}>{label}</th>)}</tr></thead>
               <tbody className="text-center">
-                {loading && <tr><td colSpan={7} className={`px-4 py-16 text-center text-xs ${theme.textSecondary}`}><RefreshCw className="mx-auto mb-2 h-5 w-5 animate-spin text-blue-500" />正在加载操作日志…</td></tr>}
+                {loading && <tr><td colSpan={8} className={`px-4 py-16 text-center text-xs ${theme.textSecondary}`}><RefreshCw className="mx-auto mb-2 h-5 w-5 animate-spin text-blue-500" />正在加载操作日志…</td></tr>}
                 {!loading && logs.map((log) => <tr key={log.id} className={`group border-b text-xs transition ${theme.border} ${isDark ? 'hover:bg-white/[0.03]' : 'hover:bg-blue-50/50'}`}>
-                  <td className="px-4 py-3.5 text-left"><div className="flex items-center justify-start gap-2.5"><span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full font-extrabold ${log.user === '管理员' ? (isDark ? 'bg-blue-500/25 text-blue-200 ring-1 ring-blue-400/50' : 'bg-blue-100 text-blue-700 ring-1 ring-blue-300') : (isDark ? 'bg-amber-500/25 text-amber-200 ring-1 ring-amber-400/50' : 'bg-amber-100 text-amber-800 ring-1 ring-amber-300')}`}>{log.user.charAt(0)}</span><div><p className={`font-bold ${theme.textPrimary}`}>{log.user}</p><p className={`mt-0.5 text-[10px] ${theme.textSecondary}`}>{log.email}</p></div></div></td>
-                  <td className="px-4 py-3.5"><span className={`audit-action-badge inline-flex items-center gap-1.5 rounded-lg border px-2 py-1 font-bold ${log.status === '失败' ? auditPalette.actionFailure : auditPalette.actionSuccess}`} data-kind={log.status === '失败' ? 'failure' : 'success'}>{actionIcon(log.action)}{log.action}</span></td>
-                  <td className="max-w-sm px-4 py-3.5"><p className={`font-bold ${theme.textPrimary}`}>{log.module}</p><Tooltip content={log.detail} isDark={isDark}><p className={`mt-1 truncate text-[11px] ${theme.textSecondary}`}>{log.detail}</p></Tooltip></td>
-                  <td className="px-4 py-3.5"><p className={`font-mono font-semibold ${theme.textPrimary}`}>{log.ip}</p><p className={`mt-1 flex items-center justify-center gap-1 text-[10px] ${theme.textSecondary}`}><MonitorSmartphone className="h-3 w-3" />{log.device}</p></td>
+                  <td className="whitespace-nowrap px-4 py-3.5 text-left"><div className="flex items-center justify-start gap-2.5"><span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full font-extrabold ${log.user === '管理员' ? (isDark ? 'bg-blue-500/25 text-blue-200 ring-1 ring-blue-400/50' : 'bg-blue-100 text-blue-700 ring-1 ring-blue-300') : (isDark ? 'bg-amber-500/25 text-amber-200 ring-1 ring-amber-400/50' : 'bg-amber-100 text-amber-800 ring-1 ring-amber-300')}`}>{log.user.charAt(0)}</span><div><p className={`font-bold ${theme.textPrimary}`}>{log.user}</p><p className={`mt-0.5 text-[10px] ${theme.textSecondary}`}>{log.email}</p></div></div></td>
+                  <td className="whitespace-nowrap px-4 py-3.5"><span className={`audit-action-badge inline-flex items-center gap-1.5 rounded-lg border px-2 py-1 font-bold ${log.status === '失败' ? auditPalette.actionFailure : auditPalette.actionSuccess}`} data-kind={log.status === '失败' ? 'failure' : 'success'}>{actionIcon(log.action)}{log.action}</span></td>
+                  <td className="w-[260px] max-w-[260px] overflow-hidden whitespace-nowrap px-4 py-3.5"><p className={`truncate font-bold ${theme.textPrimary}`}>{log.module}</p><Tooltip content={log.detail} isDark={isDark} placement="top" className="mt-1 block max-w-full"><p className={`block w-full max-w-full truncate text-[11px] ${theme.textSecondary}`} title={log.detail}>{log.detail}</p></Tooltip></td>
+                  <td className="w-[120px] max-w-[120px] whitespace-nowrap px-4 py-3.5"><p className={`truncate font-mono font-semibold ${theme.textPrimary}`} title={log.ip}>{log.ip}</p></td>
+                  <td className="w-[190px] max-w-[190px] overflow-hidden whitespace-nowrap px-4 py-3.5"><Tooltip content={geoDetails(log.geo)} isDark={isDark} placement="top" className="block max-w-full"><p className={`flex w-[160px] max-w-full min-w-0 items-center justify-center gap-1 truncate text-[10px] ${theme.textSecondary}`} title={geoDetails(log.geo)}><MapPin className="h-3 w-3 shrink-0" /><span className="min-w-0 truncate">{geoLabel(log.geo)}</span></p></Tooltip></td>
+                  <td className="w-[200px] max-w-[200px] overflow-hidden whitespace-nowrap px-4 py-3.5"><Tooltip content={log.device} isDark={isDark} placement="top" className="block max-w-full"><p className={`flex w-[170px] max-w-full min-w-0 items-center justify-center gap-1 truncate text-[10px] ${theme.textSecondary}`} title={log.device}><MonitorSmartphone className="h-3 w-3 shrink-0" /><span className="min-w-0 truncate">{log.device}</span></p></Tooltip></td>
                   <td className={`whitespace-nowrap px-4 py-3.5 font-mono text-[11px] ${theme.textSecondary}`}>{log.time}</td>
-                  <td className="px-4 py-3.5">{log.status === '成功' ? <span className={`audit-status-badge inline-flex items-center gap-1 rounded-full border px-2 py-1 font-bold ${auditPalette.statusSuccess}`} data-kind="success"><CheckCircle2 className="h-3.5 w-3.5" />成功</span> : <span className={`audit-status-badge inline-flex items-center gap-1 rounded-full border px-2 py-1 font-bold ${auditPalette.statusFailure}`} data-kind="failure"><XCircle className="h-3.5 w-3.5" />失败</span>}</td>
-                  <td className="px-4 py-3.5"><span className={`audit-risk-badge rounded-full border px-2 py-1 text-[10px] font-bold ${log.risk === '高风险' ? auditPalette.riskHigh : log.risk === '关注' ? auditPalette.riskAttention : auditPalette.riskNormal}`} data-kind={log.risk === '高风险' ? 'high' : log.risk === '关注' ? 'attention' : 'normal'}>{log.risk}</span></td>
+                  <td className="w-[120px] whitespace-nowrap px-4 py-3.5">{log.status === '成功' ? <span className={`audit-status-badge inline-flex items-center gap-1 rounded-full border px-2 py-1 font-bold ${auditPalette.statusSuccess}`} data-kind="success"><CheckCircle2 className="h-3.5 w-3.5" />成功</span> : <span className={`audit-status-badge inline-flex items-center gap-1 rounded-full border px-2 py-1 font-bold ${auditPalette.statusFailure}`} data-kind="failure"><XCircle className="h-3.5 w-3.5" />失败</span>}</td>
                 </tr>)}
               </tbody>
             </table>
@@ -168,3 +192,5 @@ export const UserAuditPanel: React.FC<{ currentPreset: StylePreset }> = ({ curre
     </div>
   );
 };
+
+

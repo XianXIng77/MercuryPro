@@ -4,18 +4,17 @@ import {
   Palette,
   Check,
   ChevronDown,
-  LogOut,
 } from 'lucide-react';
 import { NavTab, StylePreset, StylePresetId } from '../types';
 import { STYLE_PRESETS } from '../data/stylePresets';
+import { AuthUser } from '../api/auth';
 
 interface NavbarProps {
   activeTab: NavTab;
   currentPreset: StylePreset;
   onSelectPreset: (presetId: StylePresetId) => void;
   onRunAiAutoTag: () => void;
-  sessionUser?: string | null;
-  onLogout?: () => void;
+  currentUser: AuthUser;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -23,8 +22,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   currentPreset,
   onSelectPreset,
   onRunAiAutoTag,
-  sessionUser,
-  onLogout,
+  currentUser,
 }) => {
   const [showStyleMenu, setShowStyleMenu] = useState(false);
 
@@ -50,6 +48,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               {activeTab === 'invite' && '邀请码'}
               {activeTab === 'logs' && '注册日志'}
               {activeTab === 'audit' && '操作审计'}
+              {activeTab === 'profile' && '个人中心'}
             </span>
           </div>
         </div>
@@ -125,30 +124,16 @@ export const Navbar: React.FC<NavbarProps> = ({
             )}
           </div>
 
-          {/* User Profile Avatar + 退出登录 */}
+          {/* User Profile Avatar */}
           <div className={`flex items-center gap-2 pl-2 border-l ${isDark ? 'border-slate-700' : 'border-slate-300'}`}>
-            <div className="hidden md:block max-w-[160px] text-right" title={sessionUser || ''}>
-              <p className={`text-[11px] font-bold truncate ${isDark ? 'text-slate-200' : 'text-slate-800'}`}>{sessionUser || '未登录'}</p>
-              <p className={`text-[9px] ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>在线</p>
+            <div className="hidden max-w-[160px] text-right md:block" title={currentUser.email}>
+              <p className={`truncate text-[11px] font-bold ${isDark ? 'text-slate-200' : 'text-slate-800'}`}>{currentUser.username || currentUser.email}</p>
+              <p className={`truncate text-[9px] ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>{currentUser.email}</p>
             </div>
-            <div className="w-8 h-8 shrink-0 rounded-lg bg-blue-600 text-white flex items-center justify-center font-bold italic text-sm shadow-xs">
-              {(sessionUser || 'M').charAt(0).toUpperCase()}
+            <div className="relative flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-blue-600 text-sm font-bold text-white shadow-xs">
+              {(currentUser.username || currentUser.email || 'M').charAt(0).toUpperCase()}
+              {currentUser.avatar && <img src={currentUser.avatar} alt={`${currentUser.username || '用户'}的头像`} className="absolute inset-0 h-full w-full object-cover" onError={(event) => { event.currentTarget.style.display = 'none'; }} />}
             </div>
-            {onLogout && (
-              <button
-                type="button"
-                onClick={onLogout}
-                title="退出登录"
-                className={`flex items-center gap-1 rounded-md border px-2.5 py-1.5 text-xs font-semibold transition-colors ${
-                  isDark
-                    ? 'border-slate-700 text-slate-300 hover:border-rose-500/50 hover:bg-rose-500/10 hover:text-rose-400'
-                    : 'border-slate-300 text-slate-600 hover:border-rose-400 hover:bg-rose-50 hover:text-rose-600'
-                }`}
-              >
-                <LogOut className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">退出</span>
-              </button>
-            )}
           </div>
         </div>
       </div>
