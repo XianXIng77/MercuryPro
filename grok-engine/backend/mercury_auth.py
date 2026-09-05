@@ -4,6 +4,9 @@
     if permission not in profile["permissions"]:
         return False
     return enforce(build_enforcer(_load_roles(), _load_users()), str(user.get("email") or ""), permission)
+    if permission not in profile["permissions"]:
+        return False
+    return enforce(build_enforcer(_load_roles(), _load_users()), str(user.get("email") or ""), permission)
 
 用户状态存放在 ``<repo>/data/users.json``(与 microsoft-mail-accounts.json
 同级,由 DATA_DIR 解析)。首次导入时若无该邮箱,会自动创建内置管理员
