@@ -545,7 +545,10 @@ def user_has_permission(user: dict[str, Any], permission: str) -> bool:
     """Return whether the persisted user grants allow one permission."""
     if not PERMISSION_ENFORCEMENT_ENABLED:
         return True
-    profile = access_profile(user)\n    if permission not in profile["permissions"]:\n        return False\n    return enforce(build_enforcer(_load_roles(), _load_users()), str(user.get("email") or ""), permission)
+    profile = access_profile(user)
+    if permission not in profile["permissions"]:
+        return False
+    return enforce(build_enforcer(_load_roles(), _load_users()), str(user.get("email") or ""), permission)
 
 
 def require_permission(permission: str):
