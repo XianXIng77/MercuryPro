@@ -1110,10 +1110,7 @@ export const GrokRegistrationPanel: React.FC<Props> = ({
   const load = async () => {
     setLoading(true);
     try {
-      const [loaded, debugStatus] = await Promise.all([
-        registrationApi.config(),
-        registrationApi.browserDebugStatus().catch(() => null),
-      ]);
+      const loaded = await registrationApi.config();
       // 用浏览器记住的域名邮箱配置补齐后端配置(后端未保存过时仍保留上次填写)
       let remembered: Partial<GrokConfig> = {};
       try {
@@ -1131,9 +1128,7 @@ export const GrokRegistrationPanel: React.FC<Props> = ({
         domain_email_qq: String(remembered.domain_email_qq || loaded.domain_email_qq || ''),
         domain_email_auth_code: String(remembered.domain_email_auth_code || loaded.domain_email_auth_code || ''),
       }));
-      setBrowserDebugStatus(debugStatus);
       setServiceOnline(true);
-      await refreshMonitor();
     } catch (error) {
       setServiceOnline(false);
       showError(error);
@@ -1144,15 +1139,31 @@ export const GrokRegistrationPanel: React.FC<Props> = ({
 
   useEffect(() => {
     void load();
-    const timer = window.setInterval(() => void refreshMonitor(), 2000);
-    return () => window.clearInterval(timer);
   }, []);
 
   useEffect(() => {
-    void loadPerformance(config.captcha_provider);
-  }, [config.captcha_provider]);
+    if (tab !== 'browser') return;
+    let active = true;
+    void registrationApi.browserDebugStatus().catch(() => null).then((status) => {
+      if (active) setBrowserDebugStatus(status);
+    });
+    return () => { active = false; };
+  }, [tab, registrationApi]);
 
   useEffect(() => {
+    if (tab !== 'registration') return;
+    void refreshMonitor();
+    const timer = window.setInterval(() => void refreshMonitor(), 2000);
+    return () => window.clearInterval(timer);
+  }, [tab]);
+
+  useEffect(() => {
+    if (tab !== 'registration') return;
+    void loadPerformance(config.captcha_provider);
+  }, [tab, config.captcha_provider]);
+
+  useEffect(() => {
+    if (tab !== 'registration' && tab !== 'mail') return;
     if (config.mail_provider !== 'hotmail_local') return;
     let active = true;
     const refresh = async (reportError = false) => {
@@ -2647,4 +2658,3 @@ export const GrokRegistrationPanel: React.FC<Props> = ({
     </div>
   );
 };
-
