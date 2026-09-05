@@ -24,7 +24,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, EmailStr, Field
 
-from invite_codes import InviteCodeError, use_invite_code\nfrom casbin_authorization import build_enforcer, enforce
+from invite_codes import InviteCodeError, use_invite_code
+from casbin_authorization import build_enforcer, enforce
 
 router = APIRouter(prefix="/api/auth", tags=["Auth"])
 
