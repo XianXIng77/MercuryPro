@@ -9,10 +9,12 @@ import {
   Users,
 } from 'lucide-react';
 import { authApi, UserDashboardStats, UserStatsPoint } from '../api/auth';
+import { PermissionEmptyState } from './PermissionEmptyState';
 import { StylePreset } from '../types';
 
 interface UserDashboardProps {
   currentPreset: StylePreset;
+  permissionCodes?: string[];
 }
 
 const integerFormatter = new Intl.NumberFormat('zh-CN');
@@ -171,13 +173,14 @@ const DonutChart = ({ points, isDark }: { points: UserStatsPoint[]; isDark: bool
   );
 };
 
-export const UserDashboard: React.FC<UserDashboardProps> = ({ currentPreset }) => {
+export const UserDashboard: React.FC<UserDashboardProps> = ({ currentPreset, permissionCodes = [] }) => {
   const [stats, setStats] = useState<UserDashboardStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [chartRevision, setChartRevision] = useState(0);
   const theme = currentPreset.themeClasses;
   const isDark = currentPreset.mode === 'dark';
+  const canViewDashboard = permissionCodes.includes('dashboard:view');
 
   const loadStats = useCallback(async (minimumSpinMs = 0) => {
     const startedAt = Date.now();
@@ -203,14 +206,18 @@ export const UserDashboard: React.FC<UserDashboardProps> = ({ currentPreset }) =
   }, []);
 
   useEffect(() => {
-    void loadStats();
-  }, [loadStats]);
+    if (canViewDashboard) void loadStats();
+  }, [canViewDashboard, loadStats]);
 
   const roleTotal = useMemo(
     () => stats?.roleDistribution.reduce((sum, item) => sum + item.count, 0) || 0,
     [stats],
   );
   const growth = stats?.summary.growthRate || 0;
+
+  if (!canViewDashboard) {
+    return <PermissionEmptyState currentPreset={currentPreset} description="暂无访问数据仪表盘的权限" />;
+  }
 
   if (loading && !stats) {
     return (

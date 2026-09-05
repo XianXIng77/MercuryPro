@@ -196,14 +196,51 @@ class MercuryAuthTests(unittest.TestCase):
         required = mercury_auth.required_permission_for_request
 
         self.assertEqual(required("/api/microsoft/accounts", "GET"), "email:view")
+        self.assertEqual(required("/api/microsoft/accounts/import", "POST"), "email:create")
+        self.assertEqual(required("/api/microsoft/accounts/140/refresh-token", "POST"), "email:refresh")
+        self.assertEqual(required("/api/microsoft/accounts/140", "DELETE"), "email:delete")
+        self.assertEqual(required("/api/microsoft/accounts", "DELETE"), "email:delete")
+        self.assertEqual(required("/api/microsoft/accounts/140/messages", "GET"), "email:messages")
+        self.assertEqual(required("/api/microsoft/accounts/140/messages/msg-1", "GET"), "email:detail")
+        self.assertEqual(required("/api/microsoft/public/mailboxes/signed/messages", "GET"), "email:messages")
+        self.assertEqual(required("/api/microsoft/public/mailboxes/signed/messages/msg-1", "GET"), "email:detail")
         self.assertEqual(required("/api/grok/register", "POST"), "register:run")
+        self.assertEqual(required("/api/grok/config", "PUT"), "register:config")
+        self.assertEqual(required("/api/grok/chatgpt/accounts/access-tokens", "POST"), "register:token:read")
+        self.assertEqual(required("/api/grok/chatgpt/accounts", "GET"), "register:resource")
+        self.assertEqual(required("/api/grok/mail/hotmail/accounts", "GET"), "register:resource")
+        self.assertEqual(required("/api/grok/performance", "GET"), "register:tools")
+
         self.assertEqual(required("/api/grok/sessions", "GET"), "register:view")
         self.assertEqual(required("/api/invite-codes", "GET"), "invite:view")
-        self.assertEqual(required("/api/invite-codes", "POST"), "invite:manage")
+        self.assertEqual(required("/api/invite-codes", "POST"), "invite:create")
+        self.assertEqual(required("/api/invite-codes/ABC", "PUT"), "invite:update")
+        self.assertEqual(required("/api/invite-codes/ABC", "DELETE"), "invite:delete")
         self.assertEqual(required("/api/logs", "GET"), "logs:view")
         self.assertEqual(required("/api/audit-logs", "GET"), "audit:view")
+        self.assertEqual(required("/api/auth/profile", "PUT"), "profile:update")
         self.assertEqual(required("/api/unknown", "GET"), "access:manage")
         self.assertIsNone(required("/api/health/live", "GET"))
+    def test_mail_permission_catalog_contains_independent_operations(self) -> None:
+        codes = {str(item.get("code")) for item in mercury_auth.PERMISSION_DEFINITIONS}
+        self.assertTrue(
+            {
+                "email:view",
+                "email:messages",
+                "email:detail",
+                "email:refresh",
+                "email:create",
+                "email:delete",
+            }.issubset(codes)
+        )
+        labels = {
+            str(item.get("code")): str(item.get("label"))
+            for item in mercury_auth.PERMISSION_DEFINITIONS
+        }
+        self.assertEqual(labels["email:view"], "查询邮箱")
+        self.assertEqual(labels["email:refresh"], "刷新 Token")
+        self.assertEqual(labels["email:create"], "新增邮箱")
+        self.assertEqual(labels["email:delete"], "删除邮箱")
 
     def test_menu_grant_implies_its_view_permission(self) -> None:
         profile = mercury_auth.access_profile({
@@ -285,5 +322,3 @@ class _FakeResponse:
 class _FakeRequest:
     def __init__(self, cookies: dict[str, str]) -> None:
         self.cookies = cookies
-
-

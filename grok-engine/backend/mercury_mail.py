@@ -626,6 +626,21 @@ async def list_messages(
             headers={"Authorization": f"Bearer {access_token}"},
             params={"$top": str(top), "$orderby": "ReceivedDateTime desc"},
         )
+        # List access must not expose content protected by the detail endpoint.
+        # Outlook and Microsoft Graph use different casing for these fields.
+        data = dict(data)
+        for collection_key in ("value", "Value"):
+            if isinstance(data.get(collection_key), list):
+                data[collection_key] = [
+                    {
+                        key: value
+                        for key, value in message.items()
+                        if key.lower() not in {"body", "uniquebody", "attachments"}
+                    }
+                    if isinstance(message, dict)
+                    else message
+                    for message in data[collection_key]
+                ]
         return {"code": 200, "data": data}
     except Exception as exc:
         return _error_response(exc)

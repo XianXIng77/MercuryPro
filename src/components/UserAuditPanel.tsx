@@ -9,6 +9,7 @@ import { OperationAuditLog, OperationAuditSummary, operationLogsApi } from '../a
 import { useToast } from './Toast';
 import { Tooltip } from './Tooltip';
 import { Pagination } from './Pagination';
+import { PermissionEmptyState } from './PermissionEmptyState';
 
 const ACTIONS = ['全部', '登录', '退出登录', '注册', '新增', '执行', '修改', '修改个人资料', '修改密码', '删除', '导出', '权限变更'];
 const AUDIT_DEFAULT_PAGE_SIZE = 10;
@@ -34,7 +35,7 @@ const geoDetails = (geo: OperationAuditLog['geo']) => [
   geo?.latitude != null && geo?.longitude != null ? `坐标：${geo.latitude}, ${geo.longitude}` : '',
 ].filter(Boolean).join(' · ') || '位置未知';
 
-export const UserAuditPanel: React.FC<{ currentPreset: StylePreset }> = ({ currentPreset }) => {
+export const UserAuditPanel: React.FC<{ currentPreset: StylePreset; canQuery?: boolean }> = ({ currentPreset, canQuery = true }) => {
   const theme = currentPreset.themeClasses;
   const isDark = currentPreset.mode === 'dark';
   const [query, setQuery] = useState('');
@@ -56,6 +57,7 @@ export const UserAuditPanel: React.FC<{ currentPreset: StylePreset }> = ({ curre
 
   useEffect(() => {
     let cancelled = false;
+    if (!canQuery) { setLoading(false); return () => { cancelled = true; }; }
     setLoading(true);
     setError('');
     operationLogsApi.list({ q: query.trim(), action, status, limit: pageSize, offset: (page - 1) * pageSize })
@@ -70,7 +72,7 @@ export const UserAuditPanel: React.FC<{ currentPreset: StylePreset }> = ({ curre
       })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [action, page, pageSize, query, refreshKey, status]);
+  }, [action, canQuery, page, pageSize, query, refreshKey, status]);
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
@@ -107,6 +109,10 @@ export const UserAuditPanel: React.FC<{ currentPreset: StylePreset }> = ({ curre
     riskAttention: isDark ? 'bg-orange-950/70 text-orange-100 border-orange-700/80' : 'bg-orange-100 text-orange-900 border-orange-300',
     riskNormal: isDark ? 'bg-slate-800 text-slate-100 border-slate-600' : 'bg-slate-200 text-slate-800 border-slate-400',
   };
+
+  if (!canQuery) {
+    return <PermissionEmptyState currentPreset={currentPreset} description="暂无访问操作审计的权限" />;
+  }
 
   return (
     <div data-audit-panel={isDark ? 'dark' : 'light'} className={`flex h-full flex-1 flex-col overflow-hidden ${theme.appBg}`}>

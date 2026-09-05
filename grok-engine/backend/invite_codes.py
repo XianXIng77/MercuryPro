@@ -122,6 +122,13 @@ def list_invite_codes(keyword: str = "", page: int = 1, page_size: int = 10, sta
     }
 
 
+def export_invite_codes(codes: list[str]) -> dict[str, Any]:
+    requested = {str(code or "").strip().upper() for code in codes if str(code or "").strip()}
+    with _lock:
+        records = _load_unlocked()
+    selected = [str(item.get("code") or "") for item in records if str(item.get("code") or "").upper() in requested]
+    return {"ok": True, "codes": selected}
+
 def generate_invite_codes(count: int = 1, max_uses: int = 1) -> dict[str, Any]:
     count = max(1, min(int(count or 1), 50))
     max_uses = max(1, min(int(max_uses or 1), 1000))

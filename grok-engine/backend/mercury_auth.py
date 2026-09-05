@@ -86,16 +86,50 @@ def _load_menu_registry() -> list[dict[str, Any]]:
 MENU_DEFINITIONS = _load_menu_registry()
 
 
+def _menu_permission_definitions(menu_definitions: list[dict[str, Any]]) -> list[dict[str, str]]:
+    definitions: list[dict[str, str]] = []
+    for menu in menu_definitions:
+        raw_permissions = menu.get("permissions", [])
+        if isinstance(raw_permissions, dict):
+            raw_permissions = [{"code": code, "label": label} for code, label in raw_permissions.items()]
+        if not isinstance(raw_permissions, list):
+            continue
+        for raw in raw_permissions:
+            if isinstance(raw, str):
+                code, item = raw.strip(), {}
+            elif isinstance(raw, dict):
+                code, item = str(raw.get("code") or "").strip(), raw
+            else:
+                continue
+            if code:
+                definitions.append({"code": code, "label": str(item.get("label") or item.get("permissionLabel") or f"操作{menu.get('label', '')}"), "group": str(item.get("group") or menu.get("group") or "工作台")})
+    return definitions
+
+
 PERMISSION_DEFINITIONS: list[dict[str, str]] = [
     {"code": "dashboard:view", "label": "查询数据仪表盘", "group": "工作台"},
-    {"code": "email:view", "label": "查询邮箱管理", "group": "工作台"},
+    {"code": "email:view", "label": "查询邮箱", "group": "邮箱管理"},
+    {"code": "email:messages", "label": "查询收件邮件", "group": "邮箱公开接口"},
+    {"code": "email:detail", "label": "查询邮件详情", "group": "邮箱公开接口"},
+    {"code": "email:refresh", "label": "刷新 Token", "group": "邮箱管理"},
+    {"code": "email:create", "label": "新增邮箱", "group": "邮箱管理"},
+    {"code": "email:delete", "label": "删除邮箱", "group": "邮箱管理"},
     {"code": "register:view", "label": "查询 AI 注册", "group": "注册中心"},
-    {"code": "register:run", "label": "执行账号注册", "group": "注册中心"},
+    {"code": "register:config", "label": "AI 注册配置", "group": "注册中心"},
+    {"code": "register:run", "label": "AI 注册执行", "group": "注册中心"},
+    {"code": "register:resource", "label": "AI 注册资源管理", "group": "注册中心"},
+    {"code": "register:tools", "label": "AI 注册导入与工具", "group": "注册中心"},
+    {"code": "register:token:read", "label": "AI 注册 Token 查看", "group": "注册中心"},
     {"code": "invite:view", "label": "查询邀请码", "group": "系统管理"},
+    {"code": "invite:create", "label": "生成邀请码", "group": "邀请码管理"},
+    {"code": "invite:update", "label": "修改邀请码", "group": "邀请码管理"},
+    {"code": "invite:delete", "label": "销毁邀请码", "group": "邀请码管理"},
+    {"code": "invite:export", "label": "导出邀请码", "group": "邀请码管理"},
     {"code": "invite:manage", "label": "管理邀请码", "group": "系统管理"},
-    {"code": "logs:view", "label": "查询注册日志", "group": "审计中心"},
-    {"code": "audit:view", "label": "查询操作审计", "group": "审计中心"},
+    {"code": "logs:view", "label": "注册日志查询", "group": "审计中心"},
+    {"code": "audit:view", "label": "操作日志查询", "group": "审计中心"},
     {"code": "access:manage", "label": "管理角色与权限", "group": "系统管理"},
+    {"code": "profile:update", "label": "材料修改权限", "group": "个人中心"},
 ]
 
 # Every registered menu automatically contributes its view permission to the catalog.
@@ -103,10 +137,40 @@ _registered_permissions = {str(item["permission"]): item for item in MENU_DEFINI
 for _permission, _menu in reversed(list(_registered_permissions.items())):
     if not any(str(item.get("code")) == _permission for item in PERMISSION_DEFINITIONS):
         PERMISSION_DEFINITIONS.insert(0, {"code": _permission, "label": str(_menu.get("permissionLabel") or f"查看{_menu.get('label', '')}"), "group": str(_menu.get("group") or "工作台")})
+for _permission in reversed(_menu_permission_definitions(MENU_DEFINITIONS)):
+    if not any(str(item.get("code")) == _permission["code"] for item in PERMISSION_DEFINITIONS):
+        PERMISSION_DEFINITIONS.insert(0, _permission)
 
 
 def _roles_file() -> Path:
     return DATA_DIRECTORY / "roles.json"
+
+
+def _public_permissions_file() -> Path:
+    return DATA_DIRECTORY / "public-permissions.json"
+
+
+def _load_public_permissions() -> set[str]:
+    defaults = {"email:messages", "email:detail"}
+    path = _public_permissions_file()
+    try:
+        parsed = json.loads(path.read_text(encoding="utf-8"))
+        values = parsed.get("permissions", []) if isinstance(parsed, dict) else parsed
+        if isinstance(values, list):
+            return set(_clean_access_values(values, set(_all_permission_codes())))
+    except (OSError, json.JSONDecodeError):
+        pass
+    return defaults & set(_all_permission_codes())
+
+
+def _save_public_permissions(values: list[str]) -> None:
+    path = _public_permissions_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"permissions": values}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def permission_is_public(permission: str) -> bool:
+    return str(permission or "") in _load_public_permissions()
 
 
 def _all_menu_keys() -> list[str]:
@@ -120,16 +184,14 @@ def _all_permission_codes() -> list[str]:
 def _default_roles() -> dict[str, dict[str, Any]]:
     all_menus = _all_menu_keys()
     all_permissions = _all_permission_codes()
-    built_in_menus = ["dashboard", "email", "register", "invite", "logs", "audit", "access"]
-    built_in_permissions = [item for item in all_permissions if item.split(":", 1)[0] in set(built_in_menus)]
     return {
         "admin": {
             "key": "admin",
             "label": "管理员",
             "description": "可以访问工作台全部模块并管理系统授权。",
             "color": "violet",
-            "menuKeys": [key for key in all_menus if key in built_in_menus],
-            "permissions": built_in_permissions,
+            "menuKeys": list(all_menus),
+            "permissions": list(all_permissions),
         },
         "user": {
             "key": "user",
@@ -280,6 +342,12 @@ class UserAccessPayload(BaseModel):
     extraPermissions: list[str] = Field(default_factory=list)
     removedMenus: list[str] = Field(default_factory=list)
     removedPermissions: list[str] = Field(default_factory=list)
+
+
+class PublicPermissionsPayload(BaseModel):
+    permissions: list[str] = Field(default_factory=list)
+
+
 class ProfilePayload(BaseModel):
     username: str = Field(min_length=1, max_length=32)
     phone: str = Field(default="", max_length=32)
@@ -593,11 +661,63 @@ def required_permission_for_request(path: str, method: str) -> str | None:
     if normalized == "/api/health/live":
         return None
     if normalized.startswith("/api/microsoft/public/mailboxes/"):
-        return None
+        suffix = normalized[len("/api/microsoft/public/mailboxes/"):].strip("/").split("/")
+        if len(suffix) >= 3 and suffix[-2] == "messages":
+            return "email:detail"
+        return "email:messages"
+    if normalized == "/api/microsoft/accounts" or normalized.startswith("/api/microsoft/accounts/"):
+        suffix = normalized[len("/api/microsoft/accounts"):].strip("/").split("/")
+        # Mailbox listing is the read permission; import and destructive account
+        # operations have dedicated grants so they can be assigned independently.
+        if normalized == "/api/microsoft/accounts":
+            return "email:delete" if verb == "DELETE" else "email:view"
+        if suffix and suffix[0] == "import":
+            return "email:create" if verb in {"POST", "PUT", "PATCH"} else "email:view"
+        if suffix and suffix[-1] == "refresh-token":
+            return "email:refresh"
+        if suffix and suffix[-1] == "status":
+            return "email:view"
+        if "messages" in suffix:
+            return "email:detail" if len(suffix) >= 3 and suffix[-2] == "messages" else "email:messages"
+        if verb == "DELETE":
+            return "email:delete"
+        return "email:view"
+    # AI registration API permissions are intentionally explicit so the
+    # registration page can grant read, configuration, execution, resources,
+    # tools, and token visibility independently.
+    if normalized == "/api/config" or normalized.startswith("/api/config/"):
+        return "register:config"
+    if normalized == "/api/register":
+        return "register:run"
+    if normalized == "/api/sessions":
+        return "register:view" if verb in _READ_METHODS else "register:run"
+    if normalized.startswith("/api/sessions/"):
+        suffix = normalized[len("/api/sessions/"):]
+        if verb in _READ_METHODS and not any(token in suffix for token in ("/stop", "/retry", "/reset")):
+            return "register:view"
+        return "register:run"
+    if normalized == "/api/batches" or normalized.startswith("/api/batches/"):
+        return "register:view" if verb in _READ_METHODS else "register:run"
+    if normalized == "/api/chatgpt/accounts/access-tokens" or (normalized.startswith("/api/chatgpt/sessions/") and normalized.endswith("/access-token")):
+        return "register:token:read"
+    if normalized == "/api/chatgpt/accounts" or normalized.startswith("/api/chatgpt/accounts/"):
+        return "register:resource"
+    if normalized == "/api/chatgpt" or normalized.startswith("/api/chatgpt/"):
+        return "register:view" if verb in _READ_METHODS else "register:resource"
+    if normalized == "/api/account-rotation" or normalized.startswith("/api/account-rotation/"):
+        return "register:resource"
+    if normalized == "/api/mail/domain/test" or normalized.startswith("/api/solver") or normalized.startswith("/api/proxy") or normalized.startswith("/api/performance") or normalized.startswith("/api/sub2api") or normalized.startswith("/api/smsbower") or normalized.startswith("/api/import") or normalized.startswith("/api/browser-debug"):
+        return "register:tools"
+    if normalized == "/api/mail/hotmail/test":
+        return "register:tools"
+    if normalized == "/api/mail" or normalized.startswith("/api/mail/"):
+        return "register:resource" if "/hotmail" in normalized else "register:config"
     if normalized == "/api/auth/stats":
         return "dashboard:view"
     if normalized.startswith("/api/auth/access/"):
         return "access:manage"
+    if normalized == "/api/auth/profile" and verb in {"PUT", "PATCH", "POST"}:
+        return "profile:update"
     for menu in MENU_DEFINITIONS:
         menu_path = str(menu.get("path") or "").rstrip("/")
         if menu_path and (normalized == menu_path or normalized.startswith(menu_path + "/")):
@@ -613,7 +733,19 @@ def required_permission_for_request(path: str, method: str) -> str | None:
     if normalized == "/api/audit-logs" or normalized.startswith("/api/audit-logs/"):
         return "audit:view"
     if normalized == "/api/invite-codes" or normalized.startswith("/api/invite-codes/"):
-        return "invite:view" if verb in _READ_METHODS else "invite:manage"
+        suffix = normalized[len("/api/invite-codes"):].strip("/")
+        if suffix == "export" and verb == "POST":
+            return "invite:export"
+        if not suffix:
+            if verb == "POST":
+                return "invite:create"
+            if verb == "GET":
+                return "invite:view"
+        elif verb == "PUT":
+            return "invite:update"
+        elif verb == "DELETE":
+            return "invite:delete"
+        return "invite:view"
     if normalized == "/browser-debug" or normalized.startswith("/browser-debug/"):
         return "register:view"
     if any(normalized == prefix or normalized.startswith(prefix + "/") for prefix in _REGISTRATION_PREFIXES):
@@ -706,7 +838,7 @@ async def menus(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, A
 
 
 @router.put("/profile")
-async def update_profile(payload: ProfilePayload, request: Request = None, user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+async def update_profile(payload: ProfilePayload, request: Request = None, user: dict[str, Any] = Depends(require_permission("profile:update"))) -> dict[str, Any]:
     from operation_logs import record_operation
     users = _load_users()
     target = next((item for item in users if str(item.get("email", "")).strip().lower() == str(user.get("email", "")).strip().lower()), None)
@@ -719,7 +851,7 @@ async def update_profile(payload: ProfilePayload, request: Request = None, user:
     target["avatar"] = _normalize_avatar_data(payload.avatar)
     _save_users(users)
     updated = _public_user(target)
-    record_operation(request=request, action="修改个人资料", status_code=200, user=updated, detail="更新个人中心资料", module="个人中心")
+    record_operation(request=request, action="材料修改权限", status_code=200, user=updated, detail="更新个人中心资料", module="个人中心")
     return {"user": updated}
 
 
@@ -743,7 +875,26 @@ async def update_password(payload: PasswordPayload, request: Request = None, use
     return {"ok": True}
 @router.get("/access/catalog")
 async def access_catalog(_admin: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
-    return {"menus": [dict(item) for item in MENU_DEFINITIONS], "permissions": [dict(item) for item in PERMISSION_DEFINITIONS]}
+    public = _load_public_permissions()
+    permissions = [{**item, "isPublic": str(item["code"]) in public} for item in PERMISSION_DEFINITIONS]
+    return {"menus": [dict(item) for item in MENU_DEFINITIONS], "permissions": permissions}
+
+
+@router.put("/access/public-permissions")
+async def update_public_permissions(
+    payload: PublicPermissionsPayload,
+    _admin: dict[str, Any] = Depends(require_admin),
+    request: Request = None,
+) -> dict[str, Any]:
+    from operation_logs import record_operation
+    permissions = _clean_access_values(payload.permissions, set(_all_permission_codes()))
+    _save_public_permissions(permissions)
+    record_operation(
+        request=request, action="权限变更", status_code=200, user=_admin,
+        module="权限中心", risk="高风险",
+        detail="更新公开接口：" + json.dumps(permissions, ensure_ascii=False),
+    )
+    return {"permissions": permissions}
 
 
 @router.get("/access/roles")
@@ -859,4 +1010,3 @@ async def user_stats(
 ) -> dict[str, Any]:
     """返回用户数量、近 30 天趋势、周注册量和角色占比。"""
     return build_user_stats()
-

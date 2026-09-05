@@ -6,11 +6,13 @@ import {
 } from 'lucide-react';
 import { AuthUser, authApi } from '../api/auth';
 import { StylePreset } from '../types';
+import { useToast } from './Toast';
 
 interface PersonalCenterProps {
   currentUser: AuthUser;
   currentPreset: StylePreset;
   onUserUpdate: (user: AuthUser) => void;
+  permissionCodes?: string[];
   onSelectPreset: (presetId: StylePreset['id']) => void;
 }
 
@@ -55,9 +57,11 @@ const prepareAvatar = (file: File) => new Promise<string>((resolve, reject) => {
 });
 
 
-export const PersonalCenter: React.FC<PersonalCenterProps> = ({ currentUser, currentPreset, onUserUpdate, onSelectPreset }) => {
+export const PersonalCenter: React.FC<PersonalCenterProps> = ({ currentUser, currentPreset, permissionCodes = [], onUserUpdate, onSelectPreset }) => {
   const theme = currentPreset.themeClasses;
   const isDark = currentPreset.mode === 'dark';
+  const canUpdateProfile = permissionCodes.includes('profile:update');
+  const toast = useToast();
   const [section, setSection] = useState<SectionId>('profile');
   const [profile, setProfile] = useState({ username: currentUser.username || '', phone: currentUser.phone || '', bio: currentUser.bio || '', avatarColor: currentUser.avatarColor || 'blue', avatar: currentUser.avatar || '' });
   const [saving, setSaving] = useState(false);
@@ -93,6 +97,7 @@ export const PersonalCenter: React.FC<PersonalCenterProps> = ({ currentUser, cur
 
   const saveProfile = async (event: React.FormEvent) => {
     event.preventDefault();
+    if (!canUpdateProfile) { toast.error('无权限'); return; }
     setSaving(true); setSaved(false); setProfileError('');
     try {
       const result = await authApi.updateProfile(profile);
@@ -160,7 +165,7 @@ export const PersonalCenter: React.FC<PersonalCenterProps> = ({ currentUser, cur
                 </div>
                 <div className="grid gap-4 sm:grid-cols-2"><label className="space-y-1.5"><span className={`text-xs font-bold ${theme.textPrimary}`}>显示名称</span><input value={profile.username} onChange={e => setProfile({ ...profile, username: e.target.value })} required maxLength={32} className={`w-full rounded-xl border px-3 py-2.5 text-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/15 ${isDark ? 'border-slate-600 bg-slate-900/40' : 'border-slate-200 bg-white/60'} ${theme.textPrimary}`} /></label><label className="space-y-1.5"><span className={`text-xs font-bold ${theme.textPrimary}`}>登录邮箱</span><input value={currentUser.email} disabled className={`w-full cursor-not-allowed rounded-xl border px-3 py-2.5 text-sm opacity-65 ${isDark ? 'border-slate-700 bg-slate-950/30' : 'border-slate-200 bg-slate-100/60'} ${theme.textPrimary}`} /></label><label className="space-y-1.5"><span className={`text-xs font-bold ${theme.textPrimary}`}>联系电话 <em className="font-normal not-italic opacity-60">（选填）</em></span><input value={profile.phone} onChange={e => setProfile({ ...profile, phone: e.target.value })} placeholder="例如 138 0000 0000" maxLength={32} className={`w-full rounded-xl border px-3 py-2.5 text-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/15 ${isDark ? 'border-slate-600 bg-slate-900/40' : 'border-slate-200 bg-white/60'} ${theme.textPrimary}`} /></label><div className={`flex items-end rounded-xl border p-3 ${isDark ? 'border-slate-700 bg-white/[0.03]' : 'border-slate-200 bg-slate-50/70'}`}><div><p className={`text-[11px] ${theme.textSecondary}`}>当前角色</p><p className={`mt-1 text-sm font-bold ${theme.textPrimary}`}>{currentUser.role === 'admin' ? '系统管理员' : '普通用户'}</p></div><span className="ml-auto rounded-full bg-violet-500/10 px-2.5 py-1 text-[10px] font-bold text-violet-600">已认证</span></div></div>
                 <label className="block space-y-1.5"><span className={`text-xs font-bold ${theme.textPrimary}`}>个人简介 <em className="font-normal not-italic opacity-60">（选填）</em></span><textarea value={profile.bio} onChange={e => setProfile({ ...profile, bio: e.target.value })} maxLength={180} rows={3} placeholder="用一句话介绍你自己或负责的工作" className={`w-full resize-none rounded-xl border px-3 py-2.5 text-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/15 ${isDark ? 'border-slate-600 bg-slate-900/40' : 'border-slate-200 bg-white/60'} ${theme.textPrimary}`} /><span className={`block text-right text-[10px] ${theme.textSecondary}`}>{profile.bio.length}/180</span></label>
-                <div className="flex flex-wrap items-center justify-end gap-3 border-t border-slate-200/50 pt-4 dark:border-slate-700/60">{profileError && <span className="mr-auto text-xs font-semibold text-rose-600">{profileError}</span>}<AnimatePresence>{saved && <motion.span initial={{ opacity: 0, x: 8 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0 }} className="flex items-center gap-1 text-xs font-semibold text-emerald-600"><Check className="h-3.5 w-3.5" />已保存</motion.span>}</AnimatePresence><button disabled={saving} className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-xs font-bold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-wait disabled:opacity-60"><Save className="h-3.5 w-3.5" />{saving ? '保存中…' : '保存资料'}</button></div>
+                <div className="flex flex-wrap items-center justify-end gap-3 border-t border-slate-200/50 pt-4 dark:border-slate-700/60">{profileError && <span className="mr-auto text-xs font-semibold text-rose-600">{profileError}</span>}<AnimatePresence>{saved && <motion.span initial={{ opacity: 0, x: 8 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0 }} className="flex items-center gap-1 text-xs font-semibold text-emerald-600"><Check className="h-3.5 w-3.5" />已保存</motion.span>}</AnimatePresence><button disabled={saving} title={!canUpdateProfile ? '需要修改个人资料权限' : undefined} className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-xs font-bold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-wait disabled:opacity-60"><Save className="h-3.5 w-3.5" />{saving ? '保存中…' : '保存资料'}</button></div>
               </form>
             </motion.section>}
 

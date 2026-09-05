@@ -20,9 +20,11 @@ import { registrationLogsApi, RegistrationLogItem } from '../api/registrationLog
 import { useToast } from './Toast';
 import { Tooltip } from './Tooltip';
 import { Pagination } from './Pagination';
+import { PermissionEmptyState } from './PermissionEmptyState';
 
 interface RegistrationLogsPanelProps {
   currentPreset: StylePreset;
+  canQuery?: boolean;
 }
 const TARGET_LABELS: Record<'grok' | 'openai', string> = {
   grok: 'Grok（xAI）',
@@ -129,7 +131,7 @@ function outcomeTone(stage: string, outcome: string, isDark: boolean): string {
  * - 撑满剩余高度的卡片内滚动展示事件列表,点击卡片展开日志内容(log.txt)
  * - 有截图的事件可查看 screenshot.png
  */
-export const RegistrationLogsPanel: React.FC<RegistrationLogsPanelProps> = ({ currentPreset }) => {
+export const RegistrationLogsPanel: React.FC<RegistrationLogsPanelProps> = ({ currentPreset, canQuery = true }) => {
   const theme = currentPreset.themeClasses;
   const isDark = currentPreset.mode === 'dark';
   const [items, setItems] = useState<RegistrationLogItem[]>([]);
@@ -156,6 +158,7 @@ export const RegistrationLogsPanel: React.FC<RegistrationLogsPanelProps> = ({ cu
   const [screenshotId, setScreenshotId] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
+    if (!canQuery) { setLoading(false); return; }
     setLoading(true);
     setError('');
     try {
@@ -176,7 +179,7 @@ export const RegistrationLogsPanel: React.FC<RegistrationLogsPanelProps> = ({ cu
     } finally {
       setLoading(false);
     }
-  }, [emailFilter, page, pageSize, stageFilter, outcomeFilter, targetFilter]);
+  }, [canQuery, emailFilter, page, pageSize, stageFilter, outcomeFilter, targetFilter]);
 
   useEffect(() => {
     void refresh();
@@ -249,6 +252,10 @@ export const RegistrationLogsPanel: React.FC<RegistrationLogsPanelProps> = ({ cu
   const chipSurface = isDark
     ? 'border-white/[0.09] bg-white/[0.05]'
     : 'border-black/[0.06] bg-black/[0.03]';
+
+  if (!canQuery) {
+    return <PermissionEmptyState currentPreset={currentPreset} description="暂无访问注册日志的权限" />;
+  }
 
   return (
     <div className={`flex-1 flex flex-col h-full overflow-hidden ${theme.appBg} text-xs`}>

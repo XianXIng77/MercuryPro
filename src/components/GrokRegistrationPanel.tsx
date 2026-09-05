@@ -842,31 +842,61 @@ const ROTATION_PAGE_SIZE_OPTIONS: StyledSelectOption[] = [20, 50, 80].map((size)
   label: `${size} 条`,
 }));
 
-const REGISTER_RUN_METHODS = new Set<string>([
-  'saveConfig', 'start', 'chatgptAccessToken', 'chatgptAccountTokens', 'resetMonitor', 'pauseBatch', 'resumeBatch',
-  'checkProxy', 'sub2apiGroups', 'importHotmail', 'probeHotmail', 'probeHotmailOne', 'updateHotmail',
-  'restoreHotmailUses', 'deleteHotmail', 'deleteHotmailSelected', 'deleteHotmailUsed', 'deleteHotmailUnhealthy',
-  'testHotmail', 'domainMailTest', 'probeRotation', 'probeRotationOne', 'deleteRotation', 'smsbowerBalance', 'smsbowerServices',
-]);
+const REGISTER_PERMISSION_BY_METHOD: Record<string, string> = {
+  health: 'register:view', monitor: 'register:view',
+  config: 'register:config', saveConfig: 'register:config',
+  start: 'register:run', resetMonitor: 'register:run', pauseBatch: 'register:run', resumeBatch: 'register:run',
+  chatgptAccessToken: 'register:token:read', chatgptAccountTokens: 'register:token:read',
+  chatgptAccounts: 'register:resource', rotation: 'register:resource',
+  hotmailAccounts: 'register:resource', importHotmail: 'register:resource', probeHotmail: 'register:resource', probeHotmailOne: 'register:resource', updateHotmail: 'register:resource', restoreHotmailUses: 'register:resource', deleteHotmail: 'register:resource', deleteHotmailSelected: 'register:resource', deleteHotmailUsed: 'register:resource', deleteHotmailUnhealthy: 'register:resource',
+  probeRotation: 'register:resource', probeRotationOne: 'register:resource', deleteRotation: 'register:resource',
+  performance: 'register:tools', detectSolver: 'register:tools', detectProxy: 'register:tools', checkProxy: 'register:tools', sub2apiGroups: 'register:tools', testHotmail: 'register:tools', domainMailTest: 'register:tools', smsbowerBalance: 'register:tools', smsbowerServices: 'register:tools',
+  browserDebugStatus: 'register:tools',
+};
 
 interface Props {
   currentPreset: StylePreset;
+  canView?: boolean;
+  canConfig?: boolean;
   canRun?: boolean;
+  canResource?: boolean;
+  canTools?: boolean;
+  canTokenRead?: boolean;
 }
 
-export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset, canRun = true }) => {
+export const GrokRegistrationPanel: React.FC<Props> = ({
+  currentPreset,
+  canView = true,
+  canConfig = true,
+  canRun = true,
+  canResource = true,
+  canTools = true,
+  canTokenRead = true,
+}) => {
   const theme = currentPreset.themeClasses;
   const isDark = currentPreset.mode === 'dark';
   const toast = useToast();
-  const registrationApi = useMemo(() => canRun ? grokRegistrationApi : new Proxy(grokRegistrationApi, {
+  const grantedPermissions = useMemo(() => new Set([
+    ...(canView ? ['register:view'] : []),
+    ...(canConfig ? ['register:config'] : []),
+    ...(canRun ? ['register:run'] : []),
+    ...(canResource ? ['register:resource'] : []),
+    ...(canTools ? ['register:tools'] : []),
+    ...(canTokenRead ? ['register:token:read'] : []),
+  ]), [canConfig, canResource, canRun, canTokenRead, canTools, canView]);
+  const registrationApi = useMemo(() => new Proxy(grokRegistrationApi, {
     get(target, property, receiver) {
       const value = Reflect.get(target, property, receiver);
-      if (typeof property === 'string' && REGISTER_RUN_METHODS.has(property) && typeof value === 'function') {
-        return () => Promise.reject(new Error('当前账号没有执行权限（需要 register:run）'));
+      const permission = typeof property === 'string' ? REGISTER_PERMISSION_BY_METHOD[property] || 'register:view' : undefined;
+      if (permission && typeof value === 'function' && !grantedPermissions.has(permission)) {
+        return (..._args: unknown[]) => {
+          toast.error('无权限');
+          return Promise.reject(new Error('无权限'));
+        };
       }
       return value;
     },
-  }), [canRun]);
+  }), [grantedPermissions, toast]);
   const [tab, setTab] = useState<ConfigTab>('registration');
   // 域名邮箱配置:初始化时先用浏览器记住的域名 / QQ 邮箱 / 授权码填充,
   // 避免加载后端配置前被默认空值覆盖本地缓存。
@@ -1969,9 +1999,9 @@ export const GrokRegistrationPanel: React.FC<Props> = ({ currentPreset, canRun =
                 <button onClick={() => setPendingConfirmation({ kind: 'delete-rotation', ids: [...rotationSelected] })} disabled={!!busy || !rotationSelected.length} className="px-3 py-2 rounded-lg bg-rose-600 text-white text-xs font-bold flex items-center gap-1.5 disabled:opacity-40">{busy === 'rotation-delete' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}删除所选</button>
                 <button onClick={() => void probeRotation([], true)} disabled={!!busy || !rotation.summary.total} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-xs font-bold flex items-center gap-1.5 disabled:opacity-40">{busy === 'rotation-probe' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Activity className="w-3.5 h-3.5" />}全部激活</button>
               </> : <>
-                <button onClick={() => void save()} disabled={!canRun || !!busy || !serviceOnline} className={`px-3 py-2 rounded-lg border text-xs font-bold flex items-center gap-1.5 ${theme.border} ${theme.textPrimary} disabled:opacity-50`}>{busy === 'save' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}保存配置</button>
-                <button onClick={() => void togglePause()} disabled={!canRun || !!busy || !activeBatches.length} className="px-3 py-2 rounded-lg bg-amber-500 text-white text-xs font-bold flex items-center gap-1.5 disabled:opacity-40">{busy === 'pause' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : pausedBatches.length ? <Play className="w-3.5 h-3.5" /> : <Pause className="w-3.5 h-3.5" />}{pausedBatches.length ? '继续注册' : '暂停注册'}</button>
-                <button onClick={() => void start()} disabled={!canRun || !!busy || !serviceOnline || !mailReady || !checkoutProbeReady || !inviteCodeReady} className="px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold flex items-center gap-1.5 disabled:opacity-50">{busy === 'start' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}开始注册</button>
+                <button onClick={() => void save()} disabled={!!busy || !serviceOnline} className={`px-3 py-2 rounded-lg border text-xs font-bold flex items-center gap-1.5 ${theme.border} ${theme.textPrimary} disabled:opacity-50`}>{busy === 'save' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}保存配置</button>
+                <button onClick={() => void togglePause()} disabled={!!busy || !activeBatches.length} className="px-3 py-2 rounded-lg bg-amber-500 text-white text-xs font-bold flex items-center gap-1.5 disabled:opacity-40">{busy === 'pause' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : pausedBatches.length ? <Play className="w-3.5 h-3.5" /> : <Pause className="w-3.5 h-3.5" />}{pausedBatches.length ? '继续注册' : '暂停注册'}</button>
+                <button onClick={() => void start()} disabled={!!busy || !serviceOnline || !mailReady || !checkoutProbeReady || !inviteCodeReady} className="px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold flex items-center gap-1.5 disabled:opacity-50">{busy === 'start' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}开始注册</button>
               </>}
             </div>
           </div>

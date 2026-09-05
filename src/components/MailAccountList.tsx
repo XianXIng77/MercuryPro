@@ -32,10 +32,12 @@ import { ConfirmDialog } from './ConfirmDialog';
 import { useToast } from './Toast';
 import { Tooltip } from './Tooltip';
 import { Pagination } from './Pagination';
+import { PermissionEmptyState } from './PermissionEmptyState';
 
 interface MailAccountListProps {
   onOpenAccountInbox: (account: MailAccount) => void;
   currentPreset: StylePreset;
+  permissionCodes?: string[];
 }
 
 type RefreshState = { status: 'loading' | 'success' | 'error'; message?: string };
@@ -44,9 +46,15 @@ type ImportSummary = { total: number; added: number; skipped: number; failed: nu
 export const MailAccountList: React.FC<MailAccountListProps> = ({
   onOpenAccountInbox,
   currentPreset,
+  permissionCodes = [],
 }) => {
   const theme = currentPreset.themeClasses;
   const isDark = currentPreset.mode === 'dark';
+  const canQueryAccounts = permissionCodes.includes('email:view');
+  const canReadMessages = permissionCodes.includes('email:messages');
+  const canRefreshToken = permissionCodes.includes('email:refresh');
+  const canCreateAccount = permissionCodes.includes('email:create');
+  const canDeleteAccount = permissionCodes.includes('email:delete');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const toast = useToast();
 
@@ -55,7 +63,8 @@ export const MailAccountList: React.FC<MailAccountListProps> = ({
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState('');
+  const latestLoadRequest = useRef(0);
+  const activeLoadKey = useRef<string | null>(null);
 
   const [emailDraft, setEmailDraft] = useState('');
   const [statusDraft, setStatusDraft] = useState<'all' | '0' | '2' | '1'>('all');
@@ -80,8 +89,12 @@ export const MailAccountList: React.FC<MailAccountListProps> = ({
   const showToast = useCallback((message: string) => toast.success(message), [toast]);
 
   const loadAccounts = useCallback(async () => {
+    if (!canQueryAccounts) { setAccounts([]); setTotalItems(0); setLoading(false); return; }
+    const queryKey = JSON.stringify([currentPage, pageSize, filters.email, filters.status]);
+    if (activeLoadKey.current === queryKey) return;
+    activeLoadKey.current = queryKey;
+    const requestId = ++latestLoadRequest.current;
     setLoading(true);
-    setLoadError('');
     try {
       const result = await listMicrosoftMailAccounts({
         pageNum: currentPage,
@@ -89,6 +102,7 @@ export const MailAccountList: React.FC<MailAccountListProps> = ({
         email: filters.email || undefined,
         status: filters.status === 'all' ? undefined : filters.status,
       });
+      if (requestId !== latestLoadRequest.current) return;
       setAccounts(result.rows);
       setTotalItems(result.total);
       setSelectedIds([]);
@@ -96,13 +110,15 @@ export const MailAccountList: React.FC<MailAccountListProps> = ({
         setCurrentPage(Math.ceil(result.total / pageSize));
       }
     } catch (error: any) {
+      if (requestId !== latestLoadRequest.current) return;
       setAccounts([]);
       setTotalItems(0);
-      setLoadError(error.message || '邮箱账号加载失败');
+      toast.error(error.message || '邮箱账号加载失败');
     } finally {
-      setLoading(false);
+      if (activeLoadKey.current === queryKey) activeLoadKey.current = null;
+      if (requestId === latestLoadRequest.current) setLoading(false);
     }
-  }, [currentPage, filters, pageSize]);
+  }, [canQueryAccounts, currentPage, filters, pageSize, toast]);
 
   useEffect(() => {
     void loadAccounts();
@@ -182,6 +198,10 @@ export const MailAccountList: React.FC<MailAccountListProps> = ({
   };
 
   const refreshOne = async (account: MailAccount, quiet = false) => {
+    if (!canRefreshToken) {
+      if (!quiet) toast.error('无权限');
+      return false;
+    }
     setRefreshStates((previous) => ({ ...previous, [account.id]: { status: 'loading' } }));
     try {
       const result = await refreshMicrosoftToken(account.accountId || account.id);
@@ -198,6 +218,7 @@ export const MailAccountList: React.FC<MailAccountListProps> = ({
   };
 
   const handleBulkRefresh = async () => {
+    if (!canRefreshToken) { toast.error('无权限'); return; }
     const targets = selectedIds.length > 0 ? accounts.filter((item) => selectedIds.includes(item.id)) : accounts;
     if (targets.length === 0) return showToast('当前没有可刷新的账号');
     setIsBulkRefreshing(true);
@@ -211,6 +232,7 @@ export const MailAccountList: React.FC<MailAccountListProps> = ({
   };
 
   const handleDelete = async (items: MailAccount[]) => {
+    if (!canDeleteAccount) { toast.error('无权限'); return; }
     if (!items.length) return;
     setIsDeletingAccount(true);
     try {
@@ -227,6 +249,7 @@ export const MailAccountList: React.FC<MailAccountListProps> = ({
 
   const handleImport = async (event: React.FormEvent) => {
     event.preventDefault();
+    if (!canCreateAccount) return toast.error('无权限');
     const file = importMode === 'file' ? importFile : batchText.trim()
       ? new File([batchText], 'outlook-import.txt', { type: 'text/plain' })
       : null;
@@ -257,6 +280,10 @@ export const MailAccountList: React.FC<MailAccountListProps> = ({
       setIsImporting(false);
     }
   };
+
+  if (!canQueryAccounts) {
+    return <PermissionEmptyState currentPreset={currentPreset} description="暂无访问邮箱管理的权限" />;
+  }
 
   return (
     <div className={`flex-1 flex flex-col h-full overflow-hidden ${theme.appBg} text-xs`}>
@@ -299,20 +326,20 @@ export const MailAccountList: React.FC<MailAccountListProps> = ({
       <div className={`m-3 flex-1 min-h-0 flex flex-col overflow-hidden rounded-2xl ${theme.cardBg} ${theme.shadow}`}>
         <div className={`px-4 py-3 border-b flex flex-wrap items-center justify-between gap-3 ${theme.border} ${isDark ? 'bg-white/[0.025]' : 'bg-white/30'}`}>
           <div className="flex items-center gap-2.5">
-            <button onClick={() => { setShowAddModal(true); setImportSummary(null); }} className="px-3 py-1.5 rounded-lg border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 font-semibold flex items-center gap-1">
+            <button title={!canCreateAccount ? '需要新增邮箱权限' : undefined} onClick={() => { if (!canCreateAccount) { toast.error('无权限'); return; } setShowAddModal(true); setImportSummary(null); }} className="px-3 py-1.5 rounded-lg border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 font-semibold flex items-center gap-1">
               <Plus className="w-4 h-4" />新增
             </button>
             <a href="https://wmemail.com/products/outlookbm" target="_blank" rel="noopener noreferrer" className="px-3 py-1.5 rounded-lg border border-violet-200 bg-violet-50 text-violet-700 hover:bg-violet-100 font-semibold flex items-center gap-1">
               <ShoppingCart className="w-4 h-4" />购买邮箱
             </a>
-            <button disabled={isBulkRefreshing || accounts.length === 0} onClick={handleBulkRefresh} className="px-3 py-1.5 rounded-lg border border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100 disabled:opacity-50 font-semibold flex items-center gap-1">
+            <button disabled={isBulkRefreshing || accounts.length === 0} title={!canRefreshToken ? '需要刷新 Token 权限' : undefined} onClick={() => void handleBulkRefresh()} className="px-3 py-1.5 rounded-lg border border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100 disabled:opacity-50 font-semibold flex items-center gap-1">
               <RefreshCw className={`w-4 h-4 ${isBulkRefreshing ? 'animate-spin' : ''}`} />
               {selectedIds.length > 0 ? `刷新选中 (${selectedIds.length})` : '批量刷新Token'}
             </button>
             <button onClick={() => openAccountData(accounts.filter((item) => selectedIds.includes(item.id)))} disabled={selectedIds.length === 0} className="px-3 py-1.5 rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 disabled:opacity-50 font-semibold flex items-center gap-1">
               <FileText className="w-4 h-4" />获取选中账号
             </button>
-            <button onClick={() => setPendingDeleteAccounts(accounts.filter((item) => selectedIds.includes(item.id)))} disabled={selectedIds.length === 0} className="px-3 py-1.5 rounded-lg border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 disabled:opacity-50 font-semibold flex items-center gap-1">
+            <button onClick={() => { if (!canDeleteAccount) { toast.error('无权限'); return; } setPendingDeleteAccounts(accounts.filter((item) => selectedIds.includes(item.id))); }} disabled={selectedIds.length === 0} title={!canDeleteAccount ? '需要删除邮箱权限' : undefined} className="px-3 py-1.5 rounded-lg border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 disabled:opacity-50 font-semibold flex items-center gap-1">
               <Trash2 className="w-4 h-4" />删除选中{selectedIds.length > 0 ? ` (${selectedIds.length})` : ''}
             </button>
           </div>
@@ -325,13 +352,6 @@ export const MailAccountList: React.FC<MailAccountListProps> = ({
             </Tooltip>
           </div>
         </div>
-
-        {loadError && (
-          <div className="m-4 p-4 rounded-xl border border-rose-200 bg-rose-50 text-rose-700 flex items-center justify-between gap-4">
-            <div className="flex items-center gap-2"><AlertCircle className="w-5 h-5" /><span>{loadError}</span></div>
-            <button onClick={() => void loadAccounts()} className="px-3 py-1.5 rounded-lg bg-rose-600 text-white font-semibold">重试</button>
-          </div>
-        )}
 
         <div className={`flex-1 min-h-0 overflow-auto ${isDark ? 'bg-black/5' : 'bg-white/15'}`}>
           <table className="w-full min-w-[960px] border-collapse text-left text-sm">
@@ -349,7 +369,7 @@ export const MailAccountList: React.FC<MailAccountListProps> = ({
             <tbody className={`divide-y ${isDark ? 'divide-slate-800' : 'divide-slate-200'}`}>
               {loading ? (
                 <tr><td colSpan={7} className="py-20 text-center"><LoaderCircle className="w-7 h-7 animate-spin text-blue-600 mx-auto mb-2" /><span className={theme.textSecondary}>正在加载真实邮箱数据...</span></td></tr>
-              ) : accounts.length === 0 && !loadError ? (
+              ) : accounts.length === 0 ? (
                 <tr><td colSpan={7} className="py-20 text-center"><Info className="w-8 h-8 text-slate-400 mx-auto mb-2" /><span className={theme.textSecondary}>暂无符合条件的邮箱账号</span></td></tr>
               ) : accounts.map((account) => {
                 const selected = selectedIds.includes(account.id);
@@ -383,10 +403,10 @@ export const MailAccountList: React.FC<MailAccountListProps> = ({
                     </td>
                     <td className={`py-3 px-3 text-center sticky right-0 backdrop-blur-md ${isDark ? 'bg-black/10 group-hover:bg-white/5' : 'bg-white/40 group-hover:bg-white/65'}`}>
                       <div className="flex items-center justify-center gap-3 text-xs whitespace-nowrap">
-                        <button onClick={() => onOpenAccountInbox(account)} className="text-blue-600 hover:text-blue-800 font-semibold flex items-center gap-1"><Mail className="w-3.5 h-3.5" />收信</button>
+                        <button title={!canReadMessages ? '需要查询收件邮件权限' : undefined} onClick={() => { if (!canReadMessages) { toast.error('无权限'); return; } onOpenAccountInbox(account); }} className="text-blue-600 hover:text-blue-800 font-semibold flex items-center gap-1"><Mail className="w-3.5 h-3.5" />收信</button>
                         <button onClick={() => openAccountData([account])} className="text-blue-600 hover:text-blue-800 font-semibold flex items-center gap-1"><FileText className="w-3.5 h-3.5" />获取</button>
                         <button disabled={refresh?.status === 'loading'} onClick={() => void refreshOne(account)} className="text-blue-600 hover:text-blue-800 disabled:opacity-50 font-semibold flex items-center gap-1"><RefreshCw className={`w-3.5 h-3.5 ${refresh?.status === 'loading' ? 'animate-spin' : ''}`} />刷新</button>
-                        <button onClick={() => setPendingDeleteAccounts([account])} className="text-blue-600 hover:text-rose-600 font-semibold flex items-center gap-1"><Trash2 className="w-3.5 h-3.5" />删除</button>
+                        <button title={!canDeleteAccount ? '需要删除邮箱权限' : undefined} onClick={() => { if (!canDeleteAccount) { toast.error('无权限'); return; } setPendingDeleteAccounts([account]); }} className="text-blue-600 hover:text-rose-600 font-semibold flex items-center gap-1"><Trash2 className="w-3.5 h-3.5" />删除</button>
                       </div>
                     </td>
                   </tr>

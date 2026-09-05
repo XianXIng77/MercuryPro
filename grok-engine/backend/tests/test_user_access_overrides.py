@@ -39,7 +39,7 @@ class UserAccessOverrideTests(unittest.TestCase):
         app.middleware('http')(operation_logs.audit_request)
 
         @app.get('/api/test-fixture')
-        def protected(user=Depends(auth.require_permission('test-navigation:view'))):
+        def protected(user=Depends(auth.require_permission('logs:view'))):
             return {'ok': True}
 
         self.client = self.stack.enter_context(TestClient(app))
@@ -67,8 +67,8 @@ class UserAccessOverrideTests(unittest.TestCase):
                 saved = self.save(data)
                 endpoints = [saved, self.member_client.get('/api/auth/me').json(), self.member_client.get('/api/auth/menus').json()]
                 for profile in endpoints:
-                    self.assertEqual('test-navigation' in [menu['key'] for menu in profile['menus']], fixture['menuOn'])
-                    self.assertEqual('test-navigation:view' in profile['permissions'], fixture['permissionOn'])
+                    self.assertEqual('logs' in [menu['key'] for menu in profile['menus']], fixture['menuOn'])
+                    self.assertEqual('logs:view' in profile['permissions'], fixture['permissionOn'])
                     self.assertEqual('register:run' in profile['permissions'], fixture['actionOn'])
                 self.assertEqual(self.member_client.get('/api/test-fixture').status_code, 200 if fixture['permissionOn'] else 403)
                 # Reload editing form: raw overrides must not turn into final grants.
@@ -80,9 +80,9 @@ class UserAccessOverrideTests(unittest.TestCase):
                 self.assertEqual(saved['permissions'], saved_again['permissions'])
 
     def test_revocation_wins_over_conflicting_legacy_additions(self):
-        result = self.save({'role': 'user', 'extraMenus': ['test-navigation'], 'extraPermissions': ['test-navigation:view'], 'removedMenus': ['test-navigation'], 'removedPermissions': ['test-navigation:view']})
-        self.assertNotIn('test-navigation', [menu['key'] for menu in result['menus']])
-        self.assertNotIn('test-navigation:view', result['permissions'])
+        result = self.save({'role': 'user', 'extraMenus': ['logs'], 'extraPermissions': ['logs:view'], 'removedMenus': ['logs'], 'removedPermissions': ['logs:view']})
+        self.assertNotIn('logs', [menu['key'] for menu in result['menus']])
+        self.assertNotIn('logs:view', result['permissions'])
 
     def test_raw_role_permissions_are_not_overwritten_by_user_revocations(self):
         result = self.save({'role': 'user', 'removedPermissions': ['email:view']})

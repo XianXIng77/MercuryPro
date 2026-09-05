@@ -4,6 +4,7 @@ export interface PermissionDefinition {
   code: string;
   label: string;
   group: string;
+  isPublic?: boolean;
 }
 
 export interface RoleDefinition {
@@ -43,6 +44,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 export const accessApi = {
   catalog: () => request<{ menus: AuthMenu[]; permissions: PermissionDefinition[] }>('/access/catalog'),
+  updatePublicPermissions: (permissions: string[]) => request<{ permissions: string[] }>('/access/public-permissions', { method: 'PUT', body: JSON.stringify({ permissions }) }),
   roles: () => request<{ items: RoleDefinition[] }>('/access/roles'),
   users: () => request<{ items: AccessUser[] }>('/access/users'),
   user: (email: string) => request<AccessUser>('/access/users/' + encodeURIComponent(email)),

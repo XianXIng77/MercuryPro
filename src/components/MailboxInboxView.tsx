@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import {
   AlertCircle,
@@ -35,7 +35,10 @@ export const MailboxInboxView: React.FC<MailboxInboxViewProps> = ({
   const accountId = account.accountId || account.id;
 
   const [messages, setMessages] = useState<Email[]>([]);
-  const [selectedMessage, setSelectedMessage] = useState<Email | null>(null);
+  const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
+  const [messageDetail, setMessageDetail] = useState<Email | null>(null);
+  const [detailErrorMessage, setDetailErrorMessage] = useState('');
+  const detailRequestId = useRef(0);
   const [inboxSearch, setInboxSearch] = useState('');
   const [filterType, setFilterType] = useState<'all' | 'unread'>('all');
   const [top, setTop] = useState(20);
@@ -50,7 +53,7 @@ export const MailboxInboxView: React.FC<MailboxInboxViewProps> = ({
       const rawMessages = publicAccessToken
         ? (await refreshPublicMicrosoftToken(publicAccessToken), await listPublicMicrosoftMessages(publicAccessToken, top))
         : await listMicrosoftMessages(accountId, top);
-      setMessages(rawMessages.map((item) => mapMicrosoftMessage(item, account.emailAddress)));
+      setMessages(rawMessages.map((item) => ({ ...mapMicrosoftMessage(item, account.emailAddress), body: '' })));
     } catch (error: any) {
       setMessages([]);
       setErrorMessage(error.message || '邮件列表加载失败');
@@ -71,20 +74,42 @@ export const MailboxInboxView: React.FC<MailboxInboxViewProps> = ({
       .some((value) => value.toLowerCase().includes(query));
   }), [filterType, inboxSearch, messages]);
 
-  const handleViewMessage = async (message: Email) => {
-    setSelectedMessage(message);
+  useEffect(() => {
+    setSelectedMessageId(null);
+    setMessageDetail(null);
+    setDetailErrorMessage('');
+    setDetailLoading(false);
+    return () => { detailRequestId.current += 1; };
+  }, [accountId, account.emailAddress, publicAccessToken]);
+
+  const closeMessage = () => {
+    detailRequestId.current += 1;
+    setSelectedMessageId(null);
+    setMessageDetail(null);
+    setDetailErrorMessage('');
+    setDetailLoading(false);
+  };
+
+  const handleViewMessage = async (messageId: string) => {
+    const requestId = ++detailRequestId.current;
+    setSelectedMessageId(messageId);
+    // Only the current successful detail response may supply content.
+    setMessageDetail(null);
     setDetailLoading(true);
-    setErrorMessage('');
+    setDetailErrorMessage('');
     try {
       const raw = publicAccessToken
-        ? await getPublicMicrosoftMessage(publicAccessToken, message.id)
-        : await getMicrosoftMessage(accountId, message.id);
-      setSelectedMessage(mapMicrosoftMessage(raw, account.emailAddress));
-      setMessages((previous) => previous.map((item) => item.id === message.id ? { ...item, isRead: true } : item));
-    } catch (error: any) {
-      setErrorMessage(error.message || '邮件正文加载失败');
+        ? await getPublicMicrosoftMessage(publicAccessToken, messageId)
+        : await getMicrosoftMessage(accountId, messageId);
+      if (requestId !== detailRequestId.current) return;
+      setMessageDetail(mapMicrosoftMessage(raw, account.emailAddress));
+      setMessages((previous) => previous.map((item) => item.id === messageId ? { ...item, isRead: true } : item));
+    } catch (error) {
+      if (requestId !== detailRequestId.current) return;
+      setMessageDetail(null);
+      setDetailErrorMessage(error instanceof Error ? error.message : '邮件正文加载失败');
     } finally {
-      setDetailLoading(false);
+      if (requestId === detailRequestId.current) setDetailLoading(false);
     }
   };
 
@@ -123,7 +148,7 @@ export const MailboxInboxView: React.FC<MailboxInboxViewProps> = ({
 
       <div className="flex-1 min-h-0 flex overflow-hidden relative p-3 sm:p-4">
         <AnimatePresence mode="wait">
-          {!selectedMessage ? (
+          {selectedMessageId === null ? (
             <motion.div
               key="mail-list"
               initial={{ opacity: 0, y: 8 }}
@@ -156,7 +181,7 @@ export const MailboxInboxView: React.FC<MailboxInboxViewProps> = ({
                 ) : visibleMessages.length === 0 && !errorMessage ? (
                   <div className="h-full min-h-64 flex flex-col items-center justify-center gap-2"><Mail className="w-9 h-9 text-slate-400" /><p className={`font-semibold ${theme.textPrimary}`}>暂无邮件</p><span className={theme.textSecondary}>当前账号没有符合条件的邮件</span></div>
                 ) : visibleMessages.map((message) => (
-                  <button key={message.id} onClick={() => void handleViewMessage(message)} className={`w-full p-4 text-left transition-colors ${message.isRead ? isDark ? 'bg-white/[0.01] hover:bg-white/[0.04]' : 'bg-white/20 hover:bg-white/45' : isDark ? 'bg-blue-400/[0.06] hover:bg-white/[0.05]' : 'bg-blue-400/[0.07] hover:bg-white/50'}`}>
+                  <button key={message.id} onClick={() => void handleViewMessage(message.id)} className={`w-full p-4 text-left transition-colors ${message.isRead ? isDark ? 'bg-white/[0.01] hover:bg-white/[0.04]' : 'bg-white/20 hover:bg-white/45' : isDark ? 'bg-blue-400/[0.06] hover:bg-white/[0.05]' : 'bg-blue-400/[0.07] hover:bg-white/50'}`}>
                     <div className="flex items-start gap-3">
                       <span className={`mt-1.5 w-2 h-2 rounded-full shrink-0 ${message.isRead ? 'bg-slate-300' : 'bg-blue-600'}`} />
                       <div className="flex-1 min-w-0">
@@ -175,7 +200,7 @@ export const MailboxInboxView: React.FC<MailboxInboxViewProps> = ({
             </motion.div>
           ) : (
             <motion.div
-              key={`mail-detail-${selectedMessage.id}`}
+              key={`mail-detail-${selectedMessageId}`}
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -8 }}
@@ -183,26 +208,31 @@ export const MailboxInboxView: React.FC<MailboxInboxViewProps> = ({
               className={`flex-1 flex flex-col w-full h-full overflow-hidden rounded-2xl ${theme.cardBg} ${theme.shadow}`}
             >
               <div className={`p-3 border-b flex items-center justify-between gap-3 ${theme.border} ${isDark ? 'bg-white/[0.025]' : 'bg-white/30'}`}>
-                <button onClick={() => { setSelectedMessage(null); setErrorMessage(''); }} className={`px-3 py-2 rounded-xl border text-xs font-bold flex items-center gap-1.5 ${theme.cardBg} ${theme.border} ${theme.textPrimary}`}><ArrowLeft className="w-4 h-4 text-blue-600" />返回邮件列表</button>
+                <button onClick={closeMessage} className={`px-3 py-2 rounded-xl border text-xs font-bold flex items-center gap-1.5 ${theme.cardBg} ${theme.border} ${theme.textPrimary}`}><ArrowLeft className="w-4 h-4 text-blue-600" />返回邮件列表</button>
                 <span className={`font-semibold ${theme.textPrimary}`}>邮件正文详情</span>
-                <button onClick={() => selectedMessage && void handleViewMessage(selectedMessage)} className={`p-2 rounded-lg border ${theme.cardBg} ${theme.border}`} title="重新加载正文"><RefreshCw className={`w-4 h-4 ${detailLoading ? 'animate-spin' : ''}`} /></button>
+                <button onClick={() => void handleViewMessage(selectedMessageId)} disabled={detailLoading} aria-label="重新加载正文" className={`p-2 rounded-lg border ${theme.cardBg} ${theme.border}`} title="重新加载正文"><RefreshCw className={`w-4 h-4 ${detailLoading ? 'animate-spin' : ''}`} /></button>
               </div>
               <div className={`flex-1 min-h-0 overflow-hidden p-3 sm:p-4 ${isDark ? 'bg-black/10' : 'bg-white/15'}`}>
                 <div className={`w-full h-full min-h-0 rounded-2xl border shadow-sm overflow-hidden flex flex-col ${theme.cardBg} ${theme.border}`}>
-                  <div className={`p-5 sm:p-6 border-b shrink-0 ${theme.border}`}>
-                    <div className="flex items-start justify-between gap-3"><h1 className={`text-lg sm:text-xl font-bold leading-snug ${theme.textPrimary}`}>{selectedMessage.subject}</h1><span className={`text-xs shrink-0 ${theme.textSecondary}`}>{selectedMessage.date}</span></div>
-                    <div className="mt-4 flex items-center gap-3"><div className="w-10 h-10 rounded-full bg-blue-600 text-white font-bold flex items-center justify-center">{selectedMessage.senderName.slice(0, 1).toUpperCase()}</div><div><p className={`font-bold text-sm ${theme.textPrimary}`}>{selectedMessage.senderName}</p><p className={`text-xs ${theme.textSecondary}`}>&lt;{selectedMessage.senderEmail}&gt; 发给 {selectedMessage.recipient}</p></div></div>
-                  </div>
-                  {errorMessage && <div className="m-5 p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 flex items-center gap-2"><AlertCircle className="w-4 h-4" />{errorMessage}</div>}
-                  <div className={`flex-1 min-h-0 ${selectedMessage.bodyContentType === 'html' && !detailLoading ? 'bg-white' : 'overflow-y-auto p-5 sm:p-6'}`}>
-                    {detailLoading ? (
-                      <div className="h-full min-h-72 flex flex-col items-center justify-center gap-2"><LoaderCircle className="w-8 h-8 animate-spin text-blue-600" /><span className={theme.textSecondary}>正在加载邮件正文...</span></div>
-                    ) : selectedMessage.bodyContentType === 'html' ? (
-                      <iframe title="邮件正文" sandbox="" srcDoc={selectedMessage.body} className="block w-full h-full min-h-[420px] border-0 bg-white" />
-                    ) : (
-                      <div className={`whitespace-pre-wrap text-sm leading-7 ${theme.textPrimary}`}>{selectedMessage.body || '暂无正文'}</div>
-                    )}
-                  </div>
+                  {detailLoading ? (
+                    <div role="status" className="flex-1 min-h-72 flex flex-col items-center justify-center gap-2"><LoaderCircle className="w-8 h-8 animate-spin text-blue-600" /><span className={theme.textSecondary}>正在加载邮件正文...</span></div>
+                  ) : detailErrorMessage ? (
+                    <div role="alert" className="m-5 p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 flex items-center gap-2"><AlertCircle className="w-4 h-4 shrink-0" />{detailErrorMessage}</div>
+                  ) : messageDetail ? (
+                    <>
+                      <div className={`p-5 sm:p-6 border-b shrink-0 ${theme.border}`}>
+                        <div className="flex items-start justify-between gap-3"><h1 className={`text-lg sm:text-xl font-bold leading-snug ${theme.textPrimary}`}>{messageDetail.subject}</h1><span className={`text-xs shrink-0 ${theme.textSecondary}`}>{messageDetail.date}</span></div>
+                        <div className="mt-4 flex items-center gap-3"><div className="w-10 h-10 rounded-full bg-blue-600 text-white font-bold flex items-center justify-center">{messageDetail.senderName.slice(0, 1).toUpperCase()}</div><div><p className={`font-bold text-sm ${theme.textPrimary}`}>{messageDetail.senderName}</p><p className={`text-xs ${theme.textSecondary}`}>&lt;{messageDetail.senderEmail}&gt; 发给 {messageDetail.recipient}</p></div></div>
+                      </div>
+                      <div className={`flex-1 min-h-0 ${messageDetail.bodyContentType === 'html' ? 'bg-white' : 'overflow-y-auto p-5 sm:p-6'}`}>
+                        {messageDetail.bodyContentType === 'html' ? (
+                          <iframe title="邮件正文" sandbox="" srcDoc={messageDetail.body} className="block w-full h-full min-h-[420px] border-0 bg-white" />
+                        ) : (
+                          <div className={`whitespace-pre-wrap text-sm leading-7 ${theme.textPrimary}`}>{messageDetail.body || '暂无正文'}</div>
+                        )}
+                      </div>
+                    </>
+                  ) : null}
                 </div>
               </div>
             </motion.div>

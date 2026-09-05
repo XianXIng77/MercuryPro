@@ -22,25 +22,24 @@ export const ExtensionModules: React.FC<ExtensionModulesProps> = ({
   const isDark = currentPreset.mode === 'dark';
 
   if (activeTab === 'dashboard') {
-    return <UserDashboard currentPreset={currentPreset} />;
+    return <UserDashboard currentPreset={currentPreset} permissionCodes={permissionCodes} />;
   }
 
   if (activeTab === 'register') {
-    return <GrokRegistrationPanel currentPreset={currentPreset} canRun={permissionCodes.includes('register:run')} />;
+    return <GrokRegistrationPanel currentPreset={currentPreset} canView={permissionCodes.includes('register:view')} canConfig={permissionCodes.includes('register:config')} canRun={permissionCodes.includes('register:run')} canResource={permissionCodes.includes('register:resource')} canTools={permissionCodes.includes('register:tools')} canTokenRead={permissionCodes.includes('register:token:read')} />;
   }
 
   if (activeTab === 'invite') {
-    return <InvitationCodePanel currentPreset={currentPreset} canManage={permissionCodes.includes('invite:manage')} />;
+    return <InvitationCodePanel currentPreset={currentPreset} canQuery={permissionCodes.includes('invite:view')} canGenerate={permissionCodes.includes('invite:create')} canUpdate={permissionCodes.includes('invite:update')} canDelete={permissionCodes.includes('invite:delete')} canExport={permissionCodes.includes('invite:export')} />;
   }
 
   if (activeTab === 'logs') {
-    return <RegistrationLogsPanel currentPreset={currentPreset} />;
+    return <RegistrationLogsPanel currentPreset={currentPreset} canQuery={permissionCodes.includes('logs:view')} />;
   }
 
   if (activeTab === 'audit') {
-    return <UserAuditPanel currentPreset={currentPreset} />;
+    return <UserAuditPanel currentPreset={currentPreset} canQuery={permissionCodes.includes('audit:view')} />;
   }
 
   return null;
 };
-

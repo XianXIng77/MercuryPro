@@ -37,7 +37,7 @@ export const WorkbenchSidebarNav: React.FC<WorkbenchSidebarNavProps> = ({
   const isDark = currentPreset.mode === 'dark';
 
   const iconForMenu = (key: string) => key === 'dashboard' ? <LayoutDashboard className="w-5 h-5" /> : key === 'email' ? <Mail className="w-5 h-5" /> : key === 'register' ? <UserPlus className="w-5 h-5" /> : key === 'invite' ? <KeyRound className="w-5 h-5" /> : key === 'logs' ? <ScrollText className="w-5 h-5" /> : key === 'audit' ? <ShieldCheck className="w-5 h-5" /> : key === 'access' ? <SlidersHorizontal className="w-5 h-5" /> : <CircleUserRound className="w-5 h-5" />;
-  const mainNavItems: Array<{ id: NavTab; label: string; icon: React.ReactNode; badge?: number }> = menuRegistry.map((menu) => ({ id: menu.key as NavTab, label: menu.label, icon: iconForMenu(menu.key), ...(menu.key === 'email' ? { badge: totalUnreadCount } : {}) }));
+  const mainNavItems: Array<{ id: NavTab; label: string; icon: React.ReactNode; badge?: number }> = menuRegistry.filter((menu) => menu.key !== 'profile').map((menu) => ({ id: menu.key as NavTab, label: menu.label, icon: iconForMenu(menu.key), ...(menu.key === 'email' ? { badge: totalUnreadCount } : {}) }));
   const profileItem: { id: NavTab; label: string; icon: React.ReactNode; badge?: number } = { id: 'profile', label: '个人中心', icon: <CircleUserRound className="w-5 h-5" /> };
 
   return (

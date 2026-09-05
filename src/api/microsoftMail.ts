@@ -59,7 +59,13 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const contentType = response.headers.get('content-type') || '';
   const payload = contentType.includes('application/json') ? await response.json() : await response.text();
   if (!response.ok) {
-    const message = typeof payload === 'object' && payload?.msg ? payload.msg : `请求失败（HTTP ${response.status}）`;
+    const message = response.status === 403
+      ? '无权限'
+      : response.status === 401
+        ? '登录已过期，请重新登录'
+        : typeof payload === 'object' && payload?.msg
+          ? payload.msg
+          : `请求失败（HTTP ${response.status}）`;
     throw new Error(message);
   }
   if (payload && typeof payload === 'object' && typeof payload.code === 'number' && payload.code !== 200) {

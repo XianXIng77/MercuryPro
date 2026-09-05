@@ -14,7 +14,7 @@ from urllib.parse import unquote, urlparse  # noqa: F401
 from zipfile import ZIP_DEFLATED, ZipFile  # noqa: F401
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query, Request  # noqa: F401
+from fastapi import Body, FastAPI, HTTPException, Query, Request  # noqa: F401
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -74,6 +74,7 @@ from mercury_auth import (
     ensure_default_admin,
     get_current_user,
     required_permission_for_request,
+    permission_is_public,
     router as mercury_auth_router,
     user_has_permission,
 )
@@ -83,7 +84,7 @@ from operation_logs import (
     router as operation_logs_router,
 )
 from browser_debug import router as browser_debug_router
-from invite_codes import generate_invite_codes, list_invite_codes, revoke_invite_code, update_invite_code, InviteCodeError
+from invite_codes import export_invite_codes, generate_invite_codes, list_invite_codes, revoke_invite_code, update_invite_code, InviteCodeError
 
 BACKEND_DIR = Path(__file__).resolve().parent
 APP_DIR = BACKEND_DIR.parent
@@ -386,6 +387,9 @@ class InviteCodeGenerateRequest(BaseModel):
 class InviteCodeUpdateRequest(BaseModel):
     max_uses: int = Field(..., ge=1, le=1000)
 
+class InviteCodeExportRequest(BaseModel):
+    codes: list[str] = Field(default_factory=list, max_length=500)
+
 def _post_registration_config(cfg: dict[str, Any]) -> dict[str, Any]:
     return _app_core._post_registration_config(_app_context(), cfg)
 
@@ -461,9 +465,11 @@ async def enforce_auth_guard(request: Request, call_next):
     is_api = path == "/api" or path.startswith("/api/")
     is_auth_path = path == "/api/auth" or path.startswith("/api/auth/")
     is_public_mail_path = path.startswith("/api/microsoft/public/mailboxes/")
+    required_permission = required_permission_for_request(path, request.method)
+    is_configured_public = is_public_mail_path and permission_is_public(required_permission or "")
     is_public_health_path = path == "/api/health/live"
     protected = (
-        is_api and not is_auth_path and not is_public_mail_path and not is_public_health_path
+        is_api and not is_auth_path and not is_configured_public and not is_public_health_path
         or path.startswith("/browser-debug")
     )
     if protected:
@@ -474,7 +480,7 @@ async def enforce_auth_guard(request: Request, call_next):
                 status_code=401,
                 content={"code": 401, "error": "未登录或会话已过期"},
             )
-        permission = required_permission_for_request(path, request.method)
+        permission = required_permission
         if permission and not user_has_permission(actor, permission):
             return JSONResponse(
                 status_code=403,
@@ -667,6 +673,10 @@ def get_invite_codes(
 @app.post("/api/invite-codes")
 def create_invite_codes(request: InviteCodeGenerateRequest) -> dict[str, Any]:
     return generate_invite_codes(request.count, request.max_uses)
+
+@app.post("/api/invite-codes/export")
+def export_codes(request: InviteCodeExportRequest) -> dict[str, Any]:
+    return export_invite_codes(request.codes)
 
 
 @app.put("/api/invite-codes/{code}")

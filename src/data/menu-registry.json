@@ -5,7 +5,7 @@
     "label": "数据仪表盘",
     "icon": "dashboard",
     "permission": "dashboard:view",
-    "permissionLabel": "查看数据仪表盘",
+    "permissionLabel": "查询数据仪表盘",
     "group": "工作台"
   },
   {
@@ -14,8 +14,40 @@
     "label": "邮箱管理",
     "icon": "mail",
     "permission": "email:view",
-    "permissionLabel": "查看邮箱管理",
-    "group": "工作台"
+    "permissionLabel": "查询邮箱",
+    "group": "工作台",
+    "permissions": [
+      {
+        "code": "email:view",
+        "label": "查询邮箱",
+        "group": "邮箱管理"
+      },
+      {
+        "code": "email:messages",
+        "label": "查询收件邮件",
+        "group": "邮箱管理"
+      },
+      {
+        "code": "email:detail",
+        "label": "查询邮件详情",
+        "group": "邮箱管理"
+      },
+      {
+        "code": "email:refresh",
+        "label": "刷新 Token",
+        "group": "邮箱管理"
+      },
+      {
+        "code": "email:create",
+        "label": "新增邮箱",
+        "group": "邮箱管理"
+      },
+      {
+        "code": "email:delete",
+        "label": "删除邮箱",
+        "group": "邮箱管理"
+      }
+    ]
   },
   {
     "key": "register",
@@ -23,8 +55,15 @@
     "label": "AI注册",
     "icon": "register",
     "permission": "register:view",
-    "permissionLabel": "查看AI注册",
-    "group": "工作台"
+    "permissionLabel": "查询 AI 注册",
+    "group": "工作台",
+    "permissions": [
+      { "code": "register:config", "label": "AI 注册配置", "group": "注册中心" },
+      { "code": "register:run", "label": "AI 注册执行", "group": "注册中心" },
+      { "code": "register:resource", "label": "AI 注册资源管理", "group": "注册中心" },
+      { "code": "register:tools", "label": "AI 注册导入与工具", "group": "注册中心" },
+      { "code": "register:token:read", "label": "AI 注册 Token 查看", "group": "注册中心" }
+    ]
   },
   {
     "key": "invite",
@@ -32,8 +71,30 @@
     "label": "邀请码",
     "icon": "invite",
     "permission": "invite:view",
-    "permissionLabel": "查看邀请码",
-    "group": "工作台"
+    "permissionLabel": "查询邀请码",
+    "group": "工作台",
+    "permissions": [
+      {
+        "code": "invite:create",
+        "label": "生成邀请码",
+        "group": "邀请码管理"
+      },
+      {
+        "code": "invite:update",
+        "label": "修改邀请码",
+        "group": "邀请码管理"
+      },
+      {
+        "code": "invite:delete",
+        "label": "销毁邀请码",
+        "group": "邀请码管理"
+      },
+      {
+        "code": "invite:export",
+        "label": "导出邀请码",
+        "group": "邀请码管理"
+      }
+    ]
   },
   {
     "key": "logs",
@@ -41,7 +102,7 @@
     "label": "注册日志",
     "icon": "logs",
     "permission": "logs:view",
-    "permissionLabel": "查看注册日志",
+    "permissionLabel": "注册日志查询",
     "group": "工作台"
   },
   {
@@ -50,8 +111,17 @@
     "label": "操作审计",
     "icon": "audit",
     "permission": "audit:view",
-    "permissionLabel": "查看操作审计",
+    "permissionLabel": "操作日志查询",
     "group": "工作台"
+  },
+  {
+    "key": "profile",
+    "path": "/profile",
+    "label": "个人中心",
+    "icon": "profile",
+    "permission": "profile:update",
+    "permissionLabel": "材料修改权限",
+    "group": "个人中心"
   },
   {
     "key": "access",
@@ -61,14 +131,5 @@
     "permission": "access:manage",
     "permissionLabel": "查看权限中心",
     "group": "工作台"
-  },
-  {
-    "key": "test-navigation",
-    "path": "/test-navigation",
-    "label": "测试导航",
-    "icon": "test",
-    "permission": "test-navigation:view",
-    "permissionLabel": "查看测试导航",
-    "group": "开发测试"
   }
 ]
