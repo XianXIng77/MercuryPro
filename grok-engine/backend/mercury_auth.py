@@ -57,8 +57,24 @@ MENU_DEFINITIONS: list[dict[str, Any]] = [
     {"key": "logs", "path": "/logs", "label": "注册日志", "icon": "logs", "permission": "logs:view"},
     {"key": "audit", "path": "/audit", "label": "操作审计", "icon": "audit", "permission": "audit:view"},
     {"key": "access", "path": "/access", "label": "权限中心", "icon": "access", "permission": "access:manage"},
-
 ]
+
+
+def _load_menu_registry() -> list[dict[str, Any]]:
+    """Read the shared frontend registry; new entries become catalog options automatically."""
+    registry = PROJECT_ROOT / "src" / "data" / "menu-registry.json"
+    try:
+        parsed = json.loads(registry.read_text(encoding="utf-8"))
+        if isinstance(parsed, list):
+            items = [item for item in parsed if isinstance(item, dict) and item.get("key") and item.get("path") and item.get("permission")]
+            if items:
+                return items
+    except (OSError, json.JSONDecodeError):
+        pass
+    return MENU_DEFINITIONS
+
+
+MENU_DEFINITIONS = _load_menu_registry()
 
 
 PERMISSION_DEFINITIONS: list[dict[str, str]] = [
@@ -72,6 +88,12 @@ PERMISSION_DEFINITIONS: list[dict[str, str]] = [
     {"code": "audit:view", "label": "查看操作审计", "group": "审计中心"},
     {"code": "access:manage", "label": "管理角色与权限", "group": "系统管理"},
 ]
+
+# Every registered menu automatically contributes its view permission to the catalog.
+_registered_permissions = {str(item["permission"]): item for item in MENU_DEFINITIONS}
+for _permission, _menu in reversed(list(_registered_permissions.items())):
+    if not any(str(item.get("code")) == _permission for item in PERMISSION_DEFINITIONS):
+        PERMISSION_DEFINITIONS.insert(0, {"code": _permission, "label": str(_menu.get("permissionLabel") or f"查看{_menu.get('label', '')}"), "group": str(_menu.get("group") or "工作台")})
 
 
 def _roles_file() -> Path:
@@ -89,14 +111,16 @@ def _all_permission_codes() -> list[str]:
 def _default_roles() -> dict[str, dict[str, Any]]:
     all_menus = _all_menu_keys()
     all_permissions = _all_permission_codes()
+    built_in_menus = ["dashboard", "email", "register", "invite", "logs", "audit", "access"]
+    built_in_permissions = [item for item in all_permissions if item.split(":", 1)[0] in set(built_in_menus)]
     return {
         "admin": {
             "key": "admin",
             "label": "管理员",
             "description": "可以访问工作台全部模块并管理系统授权。",
             "color": "violet",
-            "menuKeys": all_menus,
-            "permissions": all_permissions,
+            "menuKeys": [key for key in all_menus if key in built_in_menus],
+            "permissions": built_in_permissions,
         },
         "user": {
             "key": "user",
@@ -658,7 +682,7 @@ async def update_profile(payload: ProfilePayload, request: Request = None, user:
     target["avatar"] = _normalize_avatar_data(payload.avatar)
     _save_users(users)
     updated = _public_user(target)
-    record_operation(request=request, action="修改个人资料", status_code=200, user=updated, detail="更新个人中心资料")
+    record_operation(request=request, action="修改个人资料", status_code=200, user=updated, detail="更新个人中心资料", module="个人中心")
     return {"user": updated}
 
 
@@ -667,7 +691,7 @@ async def update_password(payload: PasswordPayload, request: Request = None, use
     from operation_logs import record_operation
     target = _find_user(str(user.get("email", "")))
     if target is None or not verify_password(payload.currentPassword, str(target.get("passwordHash", ""))):
-        record_operation(request=request, action="修改密码", status_code=400, user=user, detail="修改密码失败：当前密码错误", risk="高风险")
+        record_operation(request=request, action="修改密码", status_code=400, user=user, detail="修改密码失败：当前密码错误", module="个人中心", risk="高风险")
         raise AuthError(400, "当前密码错误")
     if payload.newPassword == payload.currentPassword:
         raise AuthError(400, "新密码不能与当前密码相同")
@@ -678,7 +702,7 @@ async def update_password(payload: PasswordPayload, request: Request = None, use
             users[index] = target
             break
     _save_users(users)
-    record_operation(request=request, action="修改密码", status_code=200, user=user, detail="密码已更新，下次登录生效", risk="关注")
+    record_operation(request=request, action="修改密码", status_code=200, user=user, detail="密码已更新，下次登录生效", module="个人中心", risk="关注")
     return {"ok": True}
 @router.get("/access/catalog")
 async def access_catalog(_admin: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
@@ -691,7 +715,8 @@ async def access_roles(_admin: dict[str, Any] = Depends(require_admin)) -> dict[
 
 
 @router.put("/access/roles/{role_key}")
-async def update_access_role(role_key: str, payload: RolePayload, _admin: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+async def update_access_role(role_key: str, payload: RolePayload, _admin: dict[str, Any] = Depends(require_admin), request: Request = None) -> dict[str, Any]:
+    from operation_logs import record_operation
     key = str(role_key or payload.key).strip()
     if key != payload.key:
         raise AuthError(400, "角色标识不能在编辑时修改")
@@ -707,6 +732,7 @@ async def update_access_role(role_key: str, payload: RolePayload, _admin: dict[s
         menu_keys = [item for item in menu_keys if item != "access"]
         permissions = [item for item in permissions if item != "access:manage"]
     permissions = list(dict.fromkeys([*permissions, *_menu_permissions(menu_keys)]))
+    previous = roles[key]
     roles[key] = {
         "key": key,
         "label": payload.label.strip(),
@@ -716,6 +742,13 @@ async def update_access_role(role_key: str, payload: RolePayload, _admin: dict[s
         "permissions": permissions,
     }
     _save_roles(roles)
+    record_operation(
+        request=request, action="权限变更", status_code=200, user=_admin,
+        module="权限中心", risk="高风险",
+        detail=f"修改角色授权：{key}；" + json.dumps(
+            {"before": previous, "after": roles[key]}, ensure_ascii=False,
+        ),
+    )
     return roles[key]
 
 
@@ -740,7 +773,8 @@ async def access_user(email: str, _admin: dict[str, Any] = Depends(require_admin
 
 
 @router.put("/access/users/{email}")
-async def update_user_access(email: str, payload: UserAccessPayload, _admin: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
+async def update_user_access(email: str, payload: UserAccessPayload, _admin: dict[str, Any] = Depends(require_admin), request: Request = None) -> dict[str, Any]:
+    from operation_logs import record_operation
     roles = _load_roles()
     if payload.role not in roles:
         raise AuthError(400, "角色不存在")
@@ -760,11 +794,21 @@ async def update_user_access(email: str, payload: UserAccessPayload, _admin: dic
         extra_menus = [item for item in extra_menus if item != "access"]
         extra_permissions = [item for item in extra_permissions if item != "access:manage"]
     extra_permissions = list(dict.fromkeys([*extra_permissions, *_menu_permissions(extra_menus)]))
+    access_fields = ("role", "extraMenus", "extraPermissions")
+    previous = {key: target.get(key) for key in access_fields}
     target["role"] = payload.role
     target["extraMenus"] = extra_menus
     target["extraPermissions"] = extra_permissions
     _save_users(users)
     public = _public_user(target)
+    record_operation(
+        request=request, action="权限变更", status_code=200, user=_admin,
+        module="权限中心", risk="高风险",
+        detail=f"修改用户授权：{public['email']}；" + json.dumps(
+            {"before": previous, "after": {key: target.get(key) for key in access_fields}},
+            ensure_ascii=False,
+        ),
+    )
     return {"user": public, **access_profile(target)}
 
 

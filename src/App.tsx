@@ -19,6 +19,7 @@ import { WorkbenchSidebarNav } from './components/WorkbenchSidebarNav';
 import { AccessControlPanel } from './components/AccessControlPanel';
 import { PersonalCenter } from './components/PersonalCenter';
 import { authApi } from './api/auth';
+import menuRegistry from './data/menu-registry.json';
 import { useToast } from './components/Toast';
 
 const TAB_PATHS: Record<NavTab, string> = {
@@ -38,7 +39,8 @@ const TAB_PATHS: Record<NavTab, string> = {
 };
 
 function tabForPath(pathname: string): NavTab {
-  const match = (Object.entries(TAB_PATHS) as [NavTab, string][]).find(([, path]) =>
+  const registryPaths = menuRegistry.reduce<Record<string, string>>((result, menu) => { result[menu.key] = menu.path; return result; }, { ...TAB_PATHS });
+  const match = (Object.entries(registryPaths) as [NavTab, string][]).find(([, path]) =>
     pathname === path || pathname.startsWith(`${path}/`),
   );
   return match?.[0] || 'dashboard';
@@ -244,6 +246,7 @@ export default function App() {
                 <Route path="/tickets" element={<ExtensionModules activeTab="tickets" currentPreset={currentPreset} permissionCodes={accessProfile.permissions} onSwitchToEmailList={() => handleSelectTab('email')} />} />
                 <Route path="/settings" element={<ExtensionModules activeTab="settings" currentPreset={currentPreset} permissionCodes={accessProfile.permissions} onSwitchToEmailList={() => handleSelectTab('email')} />} />
                 <Route path="/profile" element={<PersonalCenter currentUser={currentUser} currentPreset={currentPreset} onUserUpdate={setCurrentUser} onSelectPreset={setCurrentPresetId} />} />
+                {menuRegistry.filter((menu) => !['dashboard','email','register','invite','logs','audit','access'].includes(menu.key)).map((menu) => <React.Fragment key={menu.key}><Route path={menu.path} element={<ExtensionModules activeTab={menu.key as NavTab} currentPreset={currentPreset} permissionCodes={accessProfile.permissions} onSwitchToEmailList={() => handleSelectTab('email')} />} /></React.Fragment>)}
                 <Route path="*" element={<Navigate to="/dashboard" replace />} />
               </Routes>
             </motion.main>

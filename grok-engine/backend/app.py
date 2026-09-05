@@ -79,8 +79,7 @@ from mercury_auth import (
 )
 from mercury_logs import router as mercury_logs_router
 from operation_logs import (
-    action_for_request,
-    record_operation,
+    audit_request,
     router as operation_logs_router,
 )
 from browser_debug import router as browser_debug_router
@@ -491,30 +490,8 @@ async def enforce_auth_guard(request: Request, call_next):
 
 @app.middleware("http")
 async def record_operation_middleware(request: Request, call_next):
-    """Record every authenticated state-changing API request."""
-    path = request.url.path
-    method = request.method.upper()
-    should_record = (
-        path.startswith("/api/")
-        and method in {"POST", "PUT", "PATCH", "DELETE"}
-        and not path.startswith("/api/auth/")
-        and not path.startswith("/api/audit-logs")
-    )
-    actor = None
-    if should_record:
-        try:
-            actor = get_current_user(request)
-        except HTTPException:
-            actor = None
-    response = await call_next(request)
-    if should_record:
-        record_operation(
-            request=request,
-            action=action_for_request(method, path),
-            status_code=response.status_code,
-            user=actor,
-        )
-    return response
+    """Audit outside the guard so rejected operations are recorded as well."""
+    return await audit_request(request, call_next)
 
 
 def _rotation_session_items() -> list[tuple[str, dict[str, Any]]]:

@@ -10,7 +10,7 @@ import { useToast } from './Toast';
 import { Tooltip } from './Tooltip';
 import { Pagination } from './Pagination';
 
-const ACTIONS = ['全部', '登录', '退出登录', '注册', '新增', '执行', '修改', '删除', '导出', '权限变更'];
+const ACTIONS = ['全部', '登录', '退出登录', '注册', '新增', '执行', '修改', '修改个人资料', '修改密码', '删除', '导出', '权限变更'];
 const AUDIT_DEFAULT_PAGE_SIZE = 10;
 
 const actionIcon = (action: string) => {

@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import logging
 import os
+import re
 import threading
 import time
 import uuid
@@ -14,6 +16,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query, Request
 
 router = APIRouter(prefix="/api/audit-logs", tags=["Operation Audit"])
+logger = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _configured_dir = Path(os.environ.get("DATA_DIR", "data"))
 DATA_DIRECTORY = _configured_dir if _configured_dir.is_absolute() else PROJECT_ROOT / _configured_dir
@@ -138,25 +141,106 @@ MODULE_LABELS = {
     "register": "注册任务",
     "logs": "注册诊断",
     "audit-logs": "操作审计",
+    "invite-codes": "邀请码管理",
+    "config": "系统配置",
+    "proxy": "代理设置",
+    "solver": "验证服务",
+    "ai": "AI 助手",
+    "mail": "注册邮箱",
+    "smsbower": "邮箱服务",
+    "sub2api": "账号导入",
+    "import": "账号导入",
+    "account-rotation": "账号轮询",
+    "chatgpt": "注册任务",
+    "sessions": "注册任务",
+    "batches": "注册任务",
+    "download": "注册任务",
 }
 
 
+def normalize_path(path: str) -> str:
+    normalized = path.rstrip("/")
+    if normalized == "/api/grok" or normalized.startswith("/api/grok/"):
+        normalized = "/api" + normalized[len("/api/grok"):]
+    return normalized
+
+
+def safe_path(path: str) -> str:
+    """Route credentials must never become audit detail text."""
+    normalized = normalize_path(path)
+    normalized = re.sub(r"(/api/microsoft/public/mailboxes/)[^/]+", r"\1[已隐藏]", normalized)
+    return re.sub(r"(/api/invite-codes/)[^/]+", r"\1[已隐藏]", normalized)
+
+
 def module_for_path(path: str) -> str:
-    for part in path.split("/"):
+    normalized = normalize_path(path)
+    if normalized.startswith("/api/auth/access/"):
+        return "权限中心"
+    if normalized in {"/api/auth/profile", "/api/auth/password"}:
+        return "个人中心"
+    for part in normalized.split("/"):
         if part in MODULE_LABELS:
             return MODULE_LABELS[part]
     return "工作台"
 
 
 def action_for_request(method: str, path: str) -> str:
-    normalized = path.rstrip("/").lower()
-    if normalized.endswith("/login"):
+    normalized = normalize_path(path)
+    if normalized == "/api/auth/profile":
+        return "修改个人资料"
+    if normalized == "/api/auth/password":
+        return "修改密码"
+    if normalized.startswith("/api/auth/access/"):
+        return "权限变更"
+    if normalized == "/api/download":
+        return "导出"
+    if normalized == "/api/auth/login":
         return "登录"
-    if normalized.endswith("/logout"):
+    if normalized == "/api/auth/logout":
         return "退出登录"
-    if normalized.endswith("/register"):
+    if normalized == "/api/auth/register":
         return "注册"
-    return {"POST": "执行", "PUT": "修改", "PATCH": "修改", "DELETE": "删除"}.get(method.upper(), method.upper())
+    return {"POST": "执行", "PUT": "修改", "PATCH": "修改", "DELETE": "删除"}.get(method.upper(), "执行" if method.upper() == "GET" else method.upper())
+
+
+def should_record_request(method: str, path: str) -> bool:
+    normalized = normalize_path(path)
+    return normalized.startswith("/api/") and (
+        method.upper() in {"POST", "PUT", "PATCH", "DELETE"}
+        or method.upper() == "GET" and normalized in {
+            "/api/download", "/api/solver/detect", "/api/proxy/detect",
+        }
+    )
+
+
+async def audit_request(request: Request, call_next):
+    """Fallback covers validation, authorization and unhandled failures too."""
+    path = request.url.path
+    method = request.method.upper()
+    if not should_record_request(method, path):
+        return await call_next(request)
+    actor = _current_user(request)
+    status_code = 500
+    try:
+        response = await call_next(request)
+        status_code = response.status_code
+        return response
+    finally:
+        # Auth handlers supply richer details/actors (including new sessions).
+        if not request.scope.get("operation_audit_recorded"):
+            action = action_for_request(method, path)
+            risk = "普通"
+            if action == "权限变更":
+                risk = "高风险"
+            elif action in {"修改密码", "导出"}:
+                risk = "关注"
+            if status_code >= 400 and action in {"登录", "修改密码"}:
+                risk = "高风险"
+            record_operation(
+                request=request, action=action, status_code=status_code, user=actor,
+                module=module_for_path(path), risk=risk,
+                detail=f"{action} {method} {safe_path(path)}（HTTP {status_code}）",
+            )
 
 
 def _read_records() -> list[dict[str, Any]]:
@@ -196,7 +280,7 @@ def record_operation(
     geo = lookup_ip_location(ip)
     user_agent = request.headers.get("user-agent", "") if request else ""
     status = "成功" if 200 <= int(status_code) < 400 else "失败"
-    path = request.url.path if request else ""
+    path = safe_path(request.url.path) if request else ""
     record = {
         "id": f"AUD-{int(time.time() * 1000)}-{uuid.uuid4().hex[:6].upper()}",
         "user": username,
@@ -212,10 +296,15 @@ def record_operation(
         "risk": risk if risk in {"普通", "关注", "高风险"} else "普通",
         "statusCode": int(status_code),
     }
-    with _lock:
-        DATA_DIRECTORY.mkdir(parents=True, exist_ok=True)
-        with AUDIT_LOG_FILE.open("a", encoding="utf-8") as stream:
-            stream.write(json.dumps(record, ensure_ascii=False) + "\n")
+    try:
+        with _lock:
+            DATA_DIRECTORY.mkdir(parents=True, exist_ok=True)
+            with AUDIT_LOG_FILE.open("a", encoding="utf-8") as stream:
+                stream.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except OSError:
+        logger.exception("操作审计日志写入失败")
+    if request is not None:
+        request.scope["operation_audit_recorded"] = True
     return record
 
 

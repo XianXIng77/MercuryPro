@@ -1,0 +1,110 @@
+[
+  {
+    "key": "dashboard",
+    "path": "/dashboard",
+    "label": "数据仪表盘",
+    "icon": "dashboard",
+    "permission": "dashboard:view",
+    "permissionLabel": "查看数据仪表盘",
+    "group": "工作台"
+  },
+  {
+    "key": "email",
+    "path": "/email",
+    "label": "邮箱管理",
+    "icon": "mail",
+    "permission": "email:view",
+    "permissionLabel": "查看邮箱管理",
+    "group": "工作台"
+  },
+  {
+    "key": "register",
+    "path": "/register",
+    "label": "AI注册",
+    "icon": "register",
+    "permission": "register:view",
+    "permissionLabel": "查看AI注册",
+    "group": "工作台"
+  },
+  {
+    "key": "invite",
+    "path": "/invite",
+    "label": "邀请码",
+    "icon": "invite",
+    "permission": "invite:view",
+    "permissionLabel": "查看邀请码",
+    "group": "工作台"
+  },
+  {
+    "key": "logs",
+    "path": "/logs",
+    "label": "注册日志",
+    "icon": "logs",
+    "permission": "logs:view",
+    "permissionLabel": "查看注册日志",
+    "group": "工作台"
+  },
+  {
+    "key": "audit",
+    "path": "/audit",
+    "label": "操作审计",
+    "icon": "audit",
+    "permission": "audit:view",
+    "permissionLabel": "查看操作审计",
+    "group": "工作台"
+  },
+  {
+    "key": "access",
+    "path": "/access",
+    "label": "权限中心",
+    "icon": "access",
+    "permission": "access:manage",
+    "permissionLabel": "查看权限中心",
+    "group": "工作台"
+  },
+  {
+    "key": "calendar",
+    "path": "/calendar",
+    "label": "日历",
+    "icon": "calendar",
+    "permission": "calendar:view",
+    "permissionLabel": "查看日历",
+    "group": "工作台"
+  },
+  {
+    "key": "contacts",
+    "path": "/contacts",
+    "label": "通讯录",
+    "icon": "contacts",
+    "permission": "contacts:view",
+    "permissionLabel": "查看通讯录",
+    "group": "工作台"
+  },
+  {
+    "key": "analytics",
+    "path": "/analytics",
+    "label": "数据分析",
+    "icon": "analytics",
+    "permission": "analytics:view",
+    "permissionLabel": "查看数据分析",
+    "group": "工作台"
+  },
+  {
+    "key": "tickets",
+    "path": "/tickets",
+    "label": "工单",
+    "icon": "tickets",
+    "permission": "tickets:view",
+    "permissionLabel": "查看工单",
+    "group": "工作台"
+  },
+  {
+    "key": "settings",
+    "path": "/settings",
+    "label": "系统设置",
+    "icon": "settings",
+    "permission": "settings:view",
+    "permissionLabel": "查看系统设置",
+    "group": "工作台"
+  }
+]

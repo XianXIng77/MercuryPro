@@ -12,6 +12,7 @@ import {
   LogOut,
 } from 'lucide-react';
 import { NavTab, StylePreset } from '../types';
+import menuRegistry from '../data/menu-registry.json';
 
 interface WorkbenchSidebarNavProps {
   activeTab: NavTab;
@@ -35,54 +36,9 @@ export const WorkbenchSidebarNav: React.FC<WorkbenchSidebarNavProps> = ({
   const theme = currentPreset.themeClasses;
   const isDark = currentPreset.mode === 'dark';
 
-  const mainNavItems: {
-    id: NavTab;
-    label: string;
-    icon: React.ReactNode;
-    badge?: number;
-  }[] = [
-    {
-      id: 'dashboard',
-      label: '数据仪表盘',
-      icon: <LayoutDashboard className="w-5 h-5" />,
-    },
-    {
-      id: 'email',
-      label: '邮箱管理',
-      icon: <Mail className="w-5 h-5" />,
-      badge: totalUnreadCount,
-    },
-    {
-      id: 'register',
-      label: 'AI注册',
-      icon: <UserPlus className="w-5 h-5" />,
-    },
-    {
-      id: 'invite',
-      label: '邀请码',
-      icon: <KeyRound className="w-5 h-5" />,
-    },
-    {
-      id: 'logs',
-      label: '注册日志',
-      icon: <ScrollText className="w-5 h-5" />,
-    },
-    {
-      id: 'audit',
-      label: '操作审计',
-      icon: <ShieldCheck className="w-5 h-5" />,
-    },
-    {
-      id: 'access',
-      label: '权限中心',
-      icon: <SlidersHorizontal className="w-5 h-5" />,
-    },
-    {
-      id: 'profile',
-      label: '个人中心',
-      icon: <CircleUserRound className="w-5 h-5" />,
-    },
-  ];
+  const iconForMenu = (key: string) => key === 'dashboard' ? <LayoutDashboard className="w-5 h-5" /> : key === 'email' ? <Mail className="w-5 h-5" /> : key === 'register' ? <UserPlus className="w-5 h-5" /> : key === 'invite' ? <KeyRound className="w-5 h-5" /> : key === 'logs' ? <ScrollText className="w-5 h-5" /> : key === 'audit' ? <ShieldCheck className="w-5 h-5" /> : key === 'access' ? <SlidersHorizontal className="w-5 h-5" /> : <CircleUserRound className="w-5 h-5" />;
+  const mainNavItems: Array<{ id: NavTab; label: string; icon: React.ReactNode; badge?: number }> = menuRegistry.map((menu) => ({ id: menu.key as NavTab, label: menu.label, icon: iconForMenu(menu.key), ...(menu.key === 'email' ? { badge: totalUnreadCount } : {}) }));
+  const profileItem: { id: NavTab; label: string; icon: React.ReactNode; badge?: number } = { id: 'profile', label: '个人中心', icon: <CircleUserRound className="w-5 h-5" /> };
 
   return (
     <aside
@@ -116,7 +72,7 @@ export const WorkbenchSidebarNav: React.FC<WorkbenchSidebarNavProps> = ({
           核心工作台模块
         </div>
 
-        {mainNavItems.filter((item) => item.id === 'profile' || !menuKeys || menuKeys.includes(item.id)).map((item) => {
+        {[...mainNavItems, profileItem].filter((item) => item.id === 'profile' || !menuKeys || menuKeys.includes(item.id)).map((item) => {
           const isActive = activeTab === item.id;
           const isHovered = hoveredTab === item.id;
           const isHighlighted = isActive || isHovered;

@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import tempfile
 import unittest
+from contextlib import ExitStack
 from datetime import date, datetime
 from pathlib import Path
 from unittest.mock import patch
@@ -12,11 +13,16 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 import mercury_auth  # noqa: E402
+import operation_logs  # noqa: E402
 
 
 class MercuryAuthTests(unittest.TestCase):
     def setUp(self) -> None:
+        self.contexts = ExitStack()
+        self.addCleanup(self.contexts.close)
         self.temp_dir = tempfile.TemporaryDirectory()
+        self.contexts.enter_context(patch.object(operation_logs, "DATA_DIRECTORY", Path(self.temp_dir.name)))
+        self.contexts.enter_context(patch.object(operation_logs, "AUDIT_LOG_FILE", Path(self.temp_dir.name) / "audit.jsonl"))
         self.users_file = Path(self.temp_dir.name) / "users.json"
         self.secret_file = Path(self.temp_dir.name) / "jwt-secret.txt"
         self.users_patch = patch.object(mercury_auth, "USERS_FILE", self.users_file)
