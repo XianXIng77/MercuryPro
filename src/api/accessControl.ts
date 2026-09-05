@@ -22,6 +22,8 @@ export interface AccessUser extends AccessProfile {
   roleLabel?: string;
   extraMenus: string[];
   extraPermissions: string[];
+  removedMenus: string[];
+  removedPermissions: string[];
   roleMenus: string[];
   rolePermissions: string[];
   createdAt?: number;
@@ -45,5 +47,5 @@ export const accessApi = {
   users: () => request<{ items: AccessUser[] }>('/access/users'),
   user: (email: string) => request<AccessUser>('/access/users/' + encodeURIComponent(email)),
   updateRole: (role: RoleDefinition) => request<RoleDefinition>(`/access/roles/${encodeURIComponent(role.key)}`, { method: 'PUT', body: JSON.stringify(role) }),
-  updateUser: (user: Pick<AccessUser, 'email' | 'role' | 'extraMenus' | 'extraPermissions'>) => request<{ user: AccessUser } & AccessProfile>(`/access/users/${encodeURIComponent(user.email)}`, { method: 'PUT', body: JSON.stringify({ role: user.role, extraMenus: user.extraMenus, extraPermissions: user.extraPermissions }) }),
+  updateUser: (user: Pick<AccessUser, 'email' | 'role' | 'extraMenus' | 'extraPermissions' | 'removedMenus' | 'removedPermissions'>) => request<{ user: AccessUser } & AccessProfile>(`/access/users/${encodeURIComponent(user.email)}`, { method: 'PUT', body: JSON.stringify({ role: user.role, extraMenus: user.extraMenus, extraPermissions: user.extraPermissions, removedMenus: user.removedMenus, removedPermissions: user.removedPermissions }) }),
 };

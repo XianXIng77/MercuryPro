@@ -78,14 +78,14 @@ MENU_DEFINITIONS = _load_menu_registry()
 
 
 PERMISSION_DEFINITIONS: list[dict[str, str]] = [
-    {"code": "dashboard:view", "label": "查看数据仪表盘", "group": "工作台"},
-    {"code": "email:view", "label": "查看邮箱管理", "group": "工作台"},
-    {"code": "register:view", "label": "查看 AI 注册", "group": "注册中心"},
+    {"code": "dashboard:view", "label": "查询数据仪表盘", "group": "工作台"},
+    {"code": "email:view", "label": "查询邮箱管理", "group": "工作台"},
+    {"code": "register:view", "label": "查询 AI 注册", "group": "注册中心"},
     {"code": "register:run", "label": "执行账号注册", "group": "注册中心"},
-    {"code": "invite:view", "label": "查看邀请码", "group": "系统管理"},
+    {"code": "invite:view", "label": "查询邀请码", "group": "系统管理"},
     {"code": "invite:manage", "label": "管理邀请码", "group": "系统管理"},
-    {"code": "logs:view", "label": "查看注册日志", "group": "审计中心"},
-    {"code": "audit:view", "label": "查看操作审计", "group": "审计中心"},
+    {"code": "logs:view", "label": "查询注册日志", "group": "审计中心"},
+    {"code": "audit:view", "label": "查询操作审计", "group": "审计中心"},
     {"code": "access:manage", "label": "管理角色与权限", "group": "系统管理"},
 ]
 
@@ -193,6 +193,8 @@ def access_profile(user: dict[str, Any]) -> dict[str, Any]:
     role_permissions = _clean_access_values(role.get("permissions"), set(_all_permission_codes()))
     extra_menus = _clean_access_values(source.get("extraMenus"), set(_all_menu_keys()))
     extra_permissions = _clean_access_values(source.get("extraPermissions"), set(_all_permission_codes()))
+    removed_menus = set(_clean_access_values(source.get("removedMenus"), set(_all_menu_keys())))
+    removed_permissions = set(_clean_access_values(source.get("removedPermissions"), set(_all_permission_codes())))
     if role_key == "admin":
         # 管理员模板可以收紧业务权限，但必须始终保留权限中心，避免把系统锁死。
         role_menus = list(dict.fromkeys([*role_menus, "access"]))
@@ -202,11 +204,26 @@ def access_profile(user: dict[str, Any]) -> dict[str, Any]:
         extra_menus = [key for key in extra_menus if key != "access"]
         role_permissions = [code for code in role_permissions if code != "access:manage"]
         extra_permissions = [code for code in extra_permissions if code != "access:manage"]
-    menu_keys = set(role_menus) | set(extra_menus)
     role_permissions = list(dict.fromkeys([*role_permissions, *_menu_permissions(role_menus)]))
-    extra_permissions = list(dict.fromkeys([*extra_permissions, *_menu_permissions(extra_menus)]))
-    permission_codes = set(role_permissions) | set(extra_permissions)
-    menus = [dict(item) for item in MENU_DEFINITIONS if str(item["key"]) in menu_keys]
+    # Do not return computed permissions as raw overrides: editing/saving them
+    # would otherwise turn inherited grants into persistent personal grants.
+    # Explicit user grants have the highest precedence.
+    menu_keys = ((set(role_menus) - removed_menus) | set(extra_menus))
+    permission_codes = set(role_permissions) | set(extra_permissions) | set(_menu_permissions(extra_menus))
+    for menu in MENU_DEFINITIONS:
+        permission = str(menu.get("permission") or "")
+        if menu["key"] in removed_menus and permission not in extra_permissions and not any(
+            other["key"] in menu_keys and other.get("permission") == permission
+            for other in MENU_DEFINITIONS
+        ):
+            permission_codes.discard(permission)
+    permission_codes = (permission_codes - removed_permissions) | set(extra_permissions)
+    if role_key == "admin":
+        menu_keys.add("access")
+        permission_codes.add("access:manage")
+    # Menu visibility is independent from action permissions.
+    menus = [dict(item) for item in MENU_DEFINITIONS
+             if str(item["key"]) in menu_keys]
     permissions = [code for code in _all_permission_codes() if code in permission_codes]
     return {
         "role": role_key,
@@ -217,6 +234,8 @@ def access_profile(user: dict[str, Any]) -> dict[str, Any]:
         "rolePermissions": role_permissions,
         "extraMenus": extra_menus,
         "extraPermissions": extra_permissions,
+        "removedMenus": sorted(removed_menus),
+        "removedPermissions": sorted(removed_permissions),
     }
 
 _users_lock = threading.RLock()
@@ -250,6 +269,8 @@ class UserAccessPayload(BaseModel):
     role: str = Field(min_length=2, max_length=40)
     extraMenus: list[str] = Field(default_factory=list)
     extraPermissions: list[str] = Field(default_factory=list)
+    removedMenus: list[str] = Field(default_factory=list)
+    removedPermissions: list[str] = Field(default_factory=list)
 class ProfilePayload(BaseModel):
     username: str = Field(min_length=1, max_length=32)
     phone: str = Field(default="", max_length=32)
@@ -565,6 +586,10 @@ def required_permission_for_request(path: str, method: str) -> str | None:
         return "dashboard:view"
     if normalized.startswith("/api/auth/access/"):
         return "access:manage"
+    for menu in MENU_DEFINITIONS:
+        menu_path = str(menu.get("path") or "").rstrip("/")
+        if menu_path and (normalized == menu_path or normalized.startswith(menu_path + "/")):
+            return str(menu.get("permission") or "") or None
     if normalized.startswith("/api/auth/"):
         return None
     if normalized == "/api/microsoft" or normalized.startswith("/api/microsoft/"):
@@ -758,7 +783,7 @@ async def access_users(_admin: dict[str, Any] = Depends(require_admin)) -> dict[
     for user in _load_users():
         public = _public_user(user)
         profile = access_profile(user)
-        items.append({**public, "createdAt": user.get("createdAt"), "extraMenus": profile["extraMenus"], "extraPermissions": profile["extraPermissions"], "roleMenus": profile["roleMenus"], "rolePermissions": profile["rolePermissions"], "menus": profile["menus"], "permissions": profile["permissions"]})
+        items.append({**public, "createdAt": user.get("createdAt"), "extraMenus": profile["extraMenus"], "extraPermissions": profile["extraPermissions"], "removedMenus": profile["removedMenus"], "removedPermissions": profile["removedPermissions"], "roleMenus": profile["roleMenus"], "rolePermissions": profile["rolePermissions"], "menus": profile["menus"], "permissions": profile["permissions"]})
     return {"items": items}
 
 
@@ -790,26 +815,30 @@ async def update_user_access(email: str, payload: UserAccessPayload, _admin: dic
         raise AuthError(400, "必须至少保留一个管理员账号")
     extra_menus = _clean_access_values(payload.extraMenus, set(_all_menu_keys()))
     extra_permissions = _clean_access_values(payload.extraPermissions, set(_all_permission_codes()))
+    removed_menus = _clean_access_values(payload.removedMenus, set(_all_menu_keys()))
+    removed_permissions = _clean_access_values(payload.removedPermissions, set(_all_permission_codes()))
     if payload.role != "admin":
         extra_menus = [item for item in extra_menus if item != "access"]
         extra_permissions = [item for item in extra_permissions if item != "access:manage"]
-    extra_permissions = list(dict.fromkeys([*extra_permissions, *_menu_permissions(extra_menus)]))
-    access_fields = ("role", "extraMenus", "extraPermissions")
+    access_fields = ("role", "extraMenus", "extraPermissions", "removedMenus", "removedPermissions")
     previous = {key: target.get(key) for key in access_fields}
     target["role"] = payload.role
     target["extraMenus"] = extra_menus
     target["extraPermissions"] = extra_permissions
+    target["removedMenus"] = removed_menus
+    target["removedPermissions"] = removed_permissions
     _save_users(users)
     public = _public_user(target)
+    profile = access_profile(target)
     record_operation(
         request=request, action="权限变更", status_code=200, user=_admin,
         module="权限中心", risk="高风险",
         detail=f"修改用户授权：{public['email']}；" + json.dumps(
-            {"before": previous, "after": {key: target.get(key) for key in access_fields}},
+            {"before": previous, "after": {key: target.get(key) for key in access_fields}, "effectivePermissions": profile["permissions"]},
             ensure_ascii=False,
         ),
     )
-    return {"user": public, **access_profile(target)}
+    return {"user": public, **profile}
 
 
 @router.get("/stats")
@@ -818,3 +847,4 @@ async def user_stats(
 ) -> dict[str, Any]:
     """返回用户数量、近 30 天趋势、周注册量和角色占比。"""
     return build_user_stats()
+

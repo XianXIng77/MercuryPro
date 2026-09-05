@@ -63,48 +63,12 @@
     "group": "工作台"
   },
   {
-    "key": "calendar",
-    "path": "/calendar",
-    "label": "日历",
-    "icon": "calendar",
-    "permission": "calendar:view",
-    "permissionLabel": "查看日历",
-    "group": "工作台"
-  },
-  {
-    "key": "contacts",
-    "path": "/contacts",
-    "label": "通讯录",
-    "icon": "contacts",
-    "permission": "contacts:view",
-    "permissionLabel": "查看通讯录",
-    "group": "工作台"
-  },
-  {
-    "key": "analytics",
-    "path": "/analytics",
-    "label": "数据分析",
-    "icon": "analytics",
-    "permission": "analytics:view",
-    "permissionLabel": "查看数据分析",
-    "group": "工作台"
-  },
-  {
-    "key": "tickets",
-    "path": "/tickets",
-    "label": "工单",
-    "icon": "tickets",
-    "permission": "tickets:view",
-    "permissionLabel": "查看工单",
-    "group": "工作台"
-  },
-  {
-    "key": "settings",
-    "path": "/settings",
-    "label": "系统设置",
-    "icon": "settings",
-    "permission": "settings:view",
-    "permissionLabel": "查看系统设置",
-    "group": "工作台"
+    "key": "test-navigation",
+    "path": "/test-navigation",
+    "label": "测试导航",
+    "icon": "test",
+    "permission": "test-navigation:view",
+    "permissionLabel": "查看测试导航",
+    "group": "开发测试"
   }
 ]

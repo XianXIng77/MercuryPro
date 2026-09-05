@@ -21,26 +21,16 @@ import { PersonalCenter } from './components/PersonalCenter';
 import { authApi } from './api/auth';
 import menuRegistry from './data/menu-registry.json';
 import { useToast } from './components/Toast';
+import { TestNavigationPanel } from './components/TestNavigationPanel';
 
-const TAB_PATHS: Record<NavTab, string> = {
-  dashboard: '/dashboard',
-  email: '/email',
-  register: '/register',
-  invite: '/invite',
-  logs: '/logs',
-  audit: '/audit',
-  access: '/access',
-  calendar: '/calendar',
-  contacts: '/contacts',
-  analytics: '/analytics',
-  tickets: '/tickets',
-  settings: '/settings',
+// Menu URLs have one source; profile remains a fixed authenticated entrance.
+const TAB_PATHS: Record<string, string> = {
+  ...Object.fromEntries(menuRegistry.map(menu => [menu.key, menu.path])),
   profile: '/profile',
 };
 
 function tabForPath(pathname: string): NavTab {
-  const registryPaths = menuRegistry.reduce<Record<string, string>>((result, menu) => { result[menu.key] = menu.path; return result; }, { ...TAB_PATHS });
-  const match = (Object.entries(registryPaths) as [NavTab, string][]).find(([, path]) =>
+  const match = (Object.entries(TAB_PATHS) as [NavTab, string][]).sort((a, b) => b[1].length - a[1].length).find(([, path]) =>
     pathname === path || pathname.startsWith(`${path}/`),
   );
   return match?.[0] || 'dashboard';
@@ -69,6 +59,7 @@ export default function App() {
   });
   const currentPreset = useMemo(() => getPreset(currentPresetId), [currentPresetId]);
   const activeTab = tabForPath(location.pathname);
+  const isRegisteredPath = Object.values(TAB_PATHS).some((path) => location.pathname === path || location.pathname.startsWith(`${path}/`));
   const isPublicMailboxPath = location.pathname.startsWith('/mailbox/');
 
   // 启动时向后端查询当前会话(HttpOnly Cookie 携带,自动恢复登录态)
@@ -148,9 +139,17 @@ export default function App() {
       });
   };
 
+  const refreshAccessProfile = () => {
+    void authApi.menus().then((profile) => {
+      setAccessProfile(profile);
+      if (profile.role) setCurrentUser((current) => current ? { ...current, role: profile.role as AuthUser['role'] } : current);
+    }).catch(() => { /* 保存后同步失败时由定时同步重试 */ });
+  };
+
   const handleSelectTab = (tab: NavTab) => {
     setActiveAccount(null);
-    navigate(TAB_PATHS[tab]);
+    const path = TAB_PATHS[tab];
+    if (path) navigate(path);
   };
 
   const handleRunAiAutoTag = () => {
@@ -176,7 +175,7 @@ export default function App() {
 
   // 菜单与 URL 使用同一份后端授权；权限变更同步后，当前失效页面会立刻退出。
   if (!accessProfile) return null;
-  const canAccessCurrentMenu = activeTab === 'profile' || accessProfile.menus.some((menu) => menu.key === activeTab);
+  const canAccessCurrentMenu = isRegisteredPath && (activeTab === 'profile' || accessProfile.menus.some((menu) => menu.key === activeTab));
   const fallbackPath = accessProfile.menus[0]?.path;
   if (!canAccessCurrentMenu && fallbackPath) {
     return <Navigate to={fallbackPath} replace />;
@@ -226,27 +225,22 @@ export default function App() {
             >
               <Routes>
                 <Route path="/" element={<Navigate to="/dashboard" replace />} />
-                <Route path="/dashboard" element={<ExtensionModules activeTab="dashboard" currentPreset={currentPreset} permissionCodes={accessProfile.permissions} onSwitchToEmailList={() => handleSelectTab('email')} />} />
+                <Route path={TAB_PATHS.dashboard} element={<ExtensionModules activeTab="dashboard" currentPreset={currentPreset} permissionCodes={accessProfile.permissions} onSwitchToEmailList={() => handleSelectTab('email')} />} />
                 <Route
-                  path="/email"
+                  path={TAB_PATHS.email}
                   element={activeAccount ? (
                     <MailboxInboxView account={activeAccount} onBackToAccountList={() => setActiveAccount(null)} currentPreset={currentPreset} />
                   ) : (
                     <MailAccountList onOpenAccountInbox={setActiveAccount} currentPreset={currentPreset} />
                   )}
                 />
-                <Route path="/register" element={<ExtensionModules activeTab="register" currentPreset={currentPreset} permissionCodes={accessProfile.permissions} onSwitchToEmailList={() => handleSelectTab('email')} />} />
-                <Route path="/invite" element={<ExtensionModules activeTab="invite" currentPreset={currentPreset} permissionCodes={accessProfile.permissions} onSwitchToEmailList={() => handleSelectTab('email')} />} />
-                <Route path="/logs" element={<ExtensionModules activeTab="logs" currentPreset={currentPreset} permissionCodes={accessProfile.permissions} onSwitchToEmailList={() => handleSelectTab('email')} />} />
-                <Route path="/audit" element={<ExtensionModules activeTab="audit" currentPreset={currentPreset} permissionCodes={accessProfile.permissions} onSwitchToEmailList={() => handleSelectTab('email')} />} />
-                <Route path="/access" element={currentUser.role === 'admin' ? <AccessControlPanel currentPreset={currentPreset} /> : <Navigate to="/dashboard" replace />} />
-                <Route path="/calendar" element={<ExtensionModules activeTab="calendar" currentPreset={currentPreset} permissionCodes={accessProfile.permissions} onSwitchToEmailList={() => handleSelectTab('email')} />} />
-                <Route path="/contacts" element={<ExtensionModules activeTab="contacts" currentPreset={currentPreset} permissionCodes={accessProfile.permissions} onSwitchToEmailList={() => handleSelectTab('email')} />} />
-                <Route path="/analytics" element={<ExtensionModules activeTab="analytics" currentPreset={currentPreset} permissionCodes={accessProfile.permissions} onSwitchToEmailList={() => handleSelectTab('email')} />} />
-                <Route path="/tickets" element={<ExtensionModules activeTab="tickets" currentPreset={currentPreset} permissionCodes={accessProfile.permissions} onSwitchToEmailList={() => handleSelectTab('email')} />} />
-                <Route path="/settings" element={<ExtensionModules activeTab="settings" currentPreset={currentPreset} permissionCodes={accessProfile.permissions} onSwitchToEmailList={() => handleSelectTab('email')} />} />
-                <Route path="/profile" element={<PersonalCenter currentUser={currentUser} currentPreset={currentPreset} onUserUpdate={setCurrentUser} onSelectPreset={setCurrentPresetId} />} />
-                {menuRegistry.filter((menu) => !['dashboard','email','register','invite','logs','audit','access'].includes(menu.key)).map((menu) => <React.Fragment key={menu.key}><Route path={menu.path} element={<ExtensionModules activeTab={menu.key as NavTab} currentPreset={currentPreset} permissionCodes={accessProfile.permissions} onSwitchToEmailList={() => handleSelectTab('email')} />} /></React.Fragment>)}
+                <Route path={TAB_PATHS.register} element={<ExtensionModules activeTab="register" currentPreset={currentPreset} permissionCodes={accessProfile.permissions} onSwitchToEmailList={() => handleSelectTab('email')} />} />
+                <Route path={TAB_PATHS.invite} element={<ExtensionModules activeTab="invite" currentPreset={currentPreset} permissionCodes={accessProfile.permissions} onSwitchToEmailList={() => handleSelectTab('email')} />} />
+                <Route path={TAB_PATHS.logs} element={<ExtensionModules activeTab="logs" currentPreset={currentPreset} permissionCodes={accessProfile.permissions} onSwitchToEmailList={() => handleSelectTab('email')} />} />
+                <Route path={TAB_PATHS.audit} element={<ExtensionModules activeTab="audit" currentPreset={currentPreset} permissionCodes={accessProfile.permissions} onSwitchToEmailList={() => handleSelectTab('email')} />} />
+                <Route path={TAB_PATHS.access} element={currentUser.role === 'admin' ? <AccessControlPanel currentPreset={currentPreset} onAccessChanged={refreshAccessProfile} /> : <Navigate to="/dashboard" replace />} />
+                <Route path={TAB_PATHS.profile} element={<PersonalCenter currentUser={currentUser} currentPreset={currentPreset} onUserUpdate={setCurrentUser} onSelectPreset={setCurrentPresetId} />} />
+                <Route path={TAB_PATHS['test-navigation']} element={<TestNavigationPanel currentPreset={currentPreset} />} />
                 <Route path="*" element={<Navigate to="/dashboard" replace />} />
               </Routes>
             </motion.main>

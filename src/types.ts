@@ -91,7 +91,7 @@ export interface StylePreset {
   };
 }
 
-export type NavTab = 'dashboard' | 'email' | 'register' | 'invite' | 'logs' | 'audit' | 'access' | 'calendar' | 'contacts' | 'analytics' | 'tickets' | 'settings' | 'profile';
+export type NavTab = 'dashboard' | 'email' | 'register' | 'invite' | 'logs' | 'audit' | 'access' | 'profile';
 
 export interface MailAccount {
   id: string;
