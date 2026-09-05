@@ -24,7 +24,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, EmailStr, Field
 
-from invite_codes import InviteCodeError, use_invite_code
+from invite_codes import InviteCodeError, use_invite_code\nfrom casbin_authorization import build_enforcer, enforce
 
 router = APIRouter(prefix="/api/auth", tags=["Auth"])
 
@@ -536,7 +536,7 @@ def user_has_permission(user: dict[str, Any], permission: str) -> bool:
     """Return whether the persisted user grants allow one permission."""
     if not PERMISSION_ENFORCEMENT_ENABLED:
         return True
-    return permission in access_profile(user)["permissions"]
+    profile = access_profile(user)\n    if permission not in profile["permissions"]:\n        return False\n    return enforce(build_enforcer(_load_roles(), _load_users()), str(user.get("email") or ""), permission)
 
 
 def require_permission(permission: str):
