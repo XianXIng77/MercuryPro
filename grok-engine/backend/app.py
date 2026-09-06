@@ -248,7 +248,6 @@ registration = _get_registration_adapter()
 class Settings(BaseModel):
     registration_target: Literal["grok", "chatgpt"] = "grok"
     registration_mode: Literal["browser", "protocol"] = "browser"
-    invite_code: str = ""
     mail_provider: Literal[
         "yyds",
         "custom",

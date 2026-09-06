@@ -209,7 +209,7 @@ class MercuryAuthTests(unittest.TestCase):
         self.assertEqual(required("/api/grok/chatgpt/accounts/access-tokens", "POST"), "register:token:read")
         self.assertEqual(required("/api/grok/chatgpt/accounts", "GET"), "register:resource")
         self.assertEqual(required("/api/grok/mail/hotmail/accounts", "GET"), "register:resource")
-        self.assertEqual(required("/api/grok/performance", "GET"), "register:tools")
+        self.assertEqual(required("/api/grok/performance", "GET"), "register:view")
 
         self.assertEqual(required("/api/grok/sessions", "GET"), "register:view")
         self.assertEqual(required("/api/invite-codes", "GET"), "invite:view")

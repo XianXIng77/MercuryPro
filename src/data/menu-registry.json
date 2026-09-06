@@ -61,7 +61,6 @@
       { "code": "register:config", "label": "AI 注册配置", "group": "注册中心" },
       { "code": "register:run", "label": "AI 注册执行", "group": "注册中心" },
       { "code": "register:resource", "label": "AI 注册资源管理", "group": "注册中心" },
-      { "code": "register:tools", "label": "AI 注册导入与工具", "group": "注册中心" },
       { "code": "register:token:read", "label": "AI 注册 Token 查看", "group": "注册中心" }
     ]
   },

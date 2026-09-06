@@ -108,6 +108,7 @@ def _menu_permission_definitions(menu_definitions: list[dict[str, Any]]) -> list
     return definitions
 
 
+
 PERMISSION_DEFINITIONS: list[dict[str, str]] = [
     {"code": "dashboard:view", "label": "查询数据仪表盘", "group": "工作台"},
     {"code": "email:view", "label": "查询邮箱", "group": "邮箱管理"},
@@ -120,7 +121,6 @@ PERMISSION_DEFINITIONS: list[dict[str, str]] = [
     {"code": "register:config", "label": "AI 注册配置", "group": "注册中心"},
     {"code": "register:run", "label": "AI 注册执行", "group": "注册中心"},
     {"code": "register:resource", "label": "AI 注册资源管理", "group": "注册中心"},
-    {"code": "register:tools", "label": "AI 注册导入与工具", "group": "注册中心"},
     {"code": "register:token:read", "label": "AI 注册 Token 查看", "group": "注册中心"},
     {"code": "invite:view", "label": "查询邀请码", "group": "系统管理"},
     {"code": "invite:create", "label": "生成邀请码", "group": "邀请码管理"},
@@ -181,7 +181,8 @@ def _all_menu_keys() -> list[str]:
 
 
 def _all_permission_codes() -> list[str]:
-    return [str(item["code"]) for item in PERMISSION_DEFINITIONS]
+    visible = [str(item["code"]) for item in PERMISSION_DEFINITIONS]
+    return list(dict.fromkeys(visible))
 
 
 def _default_roles() -> dict[str, dict[str, Any]]:
@@ -762,7 +763,7 @@ def required_permission_for_request(path: str, method: str) -> str | None:
         return "email:view"
     # AI registration API permissions are intentionally explicit so the
     # registration page can grant read, configuration, execution, resources,
-    # tools, and token visibility independently.
+    # and token visibility independently.
     if normalized == "/api/config" or normalized.startswith("/api/config/"):
         return "register:config"
     if normalized == "/api/register":
@@ -785,9 +786,9 @@ def required_permission_for_request(path: str, method: str) -> str | None:
     if normalized == "/api/account-rotation" or normalized.startswith("/api/account-rotation/"):
         return "register:resource"
     if normalized == "/api/mail/domain/test" or normalized.startswith("/api/solver") or normalized.startswith("/api/proxy") or normalized.startswith("/api/performance") or normalized.startswith("/api/sub2api") or normalized.startswith("/api/smsbower") or normalized.startswith("/api/import") or normalized.startswith("/api/browser-debug"):
-        return "register:tools"
+        return "register:view"
     if normalized == "/api/mail/hotmail/test":
-        return "register:tools"
+        return "register:view"
     if normalized == "/api/mail" or normalized.startswith("/api/mail/"):
         return "register:resource" if "/hotmail" in normalized else "register:config"
     if normalized == "/api/auth/stats":

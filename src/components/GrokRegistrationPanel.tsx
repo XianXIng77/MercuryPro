@@ -33,6 +33,7 @@ import {
   grokRegistrationApi,
 } from '../api/grokRegistration';
 import { ConfirmDialog } from './ConfirmDialog';
+import { PermissionEmptyState } from './PermissionEmptyState';
 import { StyledSelect, StyledSelectOption } from './StyledSelect';
 import { useToast } from './Toast';
 import { Tooltip } from './Tooltip';
@@ -44,7 +45,6 @@ const NOVNC_DEBUG_URL = '/browser-debug/vnc.html?autoconnect=true&reconnect=true
 const DEFAULT_CONFIG: GrokConfig = {
   registration_target: 'grok',
   registration_mode: 'browser',
-  invite_code: '',
   count: 1,
   concurrency: 1,
   stagger_ms: 1200,
@@ -850,8 +850,6 @@ const REGISTER_PERMISSION_BY_METHOD: Record<string, string> = {
   chatgptAccounts: 'register:resource', rotation: 'register:resource',
   hotmailAccounts: 'register:resource', importHotmail: 'register:resource', probeHotmail: 'register:resource', probeHotmailOne: 'register:resource', updateHotmail: 'register:resource', restoreHotmailUses: 'register:resource', deleteHotmail: 'register:resource', deleteHotmailSelected: 'register:resource', deleteHotmailUsed: 'register:resource', deleteHotmailUnhealthy: 'register:resource',
   probeRotation: 'register:resource', probeRotationOne: 'register:resource', deleteRotation: 'register:resource',
-  performance: 'register:tools', detectSolver: 'register:tools', detectProxy: 'register:tools', checkProxy: 'register:tools', sub2apiGroups: 'register:tools', testHotmail: 'register:tools', domainMailTest: 'register:tools', smsbowerBalance: 'register:tools', smsbowerServices: 'register:tools',
-  browserDebugStatus: 'register:tools',
 };
 
 interface Props {
@@ -860,17 +858,22 @@ interface Props {
   canConfig?: boolean;
   canRun?: boolean;
   canResource?: boolean;
-  canTools?: boolean;
   canTokenRead?: boolean;
 }
 
-export const GrokRegistrationPanel: React.FC<Props> = ({
+export const GrokRegistrationPanel: React.FC<Props> = (props) => {
+  if (props.canView === false) {
+    return <PermissionEmptyState currentPreset={props.currentPreset} description="暂无访问 AI 注册的权限" />;
+  }
+  return <GrokRegistrationPanelContent {...props} />;
+};
+
+const GrokRegistrationPanelContent: React.FC<Props> = ({
   currentPreset,
   canView = true,
   canConfig = true,
   canRun = true,
   canResource = true,
-  canTools = true,
   canTokenRead = true,
 }) => {
   const theme = currentPreset.themeClasses;
@@ -881,22 +884,19 @@ export const GrokRegistrationPanel: React.FC<Props> = ({
     ...(canConfig ? ['register:config'] : []),
     ...(canRun ? ['register:run'] : []),
     ...(canResource ? ['register:resource'] : []),
-    ...(canTools ? ['register:tools'] : []),
     ...(canTokenRead ? ['register:token:read'] : []),
-  ]), [canConfig, canResource, canRun, canTokenRead, canTools, canView]);
+  ]), [canConfig, canResource, canRun, canTokenRead, canView]);
   const registrationApi = useMemo(() => new Proxy(grokRegistrationApi, {
     get(target, property, receiver) {
       const value = Reflect.get(target, property, receiver);
       const permission = typeof property === 'string' ? REGISTER_PERMISSION_BY_METHOD[property] || 'register:view' : undefined;
       if (permission && typeof value === 'function' && !grantedPermissions.has(permission)) {
-        return (..._args: unknown[]) => {
-          toast.error('无权限');
-          return Promise.reject(new Error('无权限'));
-        };
+        // Let the caller report the error once; silent background requests stay silent.
+        return (..._args: unknown[]) => Promise.reject(new Error('无权限'));
       }
       return value;
     },
-  }), [grantedPermissions, toast]);
+  }), [grantedPermissions]);
   const [tab, setTab] = useState<ConfigTab>('registration');
   // 域名邮箱配置:初始化时先用浏览器记住的域名 / QQ 邮箱 / 授权码填充,
   // 避免加载后端配置前被默认空值覆盖本地缓存。
@@ -926,6 +926,7 @@ export const GrokRegistrationPanel: React.FC<Props> = ({
   const [pendingStartConfig, setPendingStartConfig] = useState<GrokConfig | null>(null);
   const [pendingConfirmation, setPendingConfirmation] = useState<PendingConfirmation | null>(null);
   const [loading, setLoading] = useState(true);
+  const configLoadIdRef = useRef(0);
   const [busy, setBusy] = useState('');
   const [notice, setNotice] = useState<{ tone: 'ok' | 'error' | 'info'; text: string } | null>(null);
 
@@ -1107,10 +1108,16 @@ export const GrokRegistrationPanel: React.FC<Props> = ({
     }
   };
 
-  const load = async () => {
+  const load = useCallback(async () => {
+    const requestId = ++configLoadIdRef.current;
+    if (!canConfig) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     try {
       const loaded = await registrationApi.config();
+      if (requestId !== configLoadIdRef.current) return;
       // 用浏览器记住的域名邮箱配置补齐后端配置(后端未保存过时仍保留上次填写)
       let remembered: Partial<GrokConfig> = {};
       try {
@@ -1130,16 +1137,17 @@ export const GrokRegistrationPanel: React.FC<Props> = ({
       }));
       setServiceOnline(true);
     } catch (error) {
-      setServiceOnline(false);
-      showError(error);
+      if (requestId !== configLoadIdRef.current) return;
+      setNotice({ tone: 'error', text: error instanceof Error ? error.message : String(error) });
     } finally {
-      setLoading(false);
+      if (requestId === configLoadIdRef.current) setLoading(false);
     }
-  };
+  }, [canConfig, registrationApi]);
 
   useEffect(() => {
     void load();
-  }, []);
+    return () => { configLoadIdRef.current += 1; };
+  }, [load]);
 
   useEffect(() => {
     if (tab !== 'browser') return;
@@ -1155,14 +1163,18 @@ export const GrokRegistrationPanel: React.FC<Props> = ({
     void refreshMonitor();
     const timer = window.setInterval(() => void refreshMonitor(), 2000);
     return () => window.clearInterval(timer);
-  }, [tab]);
+  }, [tab, registrationApi]);
 
   useEffect(() => {
     if (tab !== 'registration') return;
     void loadPerformance(config.captcha_provider);
-  }, [tab, config.captcha_provider]);
+  }, [tab, config.captcha_provider, registrationApi]);
 
   useEffect(() => {
+    if (!canResource) {
+      setHotmailPool(null);
+      return;
+    }
     if (tab !== 'registration' && tab !== 'mail') return;
     if (config.mail_provider !== 'hotmail_local') return;
     let active = true;
@@ -1177,7 +1189,7 @@ export const GrokRegistrationPanel: React.FC<Props> = ({
     void refresh(true);
     const timer = window.setInterval(() => void refresh(false), 2500);
     return () => { active = false; window.clearInterval(timer); };
-  }, [config.mail_provider, config.hotmail_account_source, config.registration_target]);
+  }, [tab, canResource, registrationApi, config.mail_provider, config.hotmail_account_source, config.registration_target]);
 
   useEffect(() => {
     if (config.mail_provider !== 'hotmail_local' || !hotmailPool) return;
@@ -1208,6 +1220,11 @@ export const GrokRegistrationPanel: React.FC<Props> = ({
   };
 
   const save = async () => {
+    if (!canConfig) {
+      setNotice({ tone: 'error', text: '无权限' });
+      return;
+    }
+    if (busy || loading) return;
     setBusy('save');
     try {
       const result = await registrationApi.saveConfig(normalizedConfig());
@@ -1425,6 +1442,7 @@ export const GrokRegistrationPanel: React.FC<Props> = ({
   };
 
   const openVisibleRegistrationBrowser = async () => {
+    if (!canRun || busy) return;
     if (activeBatches.length > 0) {
       setNotice({ tone: 'error', text: '当前仍有注册批次运行。请先停止或等待当前批次结束，再打开新的可视验证浏览器，避免重复启动浏览器。' });
       return;
@@ -1437,8 +1455,12 @@ export const GrokRegistrationPanel: React.FC<Props> = ({
         count: 1,
         concurrency: 1,
       };
-      const result = await registrationApi.saveConfig(nextConfig);
-      setConfig(mergeConfig(result.config));
+      if (canConfig) {
+        const result = await registrationApi.saveConfig(nextConfig);
+        setConfig(mergeConfig(result.config));
+      } else {
+        setConfig(mergeConfig(nextConfig));
+      }
       await registrationApi.start(nextConfig);
       await refreshMonitor();
       setNotice({
@@ -1484,6 +1506,7 @@ export const GrokRegistrationPanel: React.FC<Props> = ({
   };
 
   const loadChatgptAccounts = async (silent = false) => {
+    if (!canResource) return;
     if (!silent) setChatgptAccountsLoading(true);
     try {
       const result = await registrationApi.chatgptAccounts({
@@ -1597,6 +1620,7 @@ export const GrokRegistrationPanel: React.FC<Props> = ({
   };
 
   const loadRotation = async (page = rotation.page || 1, silent = false) => {
+    if (!canResource) return;
     if (!silent) setRotationLoading(true);
     try {
       const result = await registrationApi.rotation({
@@ -1645,11 +1669,11 @@ export const GrokRegistrationPanel: React.FC<Props> = ({
   };
 
   useEffect(() => {
-    if (tab !== 'rotation' || config.registration_target === 'chatgpt') return;
+    if (!canResource || tab !== 'rotation' || config.registration_target === 'chatgpt') return;
     void loadRotation(1);
     const timer = window.setInterval(() => void loadRotation(rotationPageRef.current, true), 3000);
     return () => window.clearInterval(timer);
-  }, [tab, rotationStatus, rotationQuery, rotationPageSize, config.registration_target]);
+  }, [tab, canResource, registrationApi, rotationStatus, rotationQuery, rotationPageSize, config.registration_target]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -1660,12 +1684,14 @@ export const GrokRegistrationPanel: React.FC<Props> = ({
   }, [chatgptAccountKeyword]);
 
   useEffect(() => {
-    if (tab !== 'rotation' || config.registration_target !== 'chatgpt') return;
+    if (!canResource || tab !== 'rotation' || config.registration_target !== 'chatgpt') return;
     void loadChatgptAccounts();
     const timer = window.setInterval(() => void loadChatgptAccounts(true), 3000);
     return () => window.clearInterval(timer);
   }, [
     tab,
+    canResource,
+    registrationApi,
     config.registration_target,
     chatgptAccountPage,
     chatgptAccountPageSize,
@@ -1676,13 +1702,20 @@ export const GrokRegistrationPanel: React.FC<Props> = ({
     chatgptAccountPaymentMethod,
   ]);
 
+  useEffect(() => {
+    if (canResource) return;
+    setRotation(EMPTY_ROTATION);
+    setChatgptAccountList(EMPTY_CHATGPT_ACCOUNT_LIST);
+    setTab((current) => current === 'rotation' ? 'registration' : current);
+  }, [canResource]);
+
   const tabs: Array<{ id: ConfigTab; label: string; icon: React.ReactNode; disabled?: boolean }> = [
     { id: 'registration', label: '注册配置', icon: <Settings2 className="w-4 h-4" /> },
     { id: 'browser', label: '显示浏览器', icon: <Globe2 className="w-4 h-4" /> },
     { id: 'mail', label: '邮箱配置', icon: <Mail className="w-4 h-4" /> },
     { id: 'proxy', label: '代理配置', icon: <Globe2 className="w-4 h-4" /> },
     { id: 'import', label: config.registration_target === 'chatgpt' ? '自动导入（暂不启用）' : '自动导入配置', icon: <UploadCloud className="w-4 h-4" /> },
-    { id: 'rotation', label: config.registration_target === 'chatgpt' ? '账号管理' : '账号轮询', icon: <RefreshCw className="w-4 h-4" /> },
+    { id: 'rotation', label: config.registration_target === 'chatgpt' ? '账号管理' : '账号轮询', icon: <RefreshCw className="w-4 h-4" />, disabled: !canResource },
   ];
 
   const Field = useCallback(({ label, children, wide = false, hint }: { label: string; children: React.ReactNode; wide?: boolean; hint?: string }) => (
@@ -1885,9 +1918,7 @@ export const GrokRegistrationPanel: React.FC<Props> = ({
     : Boolean(config.sub2api_base_url.trim() && (config.sub2api_auth_mode === 'api_key'
       ? config.sub2api_api_key.trim()
       : config.sub2api_admin_email.trim() && config.sub2api_admin_password.trim())));
-  const inviteCodeReady = Boolean(config.invite_code?.trim());
   const launchChecks = [
-    { label: '邀请码', detail: inviteCodeReady ? '邀请码已填写' : '请先在“邀请码”页面生成并填写邀请码', ready: inviteCodeReady },
     { label: '内置注册引擎', detail: serviceOnline ? '服务在线，可以创建任务' : serviceOnline === false ? '服务尚未就绪' : '正在检测服务状态', ready: serviceOnline === true },
     config.registration_target === 'chatgpt'
       ? { label: 'OpenAI 浏览器环境', detail: '使用独立 Camoufox 指纹与全新隐私上下文', ready: serviceOnline === true }
@@ -1976,7 +2007,7 @@ export const GrokRegistrationPanel: React.FC<Props> = ({
               <CircleDot className="inline w-3 h-3 mr-1" />内置注册引擎 {serviceOnline ? '在线' : serviceOnline === false ? '未就绪' : '检测中'}
             </span>
             {!canRun && <span className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-[11px] font-bold text-amber-600">只读 · 无执行权限</span>}
-            <Tooltip content="重新读取配置" placement="right" isDark={isDark}><button onClick={() => void load()} disabled={loading} className={`p-2 rounded-lg border ${theme.border} ${theme.textSecondary}`}><RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /></button></Tooltip>
+            <Tooltip content="重新读取配置" placement="right" isDark={isDark}><button aria-label="重新读取配置" onClick={() => void load()} disabled={!canConfig || loading} className={`p-2 rounded-lg border ${theme.border} ${theme.textSecondary}`}><RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /></button></Tooltip>
           </div>
         </div>
 
@@ -2010,21 +2041,21 @@ export const GrokRegistrationPanel: React.FC<Props> = ({
                 <button onClick={() => setPendingConfirmation({ kind: 'delete-rotation', ids: [...rotationSelected] })} disabled={!!busy || !rotationSelected.length} className="px-3 py-2 rounded-lg bg-rose-600 text-white text-xs font-bold flex items-center gap-1.5 disabled:opacity-40">{busy === 'rotation-delete' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}删除所选</button>
                 <button onClick={() => void probeRotation([], true)} disabled={!!busy || !rotation.summary.total} className="px-3 py-2 rounded-lg bg-emerald-600 text-white text-xs font-bold flex items-center gap-1.5 disabled:opacity-40">{busy === 'rotation-probe' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Activity className="w-3.5 h-3.5" />}全部激活</button>
               </> : <>
-                <button onClick={() => void save()} disabled={!!busy || !serviceOnline} className={`px-3 py-2 rounded-lg border text-xs font-bold flex items-center gap-1.5 ${theme.border} ${theme.textPrimary} disabled:opacity-50`}>{busy === 'save' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}保存配置</button>
+                <button onClick={() => void save()} disabled={canConfig && (loading || !!busy || !serviceOnline)} className={`px-3 py-2 rounded-lg border text-xs font-bold flex items-center gap-1.5 ${theme.border} ${theme.textPrimary} disabled:opacity-50`}>{busy === 'save' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}保存配置</button>
                 <button onClick={() => void togglePause()} disabled={!!busy || !activeBatches.length} className="px-3 py-2 rounded-lg bg-amber-500 text-white text-xs font-bold flex items-center gap-1.5 disabled:opacity-40">{busy === 'pause' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : pausedBatches.length ? <Play className="w-3.5 h-3.5" /> : <Pause className="w-3.5 h-3.5" />}{pausedBatches.length ? '继续注册' : '暂停注册'}</button>
-                <button onClick={() => void start()} disabled={!!busy || !serviceOnline || !mailReady || !checkoutProbeReady || !inviteCodeReady} className="px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold flex items-center gap-1.5 disabled:opacity-50">{busy === 'start' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}开始注册</button>
+                <button onClick={() => void start()} disabled={!!busy || !serviceOnline || !mailReady || !checkoutProbeReady} className="px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold flex items-center gap-1.5 disabled:opacity-50">{busy === 'start' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}开始注册</button>
               </>}
             </div>
           </div>
 
           <div className="p-4 sm:p-5 flex-1">
+            {!canConfig && <p className={`mb-4 rounded-lg border p-3 text-xs leading-5 ${theme.border} ${theme.textSecondary}`}>当前账号无权读取或保存系统配置。可填写参数用于启动注册任务，保存邮箱等配置需由有权限的账号操作。</p>}
             {loading ? <div className={`py-16 flex items-center justify-center gap-2 text-xs ${theme.textSecondary}`}><Loader2 className="w-4 h-4 animate-spin" />正在读取内置注册引擎配置…</div> : (
               <>
                 {tab === 'registration' && <div className="h-full flex flex-col gap-5">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <Field label="注册目标"><StyledSelect ariaLabel="注册目标" value={config.registration_target} onChange={(value) => setField('registration_target', value as GrokConfig['registration_target'])} options={REGISTRATION_TARGET_OPTIONS} isDark={isDark} /></Field>
                     <Field label="注册方式"><input value="浏览器注册" disabled className={`${fieldClass} opacity-70`} /></Field>
-                    <Field label="邀请码" hint="请在“邀请码”导航页生成后填写；服务端会在启动注册时再次校验。"><input value={config.invite_code} onChange={(e) => setField('invite_code', e.target.value.toUpperCase())} placeholder="请输入邀请码" className={`${fieldClass} font-mono tracking-wider`} /></Field>
                     <Field label={config.mail_provider === 'hotmail_local' ? `注册数量（可用槽位 ${hotmailAvailableSlots}）` : config.mail_provider === 'naturalflower' ? `注册数量（已填写 ${naturalflowerMailboxCount} 个）` : '注册数量'}><input type="number" min={1} max={config.mail_provider === 'hotmail_local' ? Math.max(1, hotmailAvailableSlots) : config.mail_provider === 'naturalflower' ? Math.max(1, naturalflowerMailboxCount) : 10000} value={config.count} onChange={(e) => setField('count', Number(e.target.value))} className={fieldClass} /></Field>
                     <Field label={`并发数（推荐最大为 ${recommendedConcurrency || '--'}）`}><input type="number" min={1} value={config.concurrency} onChange={(e) => setField('concurrency', Number(e.target.value))} className={fieldClass} /></Field>
                     <Field label="错峰毫秒"><input type="number" min={0} max={60000} value={config.stagger_ms} onChange={(e) => setField('stagger_ms', Number(e.target.value))} className={fieldClass} /></Field>
@@ -2200,7 +2231,8 @@ export const GrokRegistrationPanel: React.FC<Props> = ({
                       </div>
                     </div>
                   </div>}
-                  {config.mail_provider === 'hotmail_local' && <div className={`rounded-xl border overflow-hidden ${theme.border} ${isDark ? 'bg-slate-900/40' : 'bg-slate-50'}`}>
+                  {config.mail_provider === 'hotmail_local' && !canResource && <p className={`text-xs leading-5 ${theme.textSecondary}`}>当前账号无邮箱资源管理权限，无法查看或管理邮箱账户池。</p>}
+                  {config.mail_provider === 'hotmail_local' && canResource && <div className={`rounded-xl border overflow-hidden ${theme.border} ${isDark ? 'bg-slate-900/40' : 'bg-slate-50'}`}>
                     <div className={`p-4 border-b ${theme.border}`}>
                       <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3">
                         <div className="min-w-0">

@@ -288,15 +288,6 @@ def _effective_registration_concurrency(cfg: dict[str, Any], target: str) -> int
 
 def start_register(ctx, settings=None, paused=False):
     cfg = settings.model_dump() if settings else ctx.load_config()
-    invite_code = str(cfg.get("invite_code") or "").strip()
-    if not invite_code:
-        raise ctx.HTTPException(status_code=403, detail="请先填写邀请码")
-    from invite_codes import InviteCodeError, use_invite_code
-
-    try:
-        use_invite_code(invite_code)
-    except InviteCodeError as exc:
-        raise ctx.HTTPException(status_code=403, detail=str(exc)) from exc
     requested_target = str(cfg.get("registration_target") or "grok").strip().lower()
     if requested_target not in {"grok", "chatgpt"}:
         raise ctx.HTTPException(status_code=400, detail="不支持的注册目标")

@@ -26,7 +26,7 @@ export const ExtensionModules: React.FC<ExtensionModulesProps> = ({
   }
 
   if (activeTab === 'register') {
-    return <GrokRegistrationPanel currentPreset={currentPreset} canView={permissionCodes.includes('register:view')} canConfig={permissionCodes.includes('register:config')} canRun={permissionCodes.includes('register:run')} canResource={permissionCodes.includes('register:resource')} canTools={permissionCodes.includes('register:tools')} canTokenRead={permissionCodes.includes('register:token:read')} />;
+    return <GrokRegistrationPanel currentPreset={currentPreset} canView={permissionCodes.includes('register:view')} canConfig={permissionCodes.includes('register:config')} canRun={permissionCodes.includes('register:run')} canResource={permissionCodes.includes('register:resource')} canTokenRead={permissionCodes.includes('register:token:read')} />;
   }
 
   if (activeTab === 'invite') {

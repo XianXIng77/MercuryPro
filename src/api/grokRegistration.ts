@@ -1,7 +1,6 @@
 export interface GrokConfig {
   registration_target: 'grok' | 'chatgpt';
   registration_mode: 'browser';
-  invite_code: string;
   count: number;
   concurrency: number;
   stagger_ms: number;
