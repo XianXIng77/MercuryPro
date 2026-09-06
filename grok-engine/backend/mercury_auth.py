@@ -271,8 +271,8 @@ def _menu_permissions(menu_keys: list[str]) -> list[str]:
 
 
 def is_owner(user: dict[str, Any] | None) -> bool:
-    """Owner status is derived from canonical email, never client supplied role."""
-    return bool(user) and str(user.get("email") or "").strip().lower() == OWNER_EMAIL.lower()
+    """Owner status is persisted on the account so ownership can be transferred safely."""
+    return bool(user) and str(user.get("role") or "") == OWNER_ROLE
 
 def _effective_role(user: dict[str, Any] | None) -> str:
     if is_owner(user):
@@ -386,6 +386,10 @@ class PublicPermissionsPayload(BaseModel):
     permissions: list[str] = Field(default_factory=list)
 
 
+class OwnerTransferPayload(BaseModel):
+    email: EmailStr
+
+
 class ProfilePayload(BaseModel):
     username: str = Field(min_length=1, max_length=32)
     phone: str = Field(default="", max_length=32)
@@ -446,13 +450,6 @@ def _load_users() -> list[dict[str, Any]]:
             return []
         # Canonical owner identity is email-bound; migrate old admin records and
         # prevent role spoofing through stale persisted data.
-        for item in parsed:
-            if isinstance(item, dict):
-                email = str(item.get("email") or "").strip().lower()
-                if email == OWNER_EMAIL.lower():
-                    item["role"] = OWNER_ROLE
-                elif str(item.get("role") or "") == OWNER_ROLE:
-                    item["role"] = "user"
         return parsed
 
 
@@ -481,7 +478,9 @@ def verify_password(password: str, password_hash: str) -> bool:
 def ensure_default_admin() -> None:
     """Ensure the canonical site owner exists and migrate legacy admin data."""
     users = _load_users()
-    owner = next((item for item in users if str(item.get("email", "")).strip().lower() == OWNER_EMAIL.lower()), None)
+    owner = next((item for item in users if str(item.get("role") or "") == OWNER_ROLE), None)
+    if owner is None:
+        owner = next((item for item in users if str(item.get("email", "")).strip().lower() == OWNER_EMAIL.lower()), None)
     if owner is None:
         users.append({
             "email": OWNER_EMAIL,
@@ -511,10 +510,10 @@ def _public_user(user: dict[str, Any]) -> dict[str, Any]:
     return {
         "email": user.get("email"),
         "username": user.get("username") or str(user.get("email", "")).split("@")[0],
-        "role": OWNER_ROLE if str(user.get("email") or "").strip().lower() == OWNER_EMAIL.lower() else user.get("role", "user"),
-        "roleLabel": "站主" if str(user.get("email") or "").strip().lower() == OWNER_EMAIL.lower() else ("管理员" if user.get("role") == "admin" else "普通用户"),
-        "isOwner": str(user.get("email") or "").strip().lower() == OWNER_EMAIL.lower(),
-        "accessLocked": str(user.get("email") or "").strip().lower() == OWNER_EMAIL.lower(),
+        "role": user.get("role", "user"),
+        "roleLabel": "站主" if user.get("role") == OWNER_ROLE else ("管理员" if user.get("role") == "admin" else "普通用户"),
+        "isOwner": user.get("role") == OWNER_ROLE,
+        "accessLocked": user.get("role") == OWNER_ROLE,
         "phone": user.get("phone", ""),
         "bio": user.get("bio", ""),
         "avatarColor": user.get("avatarColor", "blue"),
@@ -622,10 +621,10 @@ def issue_session(response: Response, user: dict[str, Any], remember: bool) -> N
         {
             "sub": str(user.get("email", "")).lower(),
             "username": user.get("username") or "",
-            "role": OWNER_ROLE if str(user.get("email") or "").strip().lower() == OWNER_EMAIL.lower() else user.get("role", "user"),
-        "roleLabel": "站主" if str(user.get("email") or "").strip().lower() == OWNER_EMAIL.lower() else ("管理员" if user.get("role") == "admin" else "普通用户"),
-        "isOwner": str(user.get("email") or "").strip().lower() == OWNER_EMAIL.lower(),
-        "accessLocked": str(user.get("email") or "").strip().lower() == OWNER_EMAIL.lower(),
+            "role": user.get("role", "user"),
+        "roleLabel": "站主" if user.get("role") == OWNER_ROLE else ("管理员" if user.get("role") == "admin" else "普通用户"),
+        "isOwner": user.get("role") == OWNER_ROLE,
+        "accessLocked": user.get("role") == OWNER_ROLE,
         "phone": user.get("phone", ""),
         "bio": user.get("bio", ""),
         "avatarColor": user.get("avatarColor", "blue"),
@@ -1062,6 +1061,8 @@ async def update_user_access(email: str, payload: UserAccessPayload, _admin: dic
         raise AuthError(403, "站主账号和角色不可修改")
     if not actor_is_owner and (target_role == "admin" or payload.role in {OWNER_ROLE, "admin"}):
         raise AuthError(403, "管理员只能调整普通用户或自定义角色")
+    if not actor_is_owner and payload.role != target_role:
+        raise AuthError(403, "管理员不能调整用户身份")
     if (not actor_is_owner) and (
         str(target.get("role") or "user") == "admin"
         and payload.role != "admin"
@@ -1094,6 +1095,32 @@ async def update_user_access(email: str, payload: UserAccessPayload, _admin: dic
         ),
     )
     return {"user": public, **profile, **_access_target_metadata(_admin, target)}
+
+
+@router.put("/access/owner")
+async def transfer_owner(
+    payload: OwnerTransferPayload,
+    _admin: dict[str, Any] = Depends(require_admin),
+    request: Request = None,
+) -> dict[str, Any]:
+    from operation_logs import record_operation
+    if not is_owner(_admin):
+        raise AuthError(403, "仅站主可以转移站主身份")
+    target = _find_user(str(payload.email))
+    if target is None:
+        raise AuthError(404, "目标用户不存在")
+    if is_owner(target):
+        raise AuthError(400, "该用户已经是站主")
+    users = _load_users()
+    current = next((item for item in users if str(item.get("email") or "").strip().lower() == str(_admin.get("email") or "").strip().lower()), None)
+    target_saved = next((item for item in users if str(item.get("email") or "").strip().lower() == str(target.get("email") or "").strip().lower()), None)
+    if current is None or target_saved is None:
+        raise AuthError(404, "站主账号不存在")
+    current["role"] = "admin"
+    target_saved["role"] = OWNER_ROLE
+    _save_users(users)
+    record_operation(request=request, action="转移站主", status_code=200, user=_admin, module="权限中心", risk="高风险", detail=f"站主身份已转移至：{target_saved.get('email')}")
+    return {"user": _public_user(target_saved), "previousOwner": _public_user(current), **access_profile(target_saved)}
 
 
 @router.get("/stats")
