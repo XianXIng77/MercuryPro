@@ -242,7 +242,11 @@ class MercuryAuthTests(unittest.TestCase):
         self.assertEqual(labels["email:create"], "新增邮箱")
         self.assertEqual(labels["email:delete"], "删除邮箱")
 
-    def test_menu_grant_implies_its_view_permission(self) -> None:
+    def test_menu_grant_does_not_imply_its_view_permission(self) -> None:
+        roles = mercury_auth._default_roles()
+        roles['user']['menuKeys'] = []
+        roles['user']['permissions'] = []
+        mercury_auth._save_roles(roles)
         profile = mercury_auth.access_profile({
             "email": "",
             "role": "user",
@@ -250,7 +254,8 @@ class MercuryAuthTests(unittest.TestCase):
             "extraPermissions": [],
         })
 
-        self.assertIn("logs:view", profile["permissions"])
+        self.assertIn("logs", [menu["key"] for menu in profile["menus"]])
+        self.assertNotIn("logs:view", profile["permissions"])
 
     def test_admin_template_permissions_are_enforced_without_locking_access_center(self) -> None:
         roles = mercury_auth._default_roles()

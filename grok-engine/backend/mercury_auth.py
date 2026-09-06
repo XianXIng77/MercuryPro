@@ -243,10 +243,13 @@ def _load_roles() -> dict[str, dict[str, Any]]:
         permissions = _clean_access_values(role.get("permissions"), set(_all_permission_codes()))
         # Migrate the original minimal ordinary-user template once so existing
         # installations receive the new workspace defaults automatically.
-        if key == "user" and set(menu_keys) == {"dashboard", "email"} and set(permissions).issubset({"dashboard:view", "email:view"}):
+        if (
+            key == "user" and not role.get("grantsIndependent")
+            and set(menu_keys) == {"dashboard", "email"}
+            and set(permissions) == {"dashboard:view", "email:view"}
+        ):
             menu_keys = list(defaults["user"]["menuKeys"])
             permissions = list(defaults["user"]["permissions"])
-        permissions = list(dict.fromkeys([*permissions, *_menu_permissions(menu_keys)]))
         if key == OWNER_ROLE:
             # Owner is a capability wildcard: newly registered menus/permissions are automatic.
             menu_keys = list(all_menus)
@@ -261,22 +264,16 @@ def _load_roles() -> dict[str, dict[str, Any]]:
 def _save_roles(roles: dict[str, dict[str, Any]]) -> None:
     path = _roles_file()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(roles, ensure_ascii=False, indent=2), encoding="utf-8")
+    # A saved role is an explicit choice, even if it matches a legacy default.
+    # Do not expand it again when the role is reloaded.
+    saved = {key: {**role, "grantsIndependent": True} for key, role in roles.items()}
+    path.write_text(json.dumps(saved, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def _clean_access_values(values: Any, allowed: set[str]) -> list[str]:
     if not isinstance(values, list):
         return []
     return list(dict.fromkeys(str(value).strip() for value in values if str(value).strip() in allowed))
-
-
-def _menu_permissions(menu_keys: list[str]) -> list[str]:
-    selected = set(menu_keys)
-    return list(dict.fromkeys(
-        str(item.get("permission") or "").strip()
-        for item in MENU_DEFINITIONS
-        if str(item.get("key") or "") in selected and str(item.get("permission") or "").strip()
-    ))
 
 
 def _menu_access_permission_codes(menu_keys: list[str]) -> list[str]:
@@ -341,20 +338,10 @@ def access_profile(user: dict[str, Any]) -> dict[str, Any]:
         extra_menus = [key for key in extra_menus if key != "access"]
         role_permissions = [code for code in role_permissions if code != "access:manage"]
         extra_permissions = [code for code in extra_permissions if code != "access:manage"]
-    role_permissions = list(dict.fromkeys([*role_permissions, *_menu_permissions(role_menus)]))
-    # Do not return computed permissions as raw overrides: editing/saving them
-    # would otherwise turn inherited grants into persistent personal grants.
-    # Explicit user grants have the highest precedence.
-    menu_keys = ((set(role_menus) - removed_menus) | set(extra_menus))
-    permission_codes = set(role_permissions) | set(extra_permissions) | set(_menu_permissions(extra_menus))
-    for menu in MENU_DEFINITIONS:
-        permission = str(menu.get("permission") or "")
-        if menu["key"] in removed_menus and permission not in extra_permissions and not any(
-            other["key"] in menu_keys and other.get("permission") == permission
-            for other in MENU_DEFINITIONS
-        ):
-            permission_codes.discard(permission)
-    permission_codes = (permission_codes - removed_permissions) | set(extra_permissions)
+    # Resolve the two grant dimensions independently. Explicit user grants
+    # override revocations of inherited grants, without affecting the other list.
+    menu_keys = (set(role_menus) - removed_menus) | set(extra_menus)
+    permission_codes = (set(role_permissions) - removed_permissions) | set(extra_permissions)
     if role_key == OWNER_ROLE:
         menu_keys = set(_all_menu_keys())
         permission_codes = set(_all_permission_codes())
@@ -1024,7 +1011,6 @@ async def update_access_role(role_key: str, payload: RolePayload, _admin: dict[s
     else:
         menu_keys = [item for item in menu_keys if item != "access"]
         permissions = [item for item in permissions if item != "access:manage"]
-    permissions = list(dict.fromkeys([*permissions, *_menu_permissions(menu_keys)]))
     previous = roles[key]
     roles[key] = {
         "key": key,
