@@ -187,6 +187,10 @@ def _all_permission_codes() -> list[str]:
 def _default_roles() -> dict[str, dict[str, Any]]:
     all_menus = _all_menu_keys()
     all_permissions = _all_permission_codes()
+    # Ordinary accounts can use the product workspace by default, while the
+    # permission center and invitation management stay administrator-only.
+    user_menus = [key for key in all_menus if key not in {"access", "invite"}]
+    user_permissions = _menu_access_permission_codes(user_menus)
     return {
         "owner": {
             "key": "owner",
@@ -210,8 +214,8 @@ def _default_roles() -> dict[str, dict[str, Any]]:
             "label": "普通用户",
             "description": "默认注册角色，可使用个人邮箱工作台。",
             "color": "blue",
-            "menuKeys": ["dashboard", "email"],
-            "permissions": ["dashboard:view", "email:view"],
+            "menuKeys": user_menus,
+            "permissions": user_permissions,
         },
     }
 
@@ -237,6 +241,11 @@ def _load_roles() -> dict[str, dict[str, Any]]:
     for key, role in roles.items():
         menu_keys = _clean_access_values(role.get("menuKeys"), set(_all_menu_keys()))
         permissions = _clean_access_values(role.get("permissions"), set(_all_permission_codes()))
+        # Migrate the original minimal ordinary-user template once so existing
+        # installations receive the new workspace defaults automatically.
+        if key == "user" and set(menu_keys) == {"dashboard", "email"} and set(permissions).issubset({"dashboard:view", "email:view"}):
+            menu_keys = list(defaults["user"]["menuKeys"])
+            permissions = list(defaults["user"]["permissions"])
         permissions = list(dict.fromkeys([*permissions, *_menu_permissions(menu_keys)]))
         if key == OWNER_ROLE:
             # Owner is a capability wildcard: newly registered menus/permissions are automatic.
@@ -268,6 +277,30 @@ def _menu_permissions(menu_keys: list[str]) -> list[str]:
         for item in MENU_DEFINITIONS
         if str(item.get("key") or "") in selected and str(item.get("permission") or "").strip()
     ))
+
+
+def _menu_access_permission_codes(menu_keys: list[str]) -> list[str]:
+    """Return every view and action permission belonging to the selected menus."""
+    selected = set(menu_keys)
+    codes: list[str] = []
+    for menu in MENU_DEFINITIONS:
+        if str(menu.get("key") or "") not in selected:
+            continue
+        candidates = [menu.get("permission")]
+        raw_permissions = menu.get("permissions", [])
+        if isinstance(raw_permissions, dict):
+            candidates.extend(raw_permissions.keys())
+        elif isinstance(raw_permissions, list):
+            candidates.extend(
+                item if isinstance(item, str) else item.get("code")
+                for item in raw_permissions
+                if isinstance(item, (str, dict))
+            )
+        for code in candidates:
+            normalized = str(code or "").strip()
+            if normalized and normalized in _all_permission_codes() and normalized not in codes:
+                codes.append(normalized)
+    return codes
 
 
 def is_owner(user: dict[str, Any] | None) -> bool:
