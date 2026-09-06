@@ -329,7 +329,7 @@ async def list_operation_logs(
     if user is None:
         raise HTTPException(status_code=401, detail="未登录或会话已过期")
     records = _read_records()
-    if user.get("role") != "admin":
+    if user.get("role") not in {"admin", "owner"}:
         email = str(user.get("email", "")).lower()
         records = [item for item in records if str(item.get("email", "")).lower() == email]
     keyword = q.strip().lower()
@@ -356,4 +356,3 @@ async def list_operation_logs(
             "risks": sum(item.get("risk") == "高风险" for item in filtered),
         },
     }
-

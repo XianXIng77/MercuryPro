@@ -237,7 +237,7 @@ export default function App() {
                 <Route path={TAB_PATHS.invite} element={<ExtensionModules activeTab="invite" currentPreset={currentPreset} permissionCodes={accessProfile.permissions} onSwitchToEmailList={() => handleSelectTab('email')} />} />
                 <Route path={TAB_PATHS.logs} element={<ExtensionModules activeTab="logs" currentPreset={currentPreset} permissionCodes={accessProfile.permissions} onSwitchToEmailList={() => handleSelectTab('email')} />} />
                 <Route path={TAB_PATHS.audit} element={<ExtensionModules activeTab="audit" currentPreset={currentPreset} permissionCodes={accessProfile.permissions} onSwitchToEmailList={() => handleSelectTab('email')} />} />
-                <Route path={TAB_PATHS.access} element={currentUser.role === 'admin' ? <AccessControlPanel currentPreset={currentPreset} onAccessChanged={refreshAccessProfile} /> : <Navigate to="/dashboard" replace />} />
+                <Route path={TAB_PATHS.access} element={currentUser.role === 'admin' || currentUser.role === 'owner' || currentUser.isOwner ? <AccessControlPanel currentPreset={currentPreset} currentUser={currentUser} onAccessChanged={refreshAccessProfile} /> : <Navigate to="/dashboard" replace />} />
                 <Route path={TAB_PATHS.profile} element={<PersonalCenter currentUser={currentUser} currentPreset={currentPreset} permissionCodes={accessProfile.permissions} onUserUpdate={setCurrentUser} onSelectPreset={setCurrentPresetId} />} />
                 <Route path="*" element={<Navigate to="/dashboard" replace />} />
               </Routes>

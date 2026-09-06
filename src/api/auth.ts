@@ -4,6 +4,9 @@ export interface AuthUser {
   email: string;
   username: string;
   role: string;
+  roleLabel?: string;
+  isOwner?: boolean;
+  accessLocked?: boolean;
   phone?: string;
   bio?: string;
   avatarColor?: string;
@@ -13,7 +16,10 @@ export interface AuthUser {
 
 export interface AuthMenuPermission { code: string; label?: string; group?: string; }
 export interface AuthMenu { key: string; path: string; label: string; icon?: string; permission?: string; permissions?: AuthMenuPermission[]; }
-export interface AccessProfile { menus: AuthMenu[]; permissions: string[]; role?: string; roleLabel?: string; }
+export interface AccessProfile {
+  menus: AuthMenu[]; permissions: string[]; role?: string; roleLabel?: string;
+  isOwner?: boolean; accessLocked?: boolean;
+}
 export interface UserStatsPoint { label: string; count: number; date?: string; }
 export interface UserDashboardStats {
   summary: { totalUsers: number; newUsersLast30Days: number; newUsersToday: number; growthRate: number };

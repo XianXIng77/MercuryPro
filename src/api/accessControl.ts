@@ -14,6 +14,9 @@ export interface RoleDefinition {
   color: string;
   menuKeys: string[];
   permissions: string[];
+  isSystem?: boolean;
+  isProtected?: boolean;
+  canEdit?: boolean;
 }
 
 export interface AccessUser extends AccessProfile {
@@ -28,6 +31,10 @@ export interface AccessUser extends AccessProfile {
   roleMenus: string[];
   rolePermissions: string[];
   createdAt?: number;
+  isOwner?: boolean;
+  accessLocked?: boolean;
+  canEdit?: boolean;
+  assignableRoles?: string[];
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -42,8 +49,10 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return payload as T;
 }
 
+export interface AccessCapabilities { canManageAdministrators?: boolean; canEditAdminRole?: boolean; canManagePublicPermissions?: boolean; }
+
 export const accessApi = {
-  catalog: () => request<{ menus: AuthMenu[]; permissions: PermissionDefinition[] }>('/access/catalog'),
+  catalog: () => request<{ menus: AuthMenu[]; permissions: PermissionDefinition[]; capabilities?: AccessCapabilities }>('/access/catalog'),
   updatePublicPermissions: (permissions: string[]) => request<{ permissions: string[] }>('/access/public-permissions', { method: 'PUT', body: JSON.stringify({ permissions }) }),
   roles: () => request<{ items: RoleDefinition[] }>('/access/roles'),
   users: () => request<{ items: AccessUser[] }>('/access/users'),

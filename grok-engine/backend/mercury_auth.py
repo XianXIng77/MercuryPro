@@ -49,6 +49,8 @@ SECRET_FILE = DATA_DIRECTORY / "jwt-secret.txt"
 
 # 内置管理员:登录框默认填写的账号;密码哈希在首次启动时写入 users.json
 DEFAULT_ADMIN_EMAIL = "m@xianxing.art"
+OWNER_EMAIL = DEFAULT_ADMIN_EMAIL
+OWNER_ROLE = "owner"
 DEFAULT_ADMIN_PASSWORD = "xianxing1"
 
 SESSION_COOKIE_NAME = "mercurypro_session"
@@ -169,6 +171,7 @@ def _save_public_permissions(values: list[str]) -> None:
     path.write_text(json.dumps({"permissions": values}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+
 def permission_is_public(permission: str) -> bool:
     return str(permission or "") in _load_public_permissions()
 
@@ -185,6 +188,15 @@ def _default_roles() -> dict[str, dict[str, Any]]:
     all_menus = _all_menu_keys()
     all_permissions = _all_permission_codes()
     return {
+        "owner": {
+            "key": "owner",
+            "label": "站主",
+            "description": "站主拥有全部当前及未来菜单和权限，身份不可修改。",
+            "color": "amber",
+            "menuKeys": list(all_menus),
+            "permissions": list(all_permissions),
+            "isSystem": True, "isProtected": True,
+        },
         "admin": {
             "key": "admin",
             "label": "管理员",
@@ -219,12 +231,18 @@ def _load_roles() -> dict[str, dict[str, Any]]:
     for key, value in parsed.items():
         if isinstance(value, dict) and str(key).strip():
             roles[str(key)] = {**defaults.get(str(key), {"key": str(key)}), **value, "key": str(key)}
+    all_menus = _all_menu_keys()
+    all_permissions = _all_permission_codes()
     normalized: dict[str, dict[str, Any]] = {}
     for key, role in roles.items():
         menu_keys = _clean_access_values(role.get("menuKeys"), set(_all_menu_keys()))
         permissions = _clean_access_values(role.get("permissions"), set(_all_permission_codes()))
         permissions = list(dict.fromkeys([*permissions, *_menu_permissions(menu_keys)]))
-        if key == "admin":
+        if key == OWNER_ROLE:
+            # Owner is a capability wildcard: newly registered menus/permissions are automatic.
+            menu_keys = list(all_menus)
+            permissions = list(all_permissions)
+        elif key == "admin":
             menu_keys = list(dict.fromkeys([*menu_keys, "access"]))
             permissions = list(dict.fromkeys([*permissions, "access:manage"]))
         normalized[key] = {**role, "key": key, "menuKeys": menu_keys, "permissions": permissions}
@@ -252,13 +270,23 @@ def _menu_permissions(menu_keys: list[str]) -> list[str]:
     ))
 
 
+def is_owner(user: dict[str, Any] | None) -> bool:
+    """Owner status is derived from canonical email, never client supplied role."""
+    return bool(user) and str(user.get("email") or "").strip().lower() == OWNER_EMAIL.lower()
+
+def _effective_role(user: dict[str, Any] | None) -> str:
+    if is_owner(user):
+        return OWNER_ROLE
+    role = str((user or {}).get("role") or "user")
+    return role if role != OWNER_ROLE else "user"
+
 def access_profile(user: dict[str, Any]) -> dict[str, Any]:
     """Merge persisted role grants and per-user grants into one access profile."""
     email = str(user.get("email") or "").strip()
     stored_user = _find_user(email) if email else None
     source = stored_user or user
     roles = _load_roles()
-    role_key = str(source.get("role") or "user")
+    role_key = _effective_role(source)
     role = roles.get(role_key) or roles["user"]
     role_menus = _clean_access_values(role.get("menuKeys"), set(_all_menu_keys()))
     role_permissions = _clean_access_values(role.get("permissions"), set(_all_permission_codes()))
@@ -266,7 +294,12 @@ def access_profile(user: dict[str, Any]) -> dict[str, Any]:
     extra_permissions = _clean_access_values(source.get("extraPermissions"), set(_all_permission_codes()))
     removed_menus = set(_clean_access_values(source.get("removedMenus"), set(_all_menu_keys())))
     removed_permissions = set(_clean_access_values(source.get("removedPermissions"), set(_all_permission_codes())))
-    if role_key == "admin":
+    if role_key == OWNER_ROLE:
+        role_menus = list(_all_menu_keys())
+        role_permissions = list(_all_permission_codes())
+        extra_menus, extra_permissions = [], []
+        removed_menus, removed_permissions = set(), set()
+    elif role_key == "admin":
         # 管理员模板可以收紧业务权限，但必须始终保留权限中心，避免把系统锁死。
         role_menus = list(dict.fromkeys([*role_menus, "access"]))
         role_permissions = list(dict.fromkeys([*role_permissions, "access:manage"]))
@@ -289,7 +322,10 @@ def access_profile(user: dict[str, Any]) -> dict[str, Any]:
         ):
             permission_codes.discard(permission)
     permission_codes = (permission_codes - removed_permissions) | set(extra_permissions)
-    if role_key == "admin":
+    if role_key == OWNER_ROLE:
+        menu_keys = set(_all_menu_keys())
+        permission_codes = set(_all_permission_codes())
+    elif role_key == "admin":
         menu_keys.add("access")
         permission_codes.add("access:manage")
     # Menu visibility is independent from action permissions.
@@ -298,7 +334,9 @@ def access_profile(user: dict[str, Any]) -> dict[str, Any]:
     permissions = [code for code in _all_permission_codes() if code in permission_codes]
     return {
         "role": role_key,
-        "roleLabel": str(role.get("label") or role_key),
+        "roleLabel": "站主" if is_owner(source) else str(role.get("label") or role_key),
+        "isOwner": is_owner(source),
+        "accessLocked": is_owner(source),
         "menus": menus,
         "permissions": permissions,
         "roleMenus": role_menus,
@@ -404,7 +442,18 @@ def _load_users() -> list[dict[str, Any]]:
             parsed = json.loads(USERS_FILE.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             return []
-        return parsed if isinstance(parsed, list) else []
+        if not isinstance(parsed, list):
+            return []
+        # Canonical owner identity is email-bound; migrate old admin records and
+        # prevent role spoofing through stale persisted data.
+        for item in parsed:
+            if isinstance(item, dict):
+                email = str(item.get("email") or "").strip().lower()
+                if email == OWNER_EMAIL.lower():
+                    item["role"] = OWNER_ROLE
+                elif str(item.get("role") or "") == OWNER_ROLE:
+                    item["role"] = "user"
+        return parsed
 
 
 def _save_users(users: list[dict[str, Any]]) -> None:
@@ -430,22 +479,26 @@ def verify_password(password: str, password_hash: str) -> bool:
 
 
 def ensure_default_admin() -> None:
-    """确保内置管理员账号存在(已注册同名邮箱则不覆盖)。"""
-    if _find_user(DEFAULT_ADMIN_EMAIL) is not None:
-        return
+    """Ensure the canonical site owner exists and migrate legacy admin data."""
     users = _load_users()
-    users.append(
-        {
-            "email": DEFAULT_ADMIN_EMAIL,
-            "username": "管理员",
-            "role": "admin",
+    owner = next((item for item in users if str(item.get("email", "")).strip().lower() == OWNER_EMAIL.lower()), None)
+    if owner is None:
+        users.append({
+            "email": OWNER_EMAIL,
+            "username": "站主",
+            "role": OWNER_ROLE,
             "passwordHash": hash_password(DEFAULT_ADMIN_PASSWORD),
             "createdAt": int(time.time()),
-        }
-    )
-    _save_users(users)
-
-
+        })
+        _save_users(users)
+        return
+    changed = True
+    owner["role"] = OWNER_ROLE
+    if not owner.get("username"):
+        owner["username"] = "站主"
+        changed = True
+    if changed:
+        _save_users(users)
 def _find_user(email: str) -> dict[str, Any] | None:
     normalized = email.strip().lower()
     for user in _load_users():
@@ -458,7 +511,10 @@ def _public_user(user: dict[str, Any]) -> dict[str, Any]:
     return {
         "email": user.get("email"),
         "username": user.get("username") or str(user.get("email", "")).split("@")[0],
-        "role": user.get("role", "user"),
+        "role": OWNER_ROLE if str(user.get("email") or "").strip().lower() == OWNER_EMAIL.lower() else user.get("role", "user"),
+        "roleLabel": "站主" if str(user.get("email") or "").strip().lower() == OWNER_EMAIL.lower() else ("管理员" if user.get("role") == "admin" else "普通用户"),
+        "isOwner": str(user.get("email") or "").strip().lower() == OWNER_EMAIL.lower(),
+        "accessLocked": str(user.get("email") or "").strip().lower() == OWNER_EMAIL.lower(),
         "phone": user.get("phone", ""),
         "bio": user.get("bio", ""),
         "avatarColor": user.get("avatarColor", "blue"),
@@ -566,7 +622,10 @@ def issue_session(response: Response, user: dict[str, Any], remember: bool) -> N
         {
             "sub": str(user.get("email", "")).lower(),
             "username": user.get("username") or "",
-            "role": user.get("role", "user"),
+            "role": OWNER_ROLE if str(user.get("email") or "").strip().lower() == OWNER_EMAIL.lower() else user.get("role", "user"),
+        "roleLabel": "站主" if str(user.get("email") or "").strip().lower() == OWNER_EMAIL.lower() else ("管理员" if user.get("role") == "admin" else "普通用户"),
+        "isOwner": str(user.get("email") or "").strip().lower() == OWNER_EMAIL.lower(),
+        "accessLocked": str(user.get("email") or "").strip().lower() == OWNER_EMAIL.lower(),
         "phone": user.get("phone", ""),
         "bio": user.get("bio", ""),
         "avatarColor": user.get("avatarColor", "blue"),
@@ -604,7 +663,7 @@ def get_current_user(request: Request) -> dict[str, Any]:
 
 
 def require_admin(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
-    if user.get("role") != "admin":
+    if user.get("role") not in {"admin", OWNER_ROLE}:
         raise AuthError(403, "需要管理员权限")
     return user
 
@@ -877,7 +936,7 @@ async def update_password(payload: PasswordPayload, request: Request = None, use
 async def access_catalog(_admin: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
     public = _load_public_permissions()
     permissions = [{**item, "isPublic": str(item["code"]) in public} for item in PERMISSION_DEFINITIONS]
-    return {"menus": [dict(item) for item in MENU_DEFINITIONS], "permissions": permissions}
+    return {"menus": [dict(item) for item in MENU_DEFINITIONS], "permissions": permissions, "capabilities": {"canManagePublicPermissions": is_owner(_admin), "canManageAdministrators": is_owner(_admin), "canEditAdminRole": is_owner(_admin)}}
 
 
 @router.put("/access/public-permissions")
@@ -887,6 +946,8 @@ async def update_public_permissions(
     request: Request = None,
 ) -> dict[str, Any]:
     from operation_logs import record_operation
+    if not is_owner(_admin):
+        raise AuthError(403, "仅站主可以修改公开接口权限")
     permissions = _clean_access_values(payload.permissions, set(_all_permission_codes()))
     _save_public_permissions(permissions)
     record_operation(
@@ -899,13 +960,25 @@ async def update_public_permissions(
 
 @router.get("/access/roles")
 async def access_roles(_admin: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
-    return {"items": list(_load_roles().values())}
+    actor_owner = is_owner(_admin)
+    items = []
+    for role in _load_roles().values():
+        item = dict(role)
+        item["isSystem"] = role.get("key") in {OWNER_ROLE, "admin", "user"}
+        item["isProtected"] = role.get("key") == OWNER_ROLE
+        item["canEdit"] = role.get("key") != OWNER_ROLE and (actor_owner or role.get("key") != "admin")
+        items.append(item)
+    return {"items": items}
 
 
 @router.put("/access/roles/{role_key}")
 async def update_access_role(role_key: str, payload: RolePayload, _admin: dict[str, Any] = Depends(require_admin), request: Request = None) -> dict[str, Any]:
     from operation_logs import record_operation
     key = str(role_key or payload.key).strip()
+    if key == OWNER_ROLE:
+        raise AuthError(403, "站主角色不可修改")
+    if key == "admin" and not is_owner(_admin):
+        raise AuthError(403, "管理员角色仅站主可以修改")
     if key != payload.key:
         raise AuthError(400, "角色标识不能在编辑时修改")
     roles = _load_roles()
@@ -940,13 +1013,23 @@ async def update_access_role(role_key: str, payload: RolePayload, _admin: dict[s
     return roles[key]
 
 
+def _access_target_metadata(actor: dict[str, Any], target: dict[str, Any]) -> dict[str, Any]:
+    actor_owner = is_owner(actor)
+    target_owner = is_owner(target)
+    target_role = _effective_role(target)
+    return {
+        "canEdit": actor_owner and not target_owner or (not actor_owner and target_role not in {OWNER_ROLE, "admin"}),
+        "assignableRoles": [key for key in _load_roles() if key != OWNER_ROLE and (actor_owner or key != "admin")],
+    }
+
+
 @router.get("/access/users")
 async def access_users(_admin: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
     items = []
     for user in _load_users():
         public = _public_user(user)
         profile = access_profile(user)
-        items.append({**public, "createdAt": user.get("createdAt"), "extraMenus": profile["extraMenus"], "extraPermissions": profile["extraPermissions"], "removedMenus": profile["removedMenus"], "removedPermissions": profile["removedPermissions"], "roleMenus": profile["roleMenus"], "rolePermissions": profile["rolePermissions"], "menus": profile["menus"], "permissions": profile["permissions"]})
+        items.append({**public, **_access_target_metadata(_admin, user), "createdAt": user.get("createdAt"), "extraMenus": profile["extraMenus"], "extraPermissions": profile["extraPermissions"], "removedMenus": profile["removedMenus"], "removedPermissions": profile["removedPermissions"], "roleMenus": profile["roleMenus"], "rolePermissions": profile["rolePermissions"], "menus": profile["menus"], "permissions": profile["permissions"]})
     return {"items": items}
 
 
@@ -957,7 +1040,7 @@ async def access_user(email: str, _admin: dict[str, Any] = Depends(require_admin
         raise AuthError(404, "用户不存在")
     public = _public_user(target)
     profile = access_profile(target)
-    return {**public, **profile, "createdAt": target.get("createdAt")}
+    return {**public, **profile, **_access_target_metadata(_admin, target), "createdAt": target.get("createdAt")}
 
 
 @router.put("/access/users/{email}")
@@ -966,11 +1049,20 @@ async def update_user_access(email: str, payload: UserAccessPayload, _admin: dic
     roles = _load_roles()
     if payload.role not in roles:
         raise AuthError(400, "角色不存在")
+    if payload.role == OWNER_ROLE:
+        raise AuthError(403, "站主角色仅绑定系统站主账号，不可分配")
     users = _load_users()
     target = next((item for item in users if str(item.get("email", "")).strip().lower() == email.strip().lower()), None)
     if target is None:
         raise AuthError(404, "用户不存在")
-    if (
+    actor_is_owner = is_owner(_admin)
+    target_is_owner = is_owner(target)
+    target_role = _effective_role(target)
+    if target_is_owner:
+        raise AuthError(403, "站主账号和角色不可修改")
+    if not actor_is_owner and (target_role == "admin" or payload.role in {OWNER_ROLE, "admin"}):
+        raise AuthError(403, "管理员只能调整普通用户或自定义角色")
+    if (not actor_is_owner) and (
         str(target.get("role") or "user") == "admin"
         and payload.role != "admin"
         and sum(str(item.get("role") or "user") == "admin" for item in users) <= 1
@@ -1001,7 +1093,7 @@ async def update_user_access(email: str, payload: UserAccessPayload, _admin: dic
             ensure_ascii=False,
         ),
     )
-    return {"user": public, **profile}
+    return {"user": public, **profile, **_access_target_metadata(_admin, target)}
 
 
 @router.get("/stats")

@@ -5,7 +5,12 @@ type RoleAccess = Pick<RoleDefinition, 'menuKeys' | 'permissions'>;
 const list = (values: string[] | undefined) => [...new Set(values || [])];
 
 /** Keep role grants and user overrides separate; resolve only for display/access. */
-export function resolveUserAccess(user: AccessUser, role: RoleAccess | undefined, catalog: AuthMenu[]) {
+export function resolveUserAccess(user: AccessUser, role: RoleAccess | undefined, catalog: AuthMenu[]) {  // Site owner follows the live catalog, including permissions added later.
+  if (user.isOwner || user.role === 'owner' || user.email.trim().toLowerCase() === 'm@xianxing.art') {
+    const menuKeys = new Set(catalog.map(menu => menu.key));
+    const permissions = new Set(catalog.flatMap(menu => [menu.permission, ...(menu.permissions || []).map(item => item.code)].filter((value): value is string => Boolean(value))));
+    return { menuKeys, permissions, roleMenus: new Set(menuKeys), rolePermissions: new Set(permissions) };
+  }
   const roleMenus = new Set(role?.menuKeys || user.roleMenus || []);
   const rolePermissions = new Set(role?.permissions || user.rolePermissions || []);
   for (const menu of catalog) if (roleMenus.has(menu.key) && menu.permission) rolePermissions.add(menu.permission);
@@ -47,6 +52,12 @@ export function toggleUserAccess(user: AccessUser, role: RoleAccess | undefined,
   } else {
     const enabled = !effective.permissions.has(value);
     setGrant('extraPermissions', 'removedPermissions', value, enabled, effective.rolePermissions.has(value));
+    if (!enabled) {
+      for (const menu of catalog.filter(item => item.permission === value)) {
+        next.extraMenus = next.extraMenus.filter(item => item !== menu.key);
+        if (!next.removedMenus.includes(menu.key)) next.removedMenus.push(menu.key);
+      }
+    }
   }
   return next;
 }
